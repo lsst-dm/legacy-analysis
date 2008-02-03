@@ -22,7 +22,8 @@ def execQuery(query):
 # get input args
 runId = sys.argv[1]
 
-print 'Run: %s\n' % (runId)
+print 'Run: %s' % (runId)
+print '--------------------------------------------------------\n'
 
 # Summarize visits that were processed
 
@@ -33,7 +34,8 @@ execQuery(mySqlQuery)
 
 # Get number of DIASources matching existing Objects and number that are new
 
-print 'Number of DIASources matching exiting Objects; number that are new\n'
+print 'Number of DIASources matching exiting Objects; number that are new'
+print '------------------------------------------------------------------\n'
 
 mySqlQuery = 'use %s; select count(*) Num_Matching from DiaSourceToObjectMatches; select count(*) Num_New from NewObjectIdPairs;' % (runId)
 
@@ -41,7 +43,8 @@ execQuery(mySqlQuery)
 
 # Get average match multiplicity
 
-print 'Average and max number of sources matched to each object\n'
+print 'Average and max number of sources matched to each object'
+print '--------------------------------------------------------\n'
 
 mySqlQuery = 'use %s; select AVG(a.nmatch) Avg_match_multiplicity, MAX(a.nmatch) Max_match_multiplicity from (select count(*) nmatch, second from DiaSourceToObjectMatches group by second, visitId) a;' % (runId)
 
@@ -49,15 +52,21 @@ execQuery(mySqlQuery)
 
 # Get number of MopsPreds that were detected
 
-print 'Number of MopsPreds that were detected\n'
+print 'MopsPreds that were detected'
+print '----------------------------\n'
 
-mySqlQuery = 'use %s; select count(*) Num_Detected from MopsPredToDiaSourceMatches;' % (runId)
+mySqlQuery = 'use %s; select count(DISTINCT first,visitId) Num_Detected from MopsPredToDiaSourceMatches;' % (runId)
+
+execQuery(mySqlQuery)
+
+mySqlQuery = 'use %s; select DISTINCT first MopsId,visitId from MopsPredToDiaSourceMatches;' % (runId)
 
 execQuery(mySqlQuery)
 
 # Get number of DIASources for each Visit and CCD
 
-print 'Number of DIASources for each Visit and CCD\n'
+print 'Number of DIASources for each Visit and CCD'
+print '-------------------------------------------\n'
 
 mySqlQuery = 'use %s; select ROUND(jj.rawFPAExposureId/2) visit, jj.url, count(*) nSources from DIASource s inner join (select f.rawFPAExposureId, c.rawCCDExposureId, c.url from Raw_FPA_Exposure f inner join Raw_CCD_Exposure c on f.rawFPAExposureId=c.rawFPAExposureId) jj on s.ccdExposureId = jj.rawCCDExposureId group by jj.url;;' % (runId)
 
