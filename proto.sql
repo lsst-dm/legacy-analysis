@@ -1,1 +1,0 @@
-/home/rplante/wrk/NCSA/LSST/DC2/proto.sql
