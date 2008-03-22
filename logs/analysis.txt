@@ -1,0 +1,159 @@
+Stats based on runs rlp0127, rlp0128, rlp0130
+
+Total average time per visit:
+-----------------------------
+mysql> select node,count(duration) as visitCount, avg(duration) as masterLoopAvg, stddev_samp(duration) as stddev, 3*stddev_samp(duration) as 3sig from durations where name='master loop' group by node;
++------+------------+---------------+-------------+--------------+
+| node | visitCount | masterLoopAvg | stddev      | 3sig         |
++------+------------+---------------+-------------+--------------+
+|    6 |        177 |  207.20145819 | 36.05464817 | 108.16394451 | IPD  
+|    9 |        177 |   52.89957458 |  1.35226653 |   4.05679959 | MOPS 
+|   10 |        177 |  207.39927684 | 36.16475212 | 108.49425636 | Assoc
++------+------------+---------------+-------------+--------------+
+3 rows in set (0.23 sec)
+
+Total time as a function of visit (IPD):
+----------------------------------------
+mysql> select loopnum as visit, duration into outfile '/home/rplante/DC2logAnalysis/MasterLoopVsVisitIPD.txt' from durations where name='master loop' and node < 9 order by micros;
+Query OK, 177 rows affected (0.24 sec)
+
+Total time as a function of visit (MOPS):
+----------------------------------------
+mysql> select loopnum as visit, duration into outfile '/home/rplante/DC2logAnalysis/MasterLoopVsVisitMOPS.txt' from durations where name='master loop' and node = 9 order by micros;
+Query OK, 177 rows affected (0.23 sec)
+
+Total time as a function of visit (Assoc):
+----------------------------------------
+mysql> select loopnum as visit, duration into outfile '/home/rplante/DC2logAnalysis/MasterLoopVsVisitAssoc.txt' from durations where name='master loop' and node = 10 order by micros;
+Query OK, 177 rows affected (0.22 sec)
+
+Total App time as a function of visit (Assoc):
+----------------------------------------------
+mysql> select loopnum as visit, duration into outfile '/home/rplante/DC2logAnalysis/AppLoopVsVisitAssoc.txt' from durations where name='app loop' and node = 10 order by micros;
+Query OK, 177 rows affected (0.22 sec)
+
+Average App time as a function of stage (IPD):
+----------------------------------------------
+mysql> select stage,avg(duration),stddev_samp(duration) as stddev, 3*stddev_samp(duration) as 3sig from durations where name='app' and node < 9 group by stage order by stage;
++-------+---------------+-------------+-------------+
+| stage | avg(duration) | stddev      | 3sig        |
++-------+---------------+-------------+-------------+
+|     1 |    0.02289435 |  0.02722695 |  0.08168086 | 
+|     2 |    9.56718305 |  0.86610798 |  2.59832395 | 
+|     3 |    0.02672260 |  0.00496184 |  0.01488551 | 
+|     4 |    0.03919209 |  0.00236879 |  0.00710638 | 
+|     5 |    7.02348079 |  0.80359058 |  2.41077174 | 
+|     6 |  175.14053220 | 33.15557279 | 99.46671838 | 
+|     7 |    6.48910000 |  0.67189222 |  2.01567665 | 
+|     8 |    7.52079774 | 11.73199877 | 35.19599630 | 
+|     9 |    0.13250621 |  0.37289205 |  1.11867616 | 
+|    10 |    0.06088305 |  0.00256580 |  0.00769741 | 
++-------+---------------+-------------+-------------+
+10 rows in set (0.22 sec)
+
+Average ImSub time as a function of node
+----------------------------------------
+mysql> select node,avg(duration),avg(duration)-min(duration),max(duration)-avg(duration) into outfile '/home/rplante/DC2logAnalysis/AppVsNodeIPD.txt' from durations where node<9 and stage=6 and name='stage process' group by node order by node;
+
+Average Application Processing time per stage
+---------------------------------------------
+IPD:
+mysql> select stage, count(duration), min(duration), avg(duration), stddev_samp(duration), max(duration) into outfile '/home/rplante/DC2logAnalysis/AppVsStageIPD.txt' from durations where node<9 and name='app' group by stage order by stage;
+
+mysql> select stage, min(duration) as min, avg(duration) as average, stddev_samp(duration)*3 as 3sigma, max(duration) as max from durations where node<9 and name='app' group by stage order by stage;
++-------+----------+--------------+-------------+----------+
+| stage | min      | average      | 3sigma      | max      |
++-------+----------+--------------+-------------+----------+
+|     1 |   0.0142 |   0.02289435 |  0.08168086 |   0.2125 | 
+|     2 |   5.9041 |   9.56718305 |  2.59832395 |  13.1335 | 
+|     3 |   0.0214 |   0.02672260 |  0.01488551 |   0.0620 | 
+|     4 |   0.0335 |   0.03919209 |  0.00710638 |   0.0468 | 
+|     5 |   5.7814 |   7.02348079 |  2.41077174 |   9.7460 | 
+|     6 | 109.3030 | 175.14053220 | 99.46671838 | 238.3099 | 
+|     7 |   4.4016 |   6.48910000 |  2.01567665 |   7.9611 | 
+|     8 |   1.6794 |   7.52079774 | 35.19599630 |  91.5631 | 
+|     9 |   0.0802 |   0.13250621 |  1.11867616 |   5.0437 | 
+|    10 |   0.0563 |   0.06088305 |  0.00769741 |   0.0730 | 
++-------+----------+--------------+-------------+----------+
+
+
+Assoc:
+mysql> select stage, count(duration), min(duration), avg(duration), stddev_samp(duration), max(duration) into outfile '/home/rplante/DC2logAnalysis/AppVsStageAssoc.txt' from durations where node=10 and name='app' group by stage order by stage;
+
+mysql> select stage, min(duration) as min, avg(duration) as average, stddev_samp(duration)*3 as 3sigma, max(duration) as max from durations where node=10 and name='app' group by stage order by stage;
++-------+--------+------------+------------+--------+
+| stage | min    | average    | 3sigma     | max    |
++-------+--------+------------+------------+--------+
+|     1 | 0.3760 | 0.46042825 | 0.16238358 | 0.6517 | 
+|     2 | 0.0947 | 0.15613277 | 0.20979323 | 0.5924 | 
+|     3 | 0.0195 | 0.02397797 | 0.03964626 | 0.1540 | 
+|     4 | 0.0226 | 0.03984463 | 0.02416295 | 0.0733 | 
+|     5 | 0.0172 | 0.01848249 | 0.00425297 | 0.0280 | 
+|     6 | 0.0171 | 0.01818814 | 0.00463450 | 0.0262 | 
+|     7 | 0.0312 | 0.03726045 | 0.02258903 | 0.0885 | 
+|     8 | 0.5797 | 6.13567740 | 4.74106749 | 8.5492 | 
++-------+--------+------------+------------+--------+
+
+MOPS:
+mysql> select stage, count(duration), min(duration), avg(duration), stddev_samp(duration), max(duration) into outfile '/home/rplante/DC2logAnalysis/AppVsStageMOPS.txt' from durations where node=9 and name='app' group by stage order by stage;
+
+mysql> select stage, min(duration) as min, avg(duration) as average, stddev_samp(duration)*3 as 3sigma, max(duration) as max from durations where node=9 and name='app' group by stage order by stage;
++-------+---------+-------------+------------+---------+
+| stage | min     | average     | 3sigma     | max     |
++-------+---------+-------------+------------+---------+
+|     1 |  0.0081 |  0.00978324 | 0.00762294 |  0.0263 | 
+|     2 | 51.5572 | 52.39874633 | 2.88614239 | 60.3594 | 
+|     3 |  0.0271 |  0.03899774 | 0.14436781 |  0.6335 | 
+|     4 |  0.0521 |  0.05559266 | 0.02252020 |  0.1054 | 
++-------+---------+-------------+------------+---------+
+
+Overhead:
+
+mysql> select node, min(duration) as min, avg(duration) as average, stddev_samp(duration)*3 as 3sigma, max(duration) as max from durations where name='loop overhead' group by node order by node;
++------+--------+------------+------------+--------+
+| node | min    | average    | 3sigma     | max    |
++------+--------+------------+------------+--------+
+|    6 | 0.7961 | 1.16740508 | 1.03277557 | 3.8586 | 
+|    9 | 0.2360 | 0.27123559 | 0.20418215 | 0.7191 | 
+|   10 | 0.2742 | 0.34179718 | 0.26350684 | 1.0233 | 
++------+--------+------------+------------+--------+
+
+
+mysql> select runid,loopnum, duration into outfile '/home/rplante/DC2logAnalysis/LoopOverheadIPD.txt' from durations where name='loop overhead' and node<9 order by runid, loopnum;
+
+mysql> select runid,loopnum, duration into outfile '/home/rplante/DC2logAnalysis/LoopOverheadMOPS.txt' from durations where name='loop overhead' and node=9 order by runid, loopnum;
+
+mysql> select runid,loopnum, duration into outfile '/home/rplante/DC2logAnalysis/LoopOverheadAssoc.txt' from durations where name='loop overhead' and node=10 order by runid, loopnum;
+
+
+
+Overhead by stage:
+mysql> select node, min(duration) as min, avg(duration) as average, stddev_samp(duration)*3 as 3sigma, max(duration) as max from durations where name='stage overhead' group by node,stage order by node,stage;
++------+--------+------------+------------+--------+
+| node | min    | average    | 3sigma     | max    |
++------+--------+------------+------------+--------+
+|    6 | 0.0837 | 0.83578870 | 0.45374623 | 1.1415 | 
+|    6 | 0.0100 | 0.02027740 | 0.03019318 | 0.0466 | 
+|    6 | 0.0112 | 0.01807910 | 0.00994045 | 0.0314 | 
+|    6 | 0.0116 | 0.01570621 | 0.00527276 | 0.0204 | 
+|    6 | 0.0103 | 0.01874972 | 0.03583157 | 0.1065 | 
+|    6 | 0.0119 | 0.02641638 | 0.09521329 | 0.2221 | 
+|    6 | 0.0103 | 0.01496271 | 0.03606464 | 0.1568 | 
+|    6 | 0.0102 | 0.01877684 | 0.02708101 | 0.0453 | 
+|    6 | 0.0113 | 0.01949831 | 0.02876673 | 0.1353 | 
+|    6 | 0.1205 | 0.12573277 | 0.02300989 | 0.2222 | 
+|    9 | 0.0626 | 0.07222655 | 0.08748587 | 0.4004 | 
+|    9 | 0.0238 | 0.04325480 | 0.01706875 | 0.1017 | 
+|    9 | 0.0096 | 0.02331243 | 0.03510432 | 0.0910 | 
+|    9 | 0.1167 | 0.12089379 | 0.01991362 | 0.1594 | 
+|   10 | 0.0269 | 0.08097175 | 0.09025992 | 0.2519 | 
+|   10 | 0.0094 | 0.01012260 | 0.00430943 | 0.0208 | 
+|   10 | 0.0093 | 0.02239605 | 0.01423141 | 0.0271 | 
+|   10 | 0.0094 | 0.01014124 | 0.00312268 | 0.0150 | 
+|   10 | 0.0604 | 0.06308814 | 0.00876560 | 0.0803 | 
+|   10 | 0.0093 | 0.01055706 | 0.01089441 | 0.0311 | 
+|   10 | 0.0093 | 0.00994520 | 0.00294459 | 0.0208 | 
+|   10 | 0.1189 | 0.12216949 | 0.04064938 | 0.2860 | 
++------+--------+------------+------------+--------+
+
+mysql> select stage, avg(duration), min(duration), avg(duration)-min(duration), max(duration)-avg(duration), max(duration) into outfile '/home/rplante/DC2logAnalysis/OverheadVsStageIPD.txt' from durations where name='stage overhead' and node < 9 group by stage order by stage;
