@@ -19,6 +19,7 @@ from lsst.obs.lsstSim import LsstSimMapper
 
 class Data(object):
     class Id(object):
+        """The identifier for a CCD-level dataset, as stored in PerCcdData"""
         def __init__(self, visit=None, raft=None, sensor=None):
             self.visit = visit
             self.raft = raft
@@ -53,15 +54,19 @@ class Data(object):
             if dataRoot is None:
                 return butler
         else:
-            if run is not None:
+            if not dataRoot:
                 dataRoot = dataRootFormat % run
 
         if registryRoot:
             assert(registryRun is None)
         else:
-            if registryRun is None:
+            if registryRun is None and run:
                 registryRun = run
-            registryRoot = dataRootFormat % registryRun
+
+            if registryRun:
+                registryRoot = dataRootFormat % registryRun
+            else:
+                registryRoot = dataRoot
 
         registry = None
         if registryRoot:
@@ -109,9 +114,13 @@ class Data(object):
 
         return dataSets
 
-    def getDataset(self, dataType, visit=None, raft=None, sensor=None):
+    def getDataset(self, dataType, visit=None, raft=None, sensor=None, ids=True):
         """Get all the data of the given type (e.g. "psf"); visit may be None (meaning use default);
-        raft or sensor may be None (meaning get all)"""
+raft or sensor may be None (meaning get all)
+
+N.b. This routine resets the self.ids listless ids is False; it is assumed that you retrieve all data items from the same set
+of sensors, but this is not checked.
+"""
         if visit:
             self.visit = visit
 
@@ -125,12 +134,17 @@ class Data(object):
                                (" for visit %d" % self.visit if self.visit else ""))
 
         data = []
-        self.ids = []
+        if ids:
+            self.ids = []
         for raft, sensor in dataSets:
             data.append(self.butler.get(dataType, visit=self.visit, raft=raft, sensor=sensor))
-            self.ids.append(Data.Id(visit=self.visit, raft=raft, sensor=sensor))
+            if ids:
+                self.ids.append(Data.Id(visit=self.visit, raft=raft, sensor=sensor))
 
         return data
+
+    def getEimages(self, raft, sensor):
+        pass
 
     def getPsfs(self, *args, **kwargs):
         return self.getDataset("psf", *args, **kwargs)
@@ -138,7 +152,7 @@ class Data(object):
     def getSources(self, *args, **kwargs):
         return [pss.getSources() for pss in self.getDataset("src", *args, **kwargs)]
 
-    def getMags(self, ss):
+    def getMags(self, ss, calculateApCorr=False):
         """Return numpy arrays constructed from SourceSet ss"""
         apMags = numpy.empty(len(ss))
         psfMags = numpy.empty(len(ss))
@@ -154,7 +168,17 @@ class Data(object):
 
         good = numpy.logical_and(numpy.isfinite(apMags), numpy.isfinite(psfMags))
 
-        return apMags[good], psfMags[good], flags[good]
+        apMags = apMags[good]
+        psfMags = psfMags[good]
+        flags = flags[good]
+
+        if calculateApCorr:
+            delta = psfMags - apMags
+            apCorr = numpy.median(delta[psfMags < 12])
+            print "RHL", apCorr
+            apMags += apCorr
+
+        return apMags, psfMags, flags
 
     def _getMags(self, ss, apMags=None, psfMags=None, flags=None):
         """Return python arrays constructed from SourceSet ss, and possibly extending apMags/psfMags"""
@@ -165,11 +189,7 @@ class Data(object):
         if not flags:
             flags = array.array('L')
 
-        _apMags, _psfMags, _flags = self.getMags(ss)
-
-        if True:
-            delta = _psfMags - _apMags
-            _apMags += numpy.median(delta[_psfMags < 12])
+        _apMags, _psfMags, _flags = self.getMags(ss, True)
 
         apMags.extend(_apMags)
         psfMags.extend(_psfMags)
