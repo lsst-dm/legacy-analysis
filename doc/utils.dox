@@ -1,10 +1,10 @@
 namespace lsst { namespace analysis
 /**
- \mainpage Using lsst.analysis.utils
+ \mainpage lsst_analysis Using lsst.analysis
+
+\section lsst_analysis_utils lsst.analysis.utils
 
 \subsection The class Data
-
-\subsubsection Introduction
 
 The utilities in utils are built around a python class, <code>Data</code>.  This provides a cache of useful
 information (e.g. the location of the data root and registries) as well as methods intended to simplify the
