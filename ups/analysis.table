@@ -1,6 +1,7 @@
 setupRequired(obs_lsstSim)
 setupRequired(meas_algorithms)
 
+setupOptional(meas_astrom)
 setupOptional(matplotlib)
 
 envPrepend(PYTHONPATH, ${PRODUCT_DIR}/python)
