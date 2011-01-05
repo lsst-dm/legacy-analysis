@@ -3,13 +3,23 @@ Some utilities for looking at the outputs of processing runs
 
 Currently specialised to handle ImSim outputs --- but this restriction should be lifted!
 """
-import array, math, os, re
-import numpy
+import array, math, os, re, sys
+import numpy as np
 try:
     import matplotlib.pyplot as pyplot
 except ImportError:
     pyplot = None
+import lsst.pex.logging as pexLogging
+import lsst.pex.policy as pexPolicy
+try:
+    log
+except:
+    log = pexLogging.Log.getDefaultLog()
+    log.setThreshold(pexLogging.Log.DEBUG);
+
 import lsst.afw.image as afwImage
+from lsst.afw.coord import DEGREES
+import lsst.meas.astrom as measAstrom
 import lsst.meas.algorithms.utils as maUtils
 import lsst.afw.display.ds9 as ds9
 import lsst.afw.display.utils as ds9Utils
@@ -37,7 +47,9 @@ class Data(object):
     def setButler(self, run=None,
                   dataRoot=None, dataRootFormat="/lsst2/datarel-runs/pt1prod_im%04d/update",
                   registryRoot=None, registryRun=None):
-        if run is not None:
+        if run is None:
+            self.run = None
+        else:
             self.run = run
             self.butler = None
 
@@ -93,7 +105,9 @@ class Data(object):
                     dataSets[st][(v, f)] = []
                 dataSets[st][(v, f)].append((r, s))
 
-        return dataSets
+        self.dataSets = dataSets
+        
+        return self.dataSets
 
     def lookupDataByVisit(self, dataType, *args, **kwargs):
         """Lookup all the available data of a given type (e.g. "psf") and maybe visit/raft/sensor.
@@ -112,19 +126,19 @@ class Data(object):
                     dataSets[v] = []
                 dataSets[v].append((r, s))
 
-        return dataSets
+        self.dataSets = dataSets
+        return self.dataSets
 
     def getDataset(self, dataType, visit=None, raft=None, sensor=None, ids=True):
         """Get all the data of the given type (e.g. "psf"); visit may be None (meaning use default);
 raft or sensor may be None (meaning get all)
 
-N.b. This routine resets the self.ids listless ids is False; it is assumed that you retrieve all data items from the same set
-of sensors, but this is not checked.
+N.b. This routine resets the self.ids list unless ids is False; it is assumed that you retrieve all data items from the same set of sensors, but this is not checked.
 """
         if visit:
             self.visit = visit
 
-        dataSets = self.lookupDataByVisit(dataType, raft=raft, sensor=sensor)
+        dataSets = self.lookupDataByVisit(dataType, visit=visit, raft=raft, sensor=sensor)
         if not self.visit and len(dataSets) == 1:
             self.visit = dataSets.keys()[0]
 
@@ -154,19 +168,19 @@ of sensors, but this is not checked.
 
     def getMags(self, ss, calculateApCorr=False):
         """Return numpy arrays constructed from SourceSet ss"""
-        apMags = numpy.empty(len(ss))
-        psfMags = numpy.empty(len(ss))
-        flags = numpy.empty(len(ss))
+        apMags = np.empty(len(ss))
+        psfMags = np.empty(len(ss))
+        flags = np.empty(len(ss))
 
         for i in range(len(ss)):
             apMags[i]  = ss[i].getApFlux()
             psfMags[i] = ss[i].getPsfFlux()
             flags[i] = ss[i].getFlagForDetection()
 
-        apMags  = self.ZP0 - 2.5*numpy.log10(apMags)
-        psfMags = self.ZP0 - 2.5*numpy.log10(psfMags)
+        apMags  = self.ZP0 - 2.5*np.log10(apMags)
+        psfMags = self.ZP0 - 2.5*np.log10(psfMags)
 
-        good = numpy.logical_and(numpy.isfinite(apMags), numpy.isfinite(psfMags))
+        good = np.logical_and(np.isfinite(apMags), np.isfinite(psfMags))
 
         apMags = apMags[good]
         psfMags = psfMags[good]
@@ -174,7 +188,7 @@ of sensors, but this is not checked.
 
         if calculateApCorr:
             delta = psfMags - apMags
-            apCorr = numpy.median(delta[psfMags < 12])
+            apCorr = np.median(delta[psfMags < 12])
             print "RHL", apCorr
             apMags += apCorr
 
@@ -197,9 +211,9 @@ of sensors, but this is not checked.
 
         return apMags, psfMags, flags
 
-    def getMagsByVisit(self, visit=None, nSensor=0):
+    def getMagsByVisit(self, visit=None, nSensor=0, sensor=None, raft=None):
         """Set the "self.magnitudes" for a visit"""
-        d = self.lookupDataByVisit("src")
+        d = self.lookupDataByVisit("src", visit=visit, sensor=sensor, raft=raft)
 
         if visit:
             self.visit = visit
@@ -216,49 +230,270 @@ of sensors, but this is not checked.
             nSensor = len(d[self.visit])     # i.e. all
 
         for r, s in d[self.visit][0:nSensor]:
+            if raft and r != raft or sensor and sensor != s:
+                continue
             ss = self.getSources(raft=r, sensor=s)[0]
             apMags, psfMags, flags = self._getMags(ss, apMags=apMags, psfMags=psfMags, flags=flags)
 
-        self.apMags  = numpy.ndarray(len(apMags),  dtype='f', buffer=apMags)
-        self.psfMags = numpy.ndarray(len(psfMags), dtype='f', buffer=psfMags)
-        self.flags   = numpy.ndarray(len(flags),   dtype=long, buffer=flags)
+        self.apMags  = np.ndarray(len(apMags),  dtype='f', buffer=apMags)
+        self.psfMags = np.ndarray(len(psfMags), dtype='f', buffer=psfMags)
+        self.flags   = np.ndarray(len(flags),   dtype=long, buffer=flags)
 
-    def plotDmag(self, fig=None, markersize=0.1, color="red"):
-        """Plot (aper - psf) v. psf mags"""
-        if fig:
-            self.fig = fig
+    #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-        if self.fig:
-            self.fig.clf()
+    def getCalibObjects(self, fixup=False, **kwargs):
+        if kwargs.has_key("visit"):
+            self.visit = kwargs["visit"]
+            del kwargs["visit"]
+
+        try:
+            self.visit = int(re.sub(r"^v", "", self.visit))
+        except:
+            pass
+
+        self.name = 'imsim-v%d-r%s-s%s' % (self.visit,
+                                          kwargs["raft"].replace(',' ,''), kwargs["sensor"].replace(',', ''))
+
+        try:
+            filters = self.butler.queryMetadata('raw', 'filter', visit=self.visit, **kwargs)
+            filterName = filters[0]
+        except IndexError:
+            raise RuntimeError("No filters are available for visit %d" % self.visit)
+
+        psources = self.butler.get('icSrc', visit=self.visit, **kwargs)
+        pmatches = self.butler.get('icMatch', visit=self.visit, **kwargs)
+        if True:
+            print 'Got sources', psources
+            print 'Got matches', pmatches
+
+        matchmeta = pmatches.getSourceMatchMetadata()
+        self.matches = pmatches.getSourceMatches()
+        if True:
+            print 'Match metadata:', matchmeta
+        self.sources = psources.getSources()
+
+        if False:                       # only read the metadata; not quite enough unfortunately
+            calexp_md = self.butler.get('calexp_md', visit=self.visit, **kwargs)
+            wcs = afwImage.makeWcs(calexp_md)
         else:
-            if not pyplot:
-                raise RuntimeError("I am unable to plot as I failed to import matplotlib")
-            self.fig = pyplot.figure()
+            calexp = self.butler.get('calexp', visit=self.visit, **kwargs)
+            wcs = calexp.getWcs()
 
-        axes = self.fig.add_axes((0.1, 0.1, 0.85, 0.80));
+        if False:                       # why do this?
+            wcs = afwImage.cast_TanWcs(wcs)
+        if False:
+            print 'Got wcs', wcs.getFitsMetadata().toString()
 
-        fdict = maUtils.getDetectionFlags()
+        self.zp = calexp.getCalib().getMagnitude(1.0)
+        print 'Zeropoint is', self.zp
 
-        bad = numpy.bitwise_and(self.flags, fdict["INTERP_CENTER"])
-        good = numpy.logical_not(bad)
-        a = self.apMags[good]
-        p = self.psfMags[good]
+        # ref sources
+        W, H = calexp.getWidth(), calexp.getHeight()
+        xc, yc = 0.5*W, 0.5*H
+        radec = wcs.pixelToSky(xc, yc)
+        ra = radec.getLongitude(DEGREES)
+        dec = radec.getLatitude(DEGREES)
+        radius = wcs.pixelScale()*math.hypot(xc, yc)*1.1
+        print 'Image W,H', W,H
+        print 'Image center RA,Dec', ra, dec
+        print 'Searching radius', radius, 'arcsec'
+        pol = pexPolicy.Policy()
+        pol.set('matchThreshold', 30)
+        solver = measAstrom.createSolver(pol, log)
+        idName = 'id'
+        # could get this from matchlist meta...
+        anid = matchmeta.getInt('ANINDID')
+        if False:
+            print 'Searching index with ID', anid
+            print 'Using ID column name', idName
+            print 'Using filter column name', filterName
+        X = solver.getCatalogue(ra, dec, radius, filterName, idName, anid)
+        self.ref = X.first
+        inds = X.second
 
-        axes.plot(p, a - p, "o", markersize=markersize, color=color)
-        axes.plot((0, 20), (0, 0), "b-")
-        axes.set_ylim(-0.4, 0.6)
-        axes.set_xlim(8, 17)
-        axes.set_xlabel("psf")
-        axes.set_ylabel("aper - psf")
-        axes.set_title("Visit %d, all CCDs, pt1prod_im%04d, per-CCD aperture correction" %
-                       (self.visit, self.run))
+        referrs, stargal = None, None
+        if False:
+            print 'Tag-along columns:'
+            cols = solver.getTagAlongColumns(anid)
+            print cols
+            for c in cols:
+                print 'column: ', c.name, c.fitstype, c.ctype, c.units, c.arraysize
+            colnames = [c.name for c in cols]
 
-        self.fig.show()
+            col = filterName + '_err'
+            if col in colnames:
+                referrs = solver.getTagAlongDouble(anid, col, inds)
 
-    def showPsfs(self, psfs, frame=None):
-        mos = ds9Utils.Mosaic()
-        for i in range(len(psfs)):
-            psf = psfs[i]
-            mos.append(psf.computeImage(), "%s:%s" % (self.ids[i].raft, self.ids[i].sensor))
+            col = 'starnotgal'
+            if col in colnames:
+                stargal1 = solver.getTagAlongBool(anid, col, inds)
+                stargal = []
+                for i in range(len(stargal1)):
+                    stargal.append(stargal1[i])
 
-        mos.makeMosaic(frame=frame)
+        if False:
+            print 'Got', len(self.ref), 'reference catalog sources'
+
+        keepref = []
+        keepi = []
+        for i in xrange(len(self.ref)):
+            x, y = wcs.skyToPixel(self.ref[i].getRa(), self.ref[i].getDec())
+            if x < 0 or y < 0 or x > W or y > H:
+                continue
+            self.ref[i].setXAstrom(x)
+            self.ref[i].setYAstrom(y)
+            keepref.append(self.ref[i])
+            keepi.append(i)
+            
+        print 'Kept', len(keepref), 'reference sources'
+        self.ref = keepref
+
+        if referrs is not None:
+            referrs = [referrs[i] for i in keepi]
+        if stargal is not None:
+            stargal = [stargal[i] for i in keepi]
+        
+        if False:
+            m0 = self.matches[0]
+            f,s = m0.first, m0.second
+            print 'match 0: ref %i, source %i' % (f.getSourceId(), s.getSourceId())
+            print '  ref x,y,flux = (%.1f, %.1f, %.1f)' % (f.getXAstrom(), f.getYAstrom(), f.getPsfFlux())
+            print '  src x,y,flux = (%.1f, %.1f, %.1f)' % (s.getXAstrom(), s.getYAstrom(), s.getPsfFlux())
+
+        measAstrom.joinMatchList(self.matches, self.ref, first=True, log=log)
+        args = {}
+        if fixup:
+            # ugh, mask and offset req'd because source ids are assigned at write-time
+            # and match list code made a deep copy before that.
+            # (see svn+ssh://svn.lsstcorp.org/DMS/meas/astrom/tickets/1491-b r18027)
+            args['mask'] = 0xffff
+            args['offset'] = -1
+        measAstrom.joinMatchList(self.matches, self.sources, first=False, log=log, **args)
+
+        if not False:
+            fdict = maUtils.getDetectionFlags()
+
+            for m in self.matches:
+                x0,x1 = m.first.getXAstrom(), m.second.getXAstrom()
+                y0,y1 = m.first.getYAstrom(), m.second.getYAstrom()
+                #print 'x,y, dx,dy', x0, y0, x1-x0, y1-y0
+                if m.second.getFlagForDetection() & fdict["STAR"]:
+                    ptype, ctype = "+", ds9.GREEN
+                else:
+                    ptype, ctype = "o", ds9.RED
+                ds9.dot(ptype, x0, y0, ctype=ctype)
+
+        if False:
+            m0 = self.matches[0]
+            f,s = m0.first, m0.second
+            print 'match 0: ref %i, source %i' % (f.getSourceId(), s.getSourceId())
+            print '  ref x,y,flux = (%.1f, %.1f, %.1f)' % (f.getXAstrom(), f.getYAstrom(), f.getPsfFlux())
+            print '  src x,y,flux = (%.1f, %.1f, %.1f)' % (s.getXAstrom(), s.getYAstrom(), s.getPsfFlux())
+            r,d = 2.31262000000000, 3.16386000000000
+            x,y = wcs.skyToPixel(r,d)
+            print 'x,y', x,y
+            r2d2 = wcs.pixelToSky(x,y)
+            r2 = r2d2.getLongitude(DEGREES)
+            d2 = r2d2.getLatitude(DEGREES)
+            print r,d
+            print r2,d2
+
+#-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+def plotDmag(data, fig=None, markersize=0.1, color="red"):
+    """Plot (aper - psf) v. psf mags"""
+    if fig:
+        data.fig = fig
+
+    if data.fig:
+        data.fig.clf()
+    else:
+        if not pyplot:
+            raise RuntimeError("I am unable to plot as I failed to import matplotlib")
+        data.fig = pyplot.figure()
+
+    axes = data.fig.add_axes((0.1, 0.1, 0.85, 0.80));
+
+    fdict = maUtils.getDetectionFlags()
+
+    bad = np.bitwise_and(data.flags, fdict["INTERP_CENTER"])
+    good = np.logical_not(bad)
+    a = data.apMags[good]
+    p = data.psfMags[good]
+
+    axes.plot(p, a - p, "o", markersize=markersize, color=color)
+    axes.plot((0, 20), (0, 0), "b-")
+    axes.set_ylim(-0.4, 0.6)
+    axes.set_xlim(12, 18)
+    axes.set_xlabel("psf")
+    axes.set_ylabel("aper - psf")
+    title = "Visit %d, all CCDs, " % (data.visit)
+    if data.run:
+        title = "pt1prod_im%04d, " % (data.run)
+    title += "per-CCD aperture correction"
+    axes.set_title(title)
+
+    data.fig.show()
+
+def plotCalibration(data, plotBand=0.05, fig=None):
+    """Plot (instrumental - reference) v. reference magnitudes given a Data object.
+
+The Data must have been initialised with a call to the getCalibObjects method
+
+Use the matplotlib Figure object fig; if none is provided it'll be created and saved in data
+    
+If plotBand is provided, draw lines at +- plotBand
+    """
+    if fig:
+        data.fig = fig
+
+    if data.fig:
+        data.fig.clf()
+    else:
+        if not pyplot:
+            raise RuntimeError("I am unable to plot as I failed to import matplotlib")
+        data.fig = pyplot.figure()
+
+    fdict = maUtils.getDetectionFlags()
+
+    mstars = [m for m in data.matches if (m.second.getFlagForDetection() & fdict["STAR"])]
+
+    axes = data.fig.add_axes((0.1, 0.1, 0.85, 0.80));
+
+    refmag = np.array([-2.5*math.log10(s.first.getPsfFlux()) for s in mstars])
+    instmag = np.array([data.zp - 2.5*math.log10(s.second.getPsfFlux()) for s in mstars])
+    good = np.array([(m.second.getYAstrom() > 2048) for m in mstars])
+
+    delta = refmag - instmag
+    #markersize 
+    axes.plot(refmag[good], delta[good], "r+")
+    axes.plot(refmag[np.logical_not(good)], delta[np.logical_not(good)], "b+")
+    axes.plot((-100, 100), (0, 0), "g-")
+    if plotBand:
+        for x in (-plotBand, plotBand):
+            axes.plot((-100, 100), plotBand*np.ones(2), "g--")
+
+    axes.set_ylim(-1.1, 1.1)
+    axes.set_xlim(24, 13)
+    axes.set_xlabel("Reference")
+    axes.set_ylabel("Reference - Instrumental")
+    axes.set_title(data.name)
+
+    data.fig.show()
+
+    if False:
+        _mstars = [m for m in mstars if math.fabs(-2.5*math.log10(m.first.getPsfFlux()) - 17.5) < 0.5]
+        for m in _mstars:
+            print "%.1f %.1f  %.2f %.2f" % (m.second.getXAstrom(), m.second.getYAstrom(),
+                                            -2.5*math.log10(m.first.getPsfFlux()),
+                                            -2.5*math.log10(m.first.getPsfFlux()) - 
+                                            (data.zp - 2.5*math.log10(m.second.getPsfFlux())))
+            ds9.dot("*", m.second.getXAstrom(), m.second.getYAstrom(), ctype=ds9.MAGENTA, size=10)
+
+def showPsfs(data, psfs, frame=None):
+    mos = ds9Utils.Mosaic()
+    for i in range(len(psfs)):
+        psf = psfs[i]
+        mos.append(psf.computeImage(), "%s:%s" % (data.ids[i].raft, data.ids[i].sensor))
+
+    mos.makeMosaic(frame=frame)
