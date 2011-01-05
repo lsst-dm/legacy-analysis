@@ -1,0 +1,50 @@
+namespace lsst { namespace analysis
+/**
+ \mainpage Using lsst.analysis.utils
+
+\subsection The class Data
+
+\subsubsection Introduction
+
+The utilities in utils are built around a python class, <code>Data</code>.  This provides a cache of useful
+information (e.g. the location of the data root and registries) as well as methods intended to simplify the
+retrieval and display of data.
+
+For example,
+\code
+import lsst.analysis.utils as utils
+
+d = utils.Data(dataRoot="/lsst2/datarel-runs/2000/pt1prod_im2003/update")
+\endcode
+creates a butler and stores it away.  You can then say:
+\code
+import lsst.afw.display.ds9 as ds9
+exp = d.getDataset('calexp', visit=85687975, raft='3,2', sensor='2,1')[0]
+ds9.mtv(exp)
+\endcode
+to display your favourite calibrated exposure.
+
+The <code>getDataset</code> method is more general than just reading an <code>Exposure</code>; for
+example
+\code
+psf = d.getDataset('psf', raft='3,2', sensor='2,0')[0]
+\endcode
+will retrieve a PSF from disk
+(note that <code>Data</code> has remembered your visit).
+You can then use utilities from
+<code>lsst.meas.algorithms</code> to display it:
+\code
+import lsst.meas.algorithms.utils as maUtils
+maUtils.showPsf(psf, frame=1)
+maUtils.showPsfMosaic(exp, psf, frame=2)
+\endcode
+
+If you're interested in calibration, there's:
+\code
+d.getCalibObjects(raft='3,2', sensor='2,0')
+utils.plotCalibration(d)
+\endcode
+
+ */
+}}
+
