@@ -312,27 +312,29 @@ N.b. This routine resets the self.ids list unless ids is False; it is assumed th
         inds = X.second
 
         referrs, stargal = None, None
-        if False:
-            print 'Tag-along columns:'
-            cols = solver.getTagAlongColumns(anid)
-            print cols
-            for c in cols:
-                print 'column: ', c.name, c.fitstype, c.ctype, c.units, c.arraysize
-            colnames = [c.name for c in cols]
+        print 'Tag-along columns:'
+        cols = solver.getTagAlongColumns(anid)
+        print cols
+        for c in cols:
+            print 'column: ', c.name, c.fitstype, c.ctype, c.units, c.arraysize
+        colnames = [c.name for c in cols]
 
+        if False:
             col = filterName + '_err'
             if col in colnames:
                 referrs = solver.getTagAlongDouble(anid, col, inds)
 
-            col = 'starnotgal'
-            if col in colnames:
-                stargal1 = solver.getTagAlongBool(anid, col, inds)
-                stargal = []
-                for i in range(len(stargal1)):
-                    stargal.append(stargal1[i])
+        col = 'starnotgal'
+        if col in colnames:
+            stargal1 = solver.getTagAlongBool(anid, col, inds)
+            stargal = []
+            for i in range(len(stargal1)):
+                stargal.append(stargal1[i])
 
         if False:
             print 'Got', len(self.ref), 'reference catalog sources'
+
+        fdict = maUtils.getDetectionFlags()
 
         keepref = []
         keepi = []
@@ -342,6 +344,8 @@ N.b. This routine resets the self.ids list unless ids is False; it is assumed th
                 continue
             self.ref[i].setXAstrom(x)
             self.ref[i].setYAstrom(y)
+            if stargal[i]:
+                self.ref[i].setFlagForDetection(self.ref[i].getFlagForDetection() | fdict["STAR"])
             keepref.append(self.ref[i])
             keepi.append(i)
             
@@ -352,7 +356,10 @@ N.b. This routine resets the self.ids list unless ids is False; it is assumed th
             referrs = [referrs[i] for i in keepi]
         if stargal is not None:
             stargal = [stargal[i] for i in keepi]
-        
+
+        self.stargal = stargal
+        self.referrs = referrs
+
         if False:
             m0 = self.matches[0]
             f,s = m0.first, m0.second
@@ -370,18 +377,11 @@ N.b. This routine resets the self.ids list unless ids is False; it is assumed th
             args['offset'] = -1
         measAstrom.joinMatchList(self.matches, self.sources, first=False, log=log, **args)
 
-        if not False:
-            fdict = maUtils.getDetectionFlags()
-
+        if False:
             for m in self.matches:
                 x0,x1 = m.first.getXAstrom(), m.second.getXAstrom()
                 y0,y1 = m.first.getYAstrom(), m.second.getYAstrom()
-                #print 'x,y, dx,dy', x0, y0, x1-x0, y1-y0
-                if m.second.getFlagForDetection() & fdict["STAR"]:
-                    ptype, ctype = "+", ds9.GREEN
-                else:
-                    ptype, ctype = "o", ds9.RED
-                ds9.dot(ptype, x0, y0, ctype=ctype)
+                print 'x,y, dx,dy', x0, y0, x1-x0, y1-y0
 
         if False:
             m0 = self.matches[0]
@@ -456,22 +456,32 @@ If plotBand is provided, draw lines at +- plotBand
 
     fdict = maUtils.getDetectionFlags()
 
-    mstars = [m for m in data.matches if (m.second.getFlagForDetection() & fdict["STAR"])]
+    mstars = [m for m in data.matches if (m.second.getFlagForDetection() & fdict["STAR"])] # data
+    realStars = [(m.first.getFlagForDetection() & fdict["STAR"]) != 0                      # catalogue
+                 for m in data.matches if (m.second.getFlagForDetection() & fdict["STAR"])]
 
     axes = data.fig.add_axes((0.1, 0.1, 0.85, 0.80));
 
     refmag = np.array([-2.5*math.log10(s.first.getPsfFlux()) for s in mstars])
     instmag = np.array([data.zp - 2.5*math.log10(s.second.getPsfFlux()) for s in mstars])
-    good = np.array([(m.second.getYAstrom() > 2048) for m in mstars])
+    realStars = np.array([m for m in realStars])
 
     delta = refmag - instmag
     #markersize 
-    axes.plot(refmag[good], delta[good], "r+")
-    axes.plot(refmag[np.logical_not(good)], delta[np.logical_not(good)], "b+")
+    if False:                                                            # plot top/bottom of chip differently
+        top = np.array([(m.second.getYAstrom() > 2048) for m in mstars]) # actually, top of chip
+
+        axes.plot(refmag[top], delta[top], "r+")
+        axes.plot(refmag[np.logical_not(top)], delta[np.logical_not(top)], "b+")
+    else:
+        axes.plot(refmag, delta, "r+")
+
+    axes.plot(refmag[realStars], delta[realStars], "mo")
+        
     axes.plot((-100, 100), (0, 0), "g-")
     if plotBand:
         for x in (-plotBand, plotBand):
-            axes.plot((-100, 100), plotBand*np.ones(2), "g--")
+            axes.plot((-100, 100), x*np.ones(2), "g--")
 
     axes.set_ylim(-1.1, 1.1)
     axes.set_xlim(24, 13)
@@ -489,6 +499,30 @@ If plotBand is provided, draw lines at +- plotBand
                                             -2.5*math.log10(m.first.getPsfFlux()) - 
                                             (data.zp - 2.5*math.log10(m.second.getPsfFlux())))
             ds9.dot("*", m.second.getXAstrom(), m.second.getYAstrom(), ctype=ds9.MAGENTA, size=10)
+
+def displayCalibration(data, frame=0):
+    """display the calibration objects in Data object data on ds9
+Stars are green; galaxies are red based on our processing
+    """
+    fdict = maUtils.getDetectionFlags()
+
+    for m in data.matches:
+        ref, src = m.first, m.second
+        x1, y1 = src.getXAstrom(), src.getYAstrom()
+        if ref.getFlagForDetection() & fdict["STAR"]:
+            ptype = "+"
+            if src.getFlagForDetection() & fdict["STAR"]:
+                ctype = ds9.GREEN
+            else:
+                ctype = ds9.YELLOW
+        else:
+            ptype = "o"
+            if not (src.getFlagForDetection() & fdict["STAR"]):
+                ctype = ds9.RED
+            else:
+                ctype = ds9.MAGENTA
+
+        ds9.dot(ptype, x1, y1, ctype=ctype)
 
 def showPsfs(data, psfs, frame=None):
     mos = ds9Utils.Mosaic()
