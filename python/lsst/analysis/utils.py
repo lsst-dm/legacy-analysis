@@ -212,34 +212,17 @@ class Data(object):
         See also getDataset()
         """
 
-        kwargs = dict([(k, v) for k, v in kwargs.items() if 1 or v is not None])
+        kwargs = dict([(k, v) for k, v in kwargs.items() if v is not None])
         extra = {}
         if dataType == "raw":
             for k in ("snap", "channel",):
                 extra[k] = kwargs.get(k, 1)
                 kwargs[k] = extra[k]
 
-        if False:
-            vfsr = butler.queryMetadata("raw", "visit",
-                                             ["visit", "filter", "raft", "sensor",],
-                                             *args, **kwargs)
-        else:
-            if kwargs.get("raft"):
-                if kwargs.get("sensor"):
-                    vfsr = butler.queryMetadata("raw", "visit",
-                                                     ["visit", "filter", "raft", "sensor",],
-                                                     visit=kwargs["visit"], raft=kwargs["raft"], sensor=kwargs["sensor"])
-                else:
-                    vfsr = butler.queryMetadata("raw", "visit",
-                                                     ["visit", "filter", "raft", "sensor",],
-                                                     visit=kwargs["visit"], raft=kwargs["raft"])
-            else:
-                    vfsr = butler.queryMetadata("raw", "visit",
-                                                     ["visit", "filter", "raft", "sensor",],
-                                                     visit=kwargs["visit"])
 
         dataSets = {}
-        for v, f, r, s in vfsr:
+        for v, f, r, s in butler.queryMetadata("raw", "visit", ["visit", "filter", "raft", "sensor",],
+                                               *args, **kwargs):
             if butler.datasetExists(dataType, visit=v, filter=f, raft=r, sensor=s, **extra):
                 if not dataSets.has_key(v):
                     dataSets[v] = []
@@ -356,6 +339,8 @@ N.b. This routine resets the self.ids list unless ids is False; it is assumed th
         """Set the "self.magnitudes" for a visit"""
 
         d = self.lookupDataByVisit("src", visit=visit, sensor=sensor, raft=raft)
+        if not d:
+            raise RuntimeError("Unable to find any data that matches your requirements")
 
         self.setVRS(visit, raft, sensor)
 
@@ -683,8 +668,8 @@ If plotBand is provided, draw lines at +- plotBand
         for x in (-plotBand, plotBand):
             axes.plot((-100, 100), x*np.ones(2), "g--")
 
-    #axes.set_ylim(-1.1, 1.1)
-    axes.set_ylim(-2.1, 2.1)
+    axes.set_ylim(-0.6, 0.6)
+    #axes.set_ylim(-2.1, 2.1)
     axes.set_xlim(24, 13)
     axes.set_xlabel("Reference")
     axes.set_ylabel("Reference - %s" % measuredMagType)
