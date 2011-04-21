@@ -138,20 +138,19 @@ class Data(object):
     def setButler(self, run=None,
                   dataRoot=None, dataRootFormat="/lsst2/datarel-runs/pt1prod_im%04d/update",
                   registryRoot=None, registryRun=None):
+        global butlerDataRoot, butler
+
         if run is None:
             self.run = None
         else:
             self.run = run
-            self.butler = None
+            butlerDataRoot = None
 
-        global butlerDataRoot, butler
         if butlerDataRoot and dataRoot != butlerDataRoot:
             butler = None
 
         try:
             if butler is not None:
-                self.butler = butler
-                self.dataRoot = butlerDataRoot
                 return butler
         except NameError:
             butler = None
@@ -189,16 +188,14 @@ class Data(object):
                 raise RuntimeError("I'm unable to find your registry in %s", registryRoot)
 
         bf = dafPersist.ButlerFactory(mapper=LsstSimMapper(root=dataRoot, registry=registry))
-        self.butler = bf.create()
-        self.dataRoot = dataRoot
-
-        butler, butlerDataRoot = self.butler, self.dataRoot # globals
+        butler = bf.create()
+        butlerDataRoot = dataRoot
 
     def lookupDataBySkytile(self, dataType):
         dataSets = {}
-        for st, v, f, r, s in self.butler.queryMetadata("raw", "skyTile",
+        for st, v, f, r, s in butler.queryMetadata("raw", "skyTile",
                                                         ["skyTile", "visit", "filter", "raft", "sensor"]):
-            if self.butler.datasetExists(dataType, visit=v, filter=f, raft=r, sensor=s):
+            if butler.datasetExists(dataType, visit=v, filter=f, raft=r, sensor=s):
                 if not dataSets.has_key(st):
                     dataSets[st] = {}
                 if not dataSets[st].has_key((v, f)):
@@ -223,27 +220,27 @@ class Data(object):
                 kwargs[k] = extra[k]
 
         if False:
-            vfsr = self.butler.queryMetadata("raw", "visit",
+            vfsr = butler.queryMetadata("raw", "visit",
                                              ["visit", "filter", "raft", "sensor",],
                                              *args, **kwargs)
         else:
             if kwargs.get("raft"):
                 if kwargs.get("sensor"):
-                    vfsr = self.butler.queryMetadata("raw", "visit",
+                    vfsr = butler.queryMetadata("raw", "visit",
                                                      ["visit", "filter", "raft", "sensor",],
                                                      visit=kwargs["visit"], raft=kwargs["raft"], sensor=kwargs["sensor"])
                 else:
-                    vfsr = self.butler.queryMetadata("raw", "visit",
+                    vfsr = butler.queryMetadata("raw", "visit",
                                                      ["visit", "filter", "raft", "sensor",],
                                                      visit=kwargs["visit"], raft=kwargs["raft"])
             else:
-                    vfsr = self.butler.queryMetadata("raw", "visit",
+                    vfsr = butler.queryMetadata("raw", "visit",
                                                      ["visit", "filter", "raft", "sensor",],
                                                      visit=kwargs["visit"])
 
         dataSets = {}
         for v, f, r, s in vfsr:
-            if self.butler.datasetExists(dataType, visit=v, filter=f, raft=r, sensor=s, **extra):
+            if butler.datasetExists(dataType, visit=v, filter=f, raft=r, sensor=s, **extra):
                 if not dataSets.has_key(v):
                     dataSets[v] = []
                 dataSets[v].append((r, s))
@@ -272,7 +269,7 @@ N.b. This routine resets the self.ids list unless ids is False; it is assumed th
         if ids:
             self.ids = []
         for raft, sensor in dataSets:
-            dataElem = self.butler.get(dataType, visit=self.visit, raft=self.raft, sensor=self.sensor)
+            dataElem = butler.get(dataType, visit=self.visit, raft=self.raft, sensor=self.sensor)
 
             if dataType == "calexp" and kwargs.get("calibrate"):
                 mi = dataElem.getMaskedImage();
@@ -312,7 +309,7 @@ N.b. This routine resets the self.ids list unless ids is False; it is assumed th
             flags[i] = ss[i].getFlagForDetection()
 
         if True:
-            calexp_md = self.butler.get('calexp_md', visit=self.visit, raft=self.raft, sensor=self.sensor)
+            calexp_md = butler.get('calexp_md', visit=self.visit, raft=self.raft, sensor=self.sensor)
             zp = afwImage.Calib(calexp_md).getMagnitude(1.0)
         else:
             zp = self.zp if hasattr(self, "zp") else self.ZP0
@@ -387,7 +384,7 @@ N.b. This routine resets the self.ids list unless ids is False; it is assumed th
         raftStr =   raft.replace(',' ,'')   if raft else "*"
         sensorStr = sensor.replace(',' ,'') if sensor else "*"
         self.name = 'imsim-%s-r%s-s%s [%s]' % (visitStr, raftStr, sensorStr,
-                                                os.path.basename(os.readlink(os.path.split(self.dataRoot)[0])))
+                                               os.path.basename(os.readlink(os.path.split(butlerDataRoot)[0])))
 
         self.apMags  = np.ndarray(len(apMags),  dtype='f', buffer=apMags)
         self.modelMags  = np.ndarray(len(modelMags),  dtype='f', buffer=modelMags)
@@ -406,7 +403,7 @@ N.b. This routine resets the self.ids list unless ids is False; it is assumed th
         try:
             kwargs = dict([(k, v) for k, v in kwargs.items() if v is not None])
             filters = set(); rafts = set(); sensors = set()
-            for f, r, s in self.butler.queryMetadata("raw", "filter", ["filter", "raft", "sensor"], **kwargs):
+            for f, r, s in butler.queryMetadata("raw", "filter", ["filter", "raft", "sensor"], **kwargs):
                 filters.add(f)
                 rafts.add(r)
                 sensors.add(s)
@@ -428,9 +425,9 @@ N.b. This routine resets the self.ids list unless ids is False; it is assumed th
         raftStr =   kwargs["raft"].replace(',' ,'')   if kwargs["raft"] else "*"
         sensorStr = kwargs["sensor"].replace(',' ,'') if kwargs["sensor"] else "*"
         self.name = 'imsim-v%s-r%s-s%s [%s]' % (self.visit, raftStr, sensorStr,
-                                                os.path.basename(os.readlink(os.path.split(self.dataRoot)[0])))
-        psources = self.butler.get('icSrc', **kwargs)
-        pmatches = self.butler.get('icMatch', **kwargs)
+                                                os.path.basename(os.readlink(os.path.split(butlerDataRoot)[0])))
+        psources = butler.get('icSrc', **kwargs)
+        pmatches = butler.get('icMatch', **kwargs)
         if False:
             print 'Got sources', psources
             print 'Got matches', pmatches
@@ -443,13 +440,13 @@ N.b. This routine resets the self.ids list unless ids is False; it is assumed th
 
         useOutputSrc = True             # use fluxes from the "src", not "icSrc"
         if useOutputSrc:
-            srcs = self.butler.get('src', **kwargs).getSources()
+            srcs = butler.get('src', **kwargs).getSources()
             import lsst.afw.detection as afwDetect
             pmMatch = afwDetect.matchXy(self.sources, srcs, 1.0, True)
             for icSrc, src, d in pmMatch:
                 icSrc.setPsfFlux(src.getPsfFlux())
 
-        calexp_md = self.butler.get('calexp_md', **kwargs)
+        calexp_md = butler.get('calexp_md', **kwargs)
         wcs = afwImage.makeWcs(calexp_md)
         W, H = calexp_md.get("NAXIS1"), calexp_md.get("NAXIS2")
 
