@@ -12,6 +12,32 @@ except ImportError:
 import lsst.pex.exceptions as pexExcept
 import lsst.pex.logging as pexLogging
 import lsst.pex.policy as pexPolicy
+import lsst.daf.persistence as dafPersist
+
+import lsst.afw.detection as afwDetect
+import lsst.afw.image as afwImage
+import lsst.afw.math as afwMath
+from lsst.afw.coord import DEGREES
+import lsst.afw.display.ds9 as ds9
+import lsst.afw.display.utils as ds9Utils
+import lsst.afw.cameraGeom as cameraGeom
+import lsst.afw.cameraGeom.utils as cameraGeomUtils
+try:
+    import lsst.afw.extensions.rgb as afwRgb
+except ImportError:
+    afwRgb = None
+
+import lsst.meas.astrom as measAstrom
+import lsst.meas.algorithms as measAlg
+import lsst.meas.algorithms.utils as maUtils
+
+from lsst.obs.lsstSim import LsstSimMapper
+
+try:
+    import lsst.ip.isr as ipIsr
+except ImportError:
+    ipIsr = None
+
 try:
     log
 except:
@@ -30,17 +56,6 @@ try:
 except NameError:
     butlerDataRoot = None
     butler = None
-
-import lsst.afw.image as afwImage
-from lsst.afw.coord import DEGREES
-import lsst.meas.astrom as measAstrom
-import lsst.meas.algorithms as measAlg
-import lsst.meas.algorithms.utils as maUtils
-import lsst.afw.display.ds9 as ds9
-import lsst.afw.display.utils as ds9Utils
-
-import lsst.daf.persistence as dafPersist
-from lsst.obs.lsstSim import LsstSimMapper
 
 try:
     mpFigures
@@ -76,6 +91,19 @@ def getMpFigure(fig=None, clear=True):
                 getMpFigure(j)
                 
             mpFigures[i] = pyplot.figure()
+            #
+            # Modify pyplot.figure().show() to make it raise the plot too
+            #
+            def show(self, _show=mpFigures[i].show):
+                _show(self)
+                try:
+                    self.canvas._tkcanvas._root().lift() # == Tk's raise, but raise is a python reserved word
+                except Exception, e:
+                    pass
+            # create a bound method
+            import types
+            mpFigures[i].show = types.MethodType(show, mpFigures[i], mpFigures[i].__class__)
+
         fig = mpFigures[i]
 
     if not fig:
@@ -88,7 +116,14 @@ def getMpFigure(fig=None, clear=True):
     if clear:
         fig.clf()
 
+    pyplot.figure(fig.number)           # make it active
+
     return fig
+
+def makeSubplots(figure, nx=2, ny=2):
+    """Return a generator of a set of subplots"""
+    for window in range(nx*ny):  
+        yield figure.add_subplot(nx, ny, window + 1) # 1-indexed
 
 class Data(object):
     class Id(object):
@@ -138,7 +173,7 @@ class Data(object):
     def setButler(self, run=None,
                   dataRoot=None, dataRootFormat="/lsst2/datarel-runs/pt1prod_im%04d/update",
                   registryRoot=None, registryRun=None):
-        global butlerDataRoot, butler
+        global butlerDataRoot, butler, inButler, rerun
 
         if run is None:
             self.run = None
@@ -148,6 +183,7 @@ class Data(object):
 
         if butlerDataRoot and dataRoot != butlerDataRoot:
             butler = None
+            rerun = ""
 
         try:
             if butler is not None:
@@ -187,9 +223,16 @@ class Data(object):
             if not registry:
                 raise RuntimeError("I'm unable to find your registry in %s", registryRoot)
 
-        bf = dafPersist.ButlerFactory(mapper=LsstSimMapper(root=dataRoot, registry=registry))
-        butler = bf.create()
+        butler = dafPersist.ButlerFactory(mapper=LsstSimMapper(root=dataRoot, registry=registry)).create()
         butlerDataRoot = dataRoot
+
+        inputRoot = os.path.join(os.path.split(dataRoot)[0], "input")
+        inButler = dafPersist.ButlerFactory(mapper=LsstSimMapper(root=inputRoot, registry=registry)).create()
+
+        bdr0 = os.path.split(butlerDataRoot)[0] # chop off last element (e.g. "update")
+        if os.path.islink(bdr0):
+            bdr0 = os.readlink(bdr0)
+        rerun = os.path.basename(bdr0)
 
     def lookupDataBySkytile(self, dataType):
         dataSets = {}
@@ -231,13 +274,35 @@ class Data(object):
         self.dataSets = dataSets
         return self.dataSets
 
-    def getDataset(self, dataType, visit=None, raft=None, sensor=None, ids=True, **kwargs):
+    def getDataset(self, dataType, ids=True, calibrate=False, useDb=False, setMask=False, **dataId):
         """Get all the data of the given type (e.g. "psf"); visit may be None (meaning use default);
 raft or sensor may be None (meaning get all)
-
-N.b. This routine resets the self.ids list unless ids is False; it is assumed that you retrieve all data items from the same set of sensors, but this is not checked.
 """
-        self.setVRS(visit, raft, sensor, reset=True)
+        if setMask and dataType != "eimage":
+            raise RuntimeError("setMask only makes sense when reading an eimage")
+
+        if dataType in ("raw", "flat", "bias", "dark",):
+            return [assembleCcd(dataType, inButler, reNorm=False, **dataId)]
+        elif dataType in ("eimage",):
+            raw_filename = inButler.get('raw_filename', channel='0,0', snap=0, **dataId)[0]
+            dirName, fileName = os.path.split(re.sub(r"/raw/", "/raw/../eimage/", raw_filename))
+            fileName = re.sub(r"^imsim", "eimage", fileName)
+            fileName = re.sub(r"_C00_", "_", fileName)
+            fileName = os.path.join(os.path.split(dirName)[0], fileName)
+            eimage0 = afwImage.ExposureF(fileName) # as read
+            #
+            # Fix orientation
+            #
+            eimage = afwMath.rotateImageBy90(
+                afwMath.flipImage(eimage0.getMaskedImage().getImage(), False, True), 1)
+            if setMask:
+                calexp = self.getDataset("calexp", **dataId)[0]
+                mask = calexp.getMaskedImage().getMask()
+            else:
+                mask = None
+            return afwImage.makeExposure(afwImage.makeMaskedImage(eimage, mask), eimage0.getWcs())
+
+        self.setVRS(dataId["visit"], dataId["raft"], dataId["sensor"], reset=True)
 
         dataSets = self.lookupDataByVisit(dataType, visit=self.visit, raft=self.raft, sensor=self.sensor)
         if not self.visit and len(dataSets) == 1:
@@ -249,14 +314,16 @@ N.b. This routine resets the self.ids list unless ids is False; it is assumed th
                                (" for visit %d" % self.visit if self.visit else ""))
 
         data = []
-        if ids:
-            self.ids = []
         for raft, sensor in dataSets:
             dataElem = butler.get(dataType, visit=self.visit, raft=self.raft, sensor=self.sensor)
 
-            if dataType == "calexp" and kwargs.get("calibrate"):
+            if dataType == "calexp":
+                psf = butler.get("psf", visit=self.visit, raft=self.raft, sensor=self.sensor)
+                dataElem.setPsf(psf)
+                del psf
+            if dataType == "calexp" and calibrate:
                 mi = dataElem.getMaskedImage();
-                if kwargs.get("db"):
+                if useDb:
                     fluxMag0 = getFluxMag0DB(self.visit, raft, sensor)
                 else:
                     fluxMag0 = dataElem.getCalib().getFluxMag0()[0]
@@ -264,76 +331,110 @@ N.b. This routine resets the self.ids list unless ids is False; it is assumed th
                 del mi
 
             data.append(dataElem)
-            if ids:
-                self.ids.append(Data.Id(visit=self.visit, raft=raft, sensor=sensor))
 
         return data
+
+    def getCalexp(self, **dataId):
+        """Like data.butler.get, but get the PSF too"""
+        exp = butler.get("calexp", **dataId)
+        psf = butler.get("psf", **dataId)
+        exp.setPsf(psf)
+
+        return exp
 
     def getEimages(self, visit=None, raft=None, sensor=None):
         self.setVRS(visit, raft, sensor)
 
-    def getPsfs(self, *args, **kwargs):
-        return self.getDataset("psf", *args, **kwargs)
+    def getPsfs(self, *args, **dataId):
+        return self.getDataset("psf", *args, **dataId)
     
-    def getSources(self, *args, **kwargs):
-        return [pss.getSources() for pss in self.getDataset("src", *args, **kwargs)]
+    def getSources(self, *args, **dataId):
+        return [pss.getSources() for pss in self.getDataset("src", *args, **dataId)]
 
-    def getMags(self, ss, calculateApCorr=False):
+    def getMags(self, ss):
         """Return numpy arrays constructed from SourceSet ss"""
+        ids = np.empty(len(ss), dtype='L')
+        flags = np.empty(len(ss), dtype='L')
         apMags = np.empty(len(ss))
         modelMags = np.empty(len(ss))
         psfMags = np.empty(len(ss))
-        flags = np.empty(len(ss), dtype='L')
+        xAstrom = np.empty(len(ss))
+        yAstrom = np.empty(len(ss))
 
         for i in range(len(ss)):
+            ids[i] = ss[i].getId()
+            flags[i] = ss[i].getFlagForDetection()
             apMags[i]  = ss[i].getApFlux()
             modelMags[i]  = ss[i].getModelFlux()
             psfMags[i] = ss[i].getPsfFlux()
-            flags[i] = ss[i].getFlagForDetection()
+
+            xAstrom[i] = ss[i].getXAstrom()
+            yAstrom[i] = ss[i].getYAstrom()
 
         if True:
             calexp_md = butler.get('calexp_md', visit=self.visit, raft=self.raft, sensor=self.sensor)
-            zp = afwImage.Calib(calexp_md).getMagnitude(1.0)
+            calib = afwImage.Calib(calexp_md)
+            zp = calib.getMagnitude(1.0)
         else:
             zp = self.zp if hasattr(self, "zp") else self.ZP0
 
-        apMags  = zp - 2.5*np.log10(apMags)
-        modelMags  = zp - 2.5*np.log10(modelMags)
-        psfMags = zp - 2.5*np.log10(psfMags)
+        for i in range(len(ss)):
+            try:
+                apMags[i]  = calib.getMagnitude(apMags[i])
+            except:
+                apMags[i]  = np.nan
+
+            try:
+                psfMags[i]  = calib.getMagnitude(psfMags[i])
+            except:
+                psfMags[i]  = np.nan
+
+            try:
+                modelMags[i]  = calib.getMagnitude(modelMags[i])
+            except:
+                modelMags[i]  = np.nan
 
         good = np.logical_and(np.isfinite(apMags), np.isfinite(psfMags))
 
+        ids = ids[good]
+        flags = flags[good]
         apMags = apMags[good]
         modelMags = modelMags[good]
         psfMags = psfMags[good]
-        flags = flags[good]
+        xAstrom = xAstrom[good]
+        yAstrom = yAstrom[good]
 
-        if calculateApCorr:
-            delta = psfMags - apMags
-            apCorr = np.median(delta[psfMags < 12])
-            apMags += apCorr
+        return ids, flags, xAstrom, yAstrom, apMags, modelMags, psfMags
 
-        return apMags, modelMags, psfMags, flags
-
-    def _getMags(self, ss, apMags=None, modelMags=None, psfMags=None, flags=None):
+    def _getMags(self, ss, ids=None, flags=None, xAstrom=None, yAstrom=None,
+                 apMags=None, modelMags=None, psfMags=None):
         """Return python arrays constructed from SourceSet ss, and possibly extending {ap,model,psf}Mags"""
-        if not apMags:
-            apMags = array.array('f')
-        if not modelMags:
-            modelMags = array.array('f')
-        if not psfMags:
-            psfMags = array.array('f')
+        if not ids:
+            ids = array.array('L')
         if not flags:
             flags = array.array('L')
+        if not xAstrom:
+            xAstrom = array.array('d')
+        if not yAstrom:
+            yAstrom = array.array('d')
+        if not apMags:
+            apMags = array.array('d')
+        if not modelMags:
+            modelMags = array.array('d')
+        if not psfMags:
+            psfMags = array.array('d')
 
-        _apMags, _modelMags, _psfMags, _flags = self.getMags(ss)
+        _ids, _flags, _xAstrom, _yAstrom, _apMags, _modelMags, _psfMags = self.getMags(ss)
 
+        ids.extend(_ids)
+        flags.extend(_flags)
+        xAstrom.extend(_xAstrom)
+        yAstrom.extend(_yAstrom)
         apMags.extend(_apMags)
         modelMags.extend(_modelMags)
         psfMags.extend(_psfMags)
-        flags.extend(_flags)
 
-        return apMags, modelMags, psfMags, flags
+        return ids, flags, xAstrom, yAstrom, apMags, modelMags, psfMags
 
     def getMagsByVisit(self, visit=None, nSensor=0, sensor=None, raft=None):
         """Set the "self.magnitudes" for a visit"""
@@ -353,7 +454,7 @@ N.b. This routine resets the self.ids list unless ids is False; it is assumed th
         if not self.visit:
             raise RuntimeError("Please specify a visit")
 
-        apMags, modelMags, psfMags, flags = None, None, None, None
+        ids, flags, xAstrom, yAstrom, apMags, modelMags, psfMags = None, None, None, None, None, None, None
 
         if nSensor == 0:
             nSensor = len(d[self.visit])     # i.e. all
@@ -362,19 +463,22 @@ N.b. This routine resets the self.ids list unless ids is False; it is assumed th
             if raft and r != raft or sensor and sensor != s:
                 continue
             ss = self.getSources(visit=self.visit, raft=r, sensor=s)[0]
-            apMags, modelMags, psfMags, flags = \
-                    self._getMags(ss, apMags=apMags, modelMags=modelMags, psfMags=psfMags, flags=flags)
+            ids, flags, xAstrom, yAstrom, apMags, modelMags, psfMags = \
+                    self._getMags(ss, ids=ids, flags=flags, xAstrom=xAstrom, yAstrom=yAstrom,
+                                  apMags=apMags, modelMags=modelMags, psfMags=psfMags)
 
         visitStr = ("%d" % visit) if visit else "*"
         raftStr =   raft.replace(',' ,'')   if raft else "*"
         sensorStr = sensor.replace(',' ,'') if sensor else "*"
-        self.name = 'imsim-%s-r%s-s%s [%s]' % (visitStr, raftStr, sensorStr,
-                                               os.path.basename(os.readlink(os.path.split(butlerDataRoot)[0])))
+        self.name = 'imsim-%s-r%s-s%s [%s]' % (visitStr, raftStr, sensorStr, rerun)
 
-        self.apMags  = np.ndarray(len(apMags),  dtype='f', buffer=apMags)
-        self.modelMags  = np.ndarray(len(modelMags),  dtype='f', buffer=modelMags)
-        self.psfMags = np.ndarray(len(psfMags), dtype='f', buffer=psfMags)
-        self.flags   = np.ndarray(len(flags),   dtype=long, buffer=flags)
+        self.ids       = np.ndarray(len(ids),       dtype='L', buffer=ids)
+        self.flags     = np.ndarray(len(flags),     dtype='L', buffer=flags)
+        self.xAstrom   = np.ndarray(len(xAstrom),   dtype='d', buffer=xAstrom)
+        self.yAstrom   = np.ndarray(len(yAstrom),   dtype='d', buffer=yAstrom)
+        self.apMags    = np.ndarray(len(apMags),    dtype='d', buffer=apMags)
+        self.modelMags = np.ndarray(len(modelMags), dtype='d', buffer=modelMags)
+        self.psfMags   = np.ndarray(len(psfMags),   dtype='d', buffer=psfMags)
 
     #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
@@ -409,21 +513,22 @@ N.b. This routine resets the self.ids list unless ids is False; it is assumed th
         visitStr = ("%d" % kwargs["visit"]) if kwargs["visit"] else "*"
         raftStr =   kwargs["raft"].replace(',' ,'')   if kwargs["raft"] else "*"
         sensorStr = kwargs["sensor"].replace(',' ,'') if kwargs["sensor"] else "*"
-        self.name = 'imsim-v%s-r%s-s%s [%s]' % (self.visit, raftStr, sensorStr,
-                                                os.path.basename(os.readlink(os.path.split(butlerDataRoot)[0])))
+        self.name = 'imsim-v%s-r%s-s%s [%s]' % (self.visit, raftStr, sensorStr, rerun)
+        if True:
+            self.getCalibObjectsImpl(filterName, fixup=fixup, useDB=False, **kwargs)
+        else:
+            self.matches, calib, self.ref = getCalibObjectsImpl2(filterName, **kwargs)
+            self.zp = calib.getMagnitude(1.0)
+
+    def getCalibObjectsImpl(self, filterName, fixup=False, useDB=False, **kwargs):
         psources = butler.get('icSrc', **kwargs)
         pmatches = butler.get('icMatch', **kwargs)
-        if False:
-            print 'Got sources', psources
-            print 'Got matches', pmatches
 
         matchmeta = pmatches.getSourceMatchMetadata()
         self.matches = pmatches.getSourceMatches()
-        if False:
-            print 'Match metadata:', matchmeta
         self.sources = psources.getSources()
 
-        useOutputSrc = True             # use fluxes from the "src", not "icSrc"
+        useOutputSrc = False             # use fluxes from the "src", not "icSrc"
         if useOutputSrc:
             srcs = butler.get('src', **kwargs).getSources()
             import lsst.afw.detection as afwDetect
@@ -493,8 +598,13 @@ N.b. This routine resets the self.ids list unless ids is False; it is assumed th
 
         keepref = []
         keepi = []
+        if True:                    # Aaaargh
+            convertToDegrees = True
         for i in xrange(len(self.ref)):
-            x, y = wcs.skyToPixel(self.ref[i].getRa(), self.ref[i].getDec())
+            if convertToDegrees:
+                x, y = wcs.skyToPixel(math.degrees(self.ref[i].getRa()), math.degrees(self.ref[i].getDec()))
+            else:
+                x, y = wcs.skyToPixel(self.ref[i].getRa(), self.ref[i].getDec())
             if x < 0 or y < 0 or x > W or y > H:
                 continue
             self.ref[i].setXAstrom(x)
@@ -532,28 +642,90 @@ N.b. This routine resets the self.ids list unless ids is False; it is assumed th
             args['offset'] = -1
         measAstrom.joinMatchList(self.matches, self.sources, first=False, log=log, **args)
 
-        if False:
-            for m in self.matches:
-                x0,x1 = m.first.getXAstrom(), m.second.getXAstrom()
-                y0,y1 = m.first.getYAstrom(), m.second.getYAstrom()
-                print 'x,y, dx,dy', x0, y0, x1-x0, y1-y0
-
-        if False:
-            m0 = self.matches[0]
-            f,s = m0.first, m0.second
-            print 'match 0: ref %i, source %i' % (f.getSourceId(), s.getSourceId())
-            print '  ref x,y,flux = (%.1f, %.1f, %.1f)' % (f.getXAstrom(), f.getYAstrom(), f.getPsfFlux())
-            print '  src x,y,flux = (%.1f, %.1f, %.1f)' % (s.getXAstrom(), s.getYAstrom(), s.getPsfFlux())
-            r,d = 2.31262000000000, 3.16386000000000
-            x,y = wcs.skyToPixel(r,d)
-            print 'x,y', x,y
-            r2d2 = wcs.pixelToSky(x,y)
-            r2 = r2d2.getLongitude(DEGREES)
-            d2 = r2d2.getLatitude(DEGREES)
-            print r,d
-            print r2,d2
-
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+def getCalibObjectsImpl2(filterName, useOutputSrc=False, **kwargs):
+    """
+    A version of getCalibObjectsImpl that isn't a class method, for use by other code
+    
+    @param useOutputSrc             # use fluxes from the "src", not "icSrc"
+    """
+    psources = butler.get('icSrc', **kwargs)
+    pmatches = butler.get('icMatch', **kwargs)
+    calexp_md = butler.get('calexp_md', **kwargs)
+
+    wcs = afwImage.makeWcs(calexp_md)
+    W, H = calexp_md.get("NAXIS1"), calexp_md.get("NAXIS2")
+    calib = afwImage.Calib(calexp_md)
+
+    matches = pmatches.getSourceMatches()
+    sources = psources.getSources()
+
+    anid = pmatches.getSourceMatchMetadata().getInt('ANINDID')
+
+    del psources; del pmatches; del calexp_md # cleanup
+
+    if useOutputSrc:
+        srcs = butler.get('src', **kwargs).getSources()
+        import lsst.afw.detection as afwDetect
+        pmMatch = afwDetect.matchXy(sources, srcs, 1.0, True)
+        for icSrc, src, d in pmMatch:
+            icSrc.setPsfFlux(src.getPsfFlux())
+
+    # ref sources
+    xc, yc = 0.5*W, 0.5*H
+    radec = wcs.pixelToSky(xc, yc)
+    ra = radec.getLongitude(DEGREES)
+    dec = radec.getLatitude(DEGREES)
+    radius = wcs.pixelScale()*math.hypot(xc, yc)*1.1
+
+    pol = pexPolicy.Policy()
+    pol.set('matchThreshold', 30)
+    solver = measAstrom.createSolver(pol, log)
+    idName = 'id'
+
+    X = solver.getCatalogue(ra, dec, radius, filterName, idName, anid)
+    refsources = X.refsources
+    inds = X.inds
+
+    referrs, stargal = None, None
+    cols = solver.getTagAlongColumns(anid)
+    colnames = [c.name for c in cols]
+
+    col = 'starnotgal'
+    if col in colnames:
+        stargal1 = solver.getTagAlongBool(anid, col, inds)
+        stargal = []
+        for i in range(len(stargal1)):
+            stargal.append(stargal1[i])
+
+    fdict = maUtils.getDetectionFlags()
+
+    keepref = []
+    keepi = []
+    for i in xrange(len(refsources)):
+        x, y = wcs.skyToPixel(refsources[i].getRa(), refsources[i].getDec())
+        if x < 0 or y < 0 or x > W or y > H:
+            continue
+        refsources[i].setXAstrom(x)
+        refsources[i].setYAstrom(y)
+        if stargal[i]:
+            refsources[i].setFlagForDetection(refsources[i].getFlagForDetection() | fdict["STAR"])
+        keepref.append(refsources[i])
+        keepi.append(i)
+
+    refsources = keepref
+
+    if referrs is not None:
+        referrs = [referrs[i] for i in keepi]
+    if stargal is not None:
+        stargal = [stargal[i] for i in keepi]
+
+    measAstrom.joinMatchList(matches, refsources, first=True, log=log)
+    args = {}
+    measAstrom.joinMatchList(matches, sources, first=False, log=log, **args)
+
+    return matches, calib, refsources
 
 def queryDB(query, host=None, db=None, read_default_file="~/.my.cnf",):
     """Submit a query.  If host/db is None, use default_db_{host,db}
@@ -584,7 +756,7 @@ def getFluxMag0DB(visit, raft, sensor, db=None):
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-def plotDmag(data, fig=None, magType="model", markersize=1, color="red"):
+def plotDmag(data, fig=None, magType="model", maglim=20, markersize=1, color="red"):
     """Plot (aper - psf) v. psf mags"""
     fig = getMpFigure(fig)
 
@@ -597,8 +769,14 @@ def plotDmag(data, fig=None, magType="model", markersize=1, color="red"):
 
     fdict = maUtils.getDetectionFlags()
 
-    bad = np.bitwise_and(data.flags, fdict["INTERP_CENTER"])
+    bad = np.bitwise_and(data.flags, (fdict["INTERP_CENTER"] | fdict["EDGE"]))
     good = np.logical_not(bad)
+
+    if False:
+        amp30 = np.logical_and(data.xAstrom > 1526, data.xAstrom < 2036)
+        amp30 = np.logical_and(amp30, data.yAstrom < 2000)
+        good = np.logical_and(good, amp30)
+
     if magType == "ap":
         a = data.apMags[good]
     elif magType == "model":
@@ -606,12 +784,47 @@ def plotDmag(data, fig=None, magType="model", markersize=1, color="red"):
     else:
         raise RuntimeError("Unknown magnitude type %s" % magType)
     p = data.psfMags[good]
+    delta = a - p
 
-    axes.plot(p, a - p, "o", markersize=markersize, color=color)
+    sgVal = 0.05
+    stellar = np.abs(delta) < sgVal
+    locus = np.logical_and(a < maglim, stellar)
+
+    stats = afwMath.makeStatistics(delta[locus], afwMath.STDEVCLIP | afwMath.MEANCLIP)
+    mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
+
+    if False:
+        axes.plot(p[locus], delta[locus], "o", markersize=2*markersize, color="blue")
+    else:
+        axes.plot((0, maglim, maglim, 0, 0), sgVal*np.array([-1, -1, 1, 1, -1]), "g:")
+
+    axes.plot(a, delta, "o", markersize=markersize, color=color)
     axes.plot((0, 30), (0, 0), "b-")
-    axes.set_ylim(-0.4, 0.6)
-    axes.set_xlim(24, 13)
-    axes.set_xlabel("psf")
+
+    if False:
+        if False:                           # clump
+            magmin, magmax = 20.03, 20.13
+            if magType == "model":
+                dmin, dmax = -0.72, -0.67
+            else:
+                dmin, dmax = -0.576, -0.512
+        else:                               # "saturated"
+            magmin, magmax = 14, 14.9
+            dmin, dmax = -0.2, 0.2
+            dmin, dmax = -0.2, -0.1
+
+        axes.plot([magmax, magmin, magmin, magmax, magmax], [dmin, dmin, dmax, dmax, dmin], "r-")
+        objs = np.logical_and(np.logical_and(a > magmin, a < magmax),
+                              np.logical_and(delta > dmin, delta < dmax))
+        ids = data.ids[good]
+        for i in sorted(ids[objs]):
+            print i, splitId(i)
+
+    axes.set_ylim(-0.8, 0.2)
+    if True:
+        axes.set_ylim(-5.4, 0.6)
+    axes.set_xlim(13, 24)
+    axes.set_xlabel(magType)
     axes.set_ylabel("%s - psf" % magType)
     title = "Visit %d, all CCDs, " % (data.visit)
     title = data.name
@@ -619,6 +832,83 @@ def plotDmag(data, fig=None, magType="model", markersize=1, color="red"):
         title = "pt1prod_im%04d, " % (data.run)
     #title += "per-CCD aperture correction"
     axes.set_title(title)
+
+    fig.text(0.20, 0.85, r"$%.3f \pm %.3f$" % (mean, stdev), fontsize="larger")
+    #
+    # Make "i" print the object's ID
+    #
+    global keyHandler
+    keyHandler = KeyHandlerId(axes, a, delta, data.ids[good], data)
+
+    fig.show()
+
+    return fig
+
+#-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+def plotDmagHistograms(data, fig=None, magType="model", color="red"):
+    """Plot (aper - psf) v. psf mags"""
+    fig = getMpFigure(fig)
+
+    try:
+        data.flags
+    except AttributeError:
+        raise RuntimeError("Please call da.getMagsByVisit, then try again")
+
+    fdict = maUtils.getDetectionFlags()
+
+    bad = np.bitwise_and(data.flags, (fdict["INTERP_CENTER"] | fdict["EDGE"]))
+    good = np.logical_not(bad)
+
+    if False:
+        amp30 = np.logical_and(data.xAstrom > 1526, data.xAstrom < 2036)
+        amp30 = np.logical_and(amp30, data.yAstrom < 2000)
+        good = np.logical_and(good, amp30)
+
+    if magType == "ap":
+        a = data.apMags[good]
+    elif magType == "model":
+        a = data.modelMags[good]
+    else:
+        raise RuntimeError("Unknown magnitude type %s" % magType)
+
+    p = data.psfMags[good]
+    delta = a - p
+
+    sgVal = 0.10
+    stellar = np.abs(delta) < sgVal
+
+    nbin = 15
+    minmag, maxmag, dmag = 15, 20, 0.5
+    binEdge = np.arange(minmag, maxmag - dmag/2, dmag)
+
+    subplots = makeSubplots(fig, nx=1, ny=len(binEdge))
+
+    for edge in binEdge:
+        inBin = np.logical_and(np.logical_and(a >= edge, a < edge + dmag), stellar)
+
+        pp = p[inBin]        
+        dd = delta[inBin]
+
+        if len(dd) == 0:
+            continue
+
+        stats = afwMath.makeStatistics(dd, afwMath.STDEVCLIP | afwMath.MEANCLIP)
+        mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
+        
+        axes = subplots.next()
+        n, bins, patches = axes.hist(dd, nbin)
+        axes.plot((mean, mean), (-100, max(n) + 100), "g:")
+        axes.set_xlim(-1.05*sgVal, 1.05*sgVal)
+        axes.set_ylim(0, 1.05*max(n) + 1)
+
+        axes.xaxis.set_major_formatter(pyplot.NullFormatter())
+        axes.yaxis.set_major_formatter(pyplot.NullFormatter())
+
+        axes.set_xlabel("%.2f" % (edge + 0.5*dmag))
+        axes.set_title("%.4f" % (stdev), fontsize="smaller") 
+
+    fig.suptitle("%s - psf: %s" % (magType, data.name))
 
     fig.show()
 
@@ -652,16 +942,13 @@ If plotBand is provided, draw lines at +- plotBand
     realStars = np.array([m for m in realStars])
 
     delta = refmag - instmag
-    #markersize 
-    if False:                                                            # plot top/bottom of chip differently
-        top = np.array([(m.second.getYAstrom() > 2048) for m in mstars]) # actually, top of chip
 
-        axes.plot(refmag[top], delta[top], "r+")
-        axes.plot(refmag[np.logical_not(top)], delta[np.logical_not(top)], "b+")
-    else:
-        axes.plot(refmag, delta, "r+")
+    stats = afwMath.makeStatistics(delta[refmag < 20], afwMath.STDEVCLIP | afwMath.MEANCLIP)
+    mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
 
-    axes.plot(refmag[realStars], delta[realStars], "mo")
+    axes.plot(refmag, delta, "mo")
+
+    #axes.plot(refmag[realStars], delta[realStars], "gx")
         
     axes.plot((-100, 100), (0, 0), "g-")
     if plotBand:
@@ -670,10 +957,12 @@ If plotBand is provided, draw lines at +- plotBand
 
     axes.set_ylim(-0.6, 0.6)
     #axes.set_ylim(-2.1, 2.1)
-    axes.set_xlim(24, 13)
+    axes.set_xlim(13, 24)
     axes.set_xlabel("Reference")
     axes.set_ylabel("Reference - %s" % measuredMagType)
     axes.set_title(data.name)
+
+    fig.text(0.75, 0.85, r"$%.3f \pm %.3f$" % (mean, stdev), fontsize="larger")
 
     fig.show()
 
@@ -783,67 +1072,236 @@ If showPsfs is true, include a reconstructed psf mosaic in the lower left corner
 
     return ims
 
-def subtractModels(data, objectId, filterId, frame0=0, raw=False, visits=None, maxDs9=0, showExposure=True):
+def findSource(src, x, y, radius=2):
+    ss = afwDetect.SourceSet()
+
+    s = afwDetect.Source();
+    s.setXAstrom(x); s.setYAstrom(y)
+    ss.push_back(s)
+
+    matches = [m.first for m in afwDetect.matchXy(src, ss, radius)]
+    if len(matches) == 0:
+        raise RuntimeError("Unable to find a source within %g pixels of (%g,%g)" % (radius, x, y))
+
+    if len(matches) == 1:
+        return matches[0]
+    else:
+        return matches
+
+def dataIdToTitle(**dataId):
+    "%(visit)ld %(raft)s %(sensor)s" % dataId
+
+def subtractModels(data, frame=0, showExposure=True, **dataId):
     """Show and return all the images for some objectId and filterId (a maximum of maxDs9 are displayed, starting at ds9 frame0).
 If you specify visits, only that set of visits are considered for display
     """
 
-    ims = {}
-    kwargs = {}
-    if raw:
-        imType = 'raw'
-        kwargs['snap'] = 0
+    exp = data.getDataset("calexp", **dataId)[0]
+    psf = exp.getPsf()
+
+    # We're missing this copy constructor: exp.Factory(exp, True)
+    subtracted =  exp.Factory(exp.getMaskedImage().Factory(exp.getMaskedImage(), True), exp.getWcs().clone())
+
+    for s in data.getSources(**dataId)[0]:
+        try:
+            measAlg.subtractPsf(psf, subtracted.getMaskedImage(), s.getXAstrom(), s.getYAstrom())
+        except pexExcept.LsstCppException, e:
+            pass
+
+    ds9.setMaskTransparency(75)
+
+    title = dataIdToTitle(**dataId)
+    if showExposure:
+        ds9.mtv(exp, title=title, frame=frame)
+        ds9.mtv(subtracted, title=title, frame=frame + 1)
     else:
-        imType = 'calexp'
+        ds9.mtv(exp.getMaskedImage().getImage(), wcs=ims[visit][0].getWcs(), title=title, frame=frame)
+        ds9.mtv(subtracted.getMaskedImage().getImage(), title=title, frame=frame + 1)
 
-    frame = frame0                      # frame for ds9
-    nDs9 = 0                            # number of frames shown
-    for visit, raft, ccd, XAstrom, YAstrom, psfMag in queryDB("""
-       select
-          visit, raftName, ccdName, XAstrom, YAstrom, dnToABMag(s.psfFlux, exp.fluxMag0) as psfMag
-       from
-          Source as s
-          join Object o on s.objectId = o.objectId
-          join Science_Ccd_Exposure_Mapped_Materialized as exp on s.scienceCcdExposureId = exp.scienceCcdExposureId
-       where
-          o.objectId = %ld and exp.filterId = %d and
-          (s.flagForDetection & 0xa01) = 0
-          """ % (objectId, filterId)):
+def psf(exposure, ngrid=40, fig=None):
+    psf = exposure.getPsf()
+    k = psf.getKernel()
+    funcs = k.getSpatialFunctionList()
+    nfunc = k.getNKernelParameters()
+    assert nfunc == len(funcs)
 
-        if visits and visit not in visits: # (85563714, 85597925, 85501938)
-            continue
+    width, height = exposure.getDimensions()
+    deltax = width/float(ngrid - 1)
+    deltay = height/float(ngrid - 1)
+    X, Y = np.meshgrid(deltax*np.arange(ngrid + 1), deltay*np.arange(ngrid + 1))
 
-        print "visit=%d, raft='%s', sensor='%s'" % (visit, raft, ccd)
+    Z = []
+    for j in range(nfunc):
+        Z.append(100*np.ones(X.size))
+        
+    j = 0
+    for _x, _y in zip(X, Y):
+        for x, y in zip(_x, _y):
+            for k in range(nfunc):
+                Z[k][j] = funcs[k](x, y)
+            j += 1
 
-        exp = data.getDataset(imType, visit=visit, raft=raft, sensor=ccd, calibrate=True, db=True, **kwargs)[0]
-        psf = data.getDataset("psf", visit=visit, raft=raft, sensor=ccd, **kwargs)[0]
+    for j in range(nfunc):
+        Z[j] = Z[j].reshape(X.shape)
+        if j > 0:
+            Z[j] /= Z[0]
 
-        # We're missing this copy constructor: exp.Factory(exp, True)
-        subtracted =  exp.Factory(exp.getMaskedImage().Factory(exp.getMaskedImage(), True), exp.getWcs().clone())
+    Z[0] /= np.max(Z[0])
+    #
+    # Time for matplotlib
+    #
+    fig = getMpFigure(fig)
 
-        for s in data.getSources(visit=visit, raft=raft, sensor=ccd)[0]:
-            try:
-                measAlg.subtractPsf(psf, subtracted.getMaskedImage(), s.getXAstrom(), s.getYAstrom())
-            except pexExcept.LsstCppException, e:
-                pass
+    n = nfunc - 1
+    nx = int(math.sqrt(n))
+    ny = n/nx
+    if ny == 0:
+        ny = 1
+    while nx*ny < n:
+        nx += 1
+        
+    subplots = makeSubplots(fig, nx=nx, ny=ny)
 
-        ims[visit] = (exp, subtracted)
+    ccd = cameraGeom.cast_Ccd(exposure.getDetector())
+    visit = exposure.getMetadata().get("OBSID")
 
-        if maxDs9 and nDs9 < maxDs9*2:
-            ds9.setMaskTransparency(75)
-            if showExposure:
-                ds9.mtv(exp, title="%ld %s %s" % (visit, raft, ccd), frame=frame)
-                ds9.mtv(subtracted, title="%ld %s %s" % (visit, raft, ccd), frame=frame + 1)
-            else:
-                ds9.mtv(exp.getMaskedImage().getImage(), wcs=ims[visit][0].getWcs(), title="%ld %s %s" % (visit, raft, ccd), frame=frame)
-                ds9.mtv(subtracted.getMaskedImage().getImage(), title="%ld %s %s" % (visit, raft, ccd), frame=frame + 1)
+    fig.suptitle("PSF eigen components, %s %s [%s]" % (visit, ccd.getId().getName(), rerun), fontsize=14) 
 
-            for f in (frame, frame + 1):
-                ds9.dot("+", XAstrom, YAstrom, frame=f)
-                ds9.zoom(4, XAstrom, YAstrom, frame=f)
+    for i in range(1, nfunc):
+        axes = subplots.next()
+        CS = axes.contour(X, Y, Z[i], 20, colors="red")
+        axes.clabel(CS, inline=1, fontsize=10)
+        axes.set_xlim(-5, width - 1 + 5)
+        axes.set_ylim(-5, height - 1 + 5)
 
-            nDs9 += 2
+        axes.text(0.1, 0.1, "Component %d" % i, transform=axes.transAxes)
 
-        frame += 2
+    fig.show()
 
-    return ims
+    return fig
+
+def grayScale(image, rgbFile, min=0, max=50, Q=8, bin=1):
+    """Write a grayscale file (currently tiff) to rgbFile
+
+The default stretch is an asinh stretch; Q == 0 corresponds to a linear.  If Q == 0 then min and max are
+the range of the stretch; as Q increases they still define the slope of the linear portion of the stretch
+
+If bin is specified, it should be an integer > 1;  the output file will be binned by that factor.
+    """
+    
+    if not afwRgb:
+        raise RuntimeError("I was unable to import lsst.afw.extensions.rgb")
+
+    #
+    # Handle Exposures and MaskedImages
+    #
+    try:
+        image = image.getMaskedImage()    # maybe it's an Exposure
+    except AttributeError:
+        pass
+
+    try:
+        image = image.getImage()          # maybe it's (now) a MaskedImage
+    except AttributeError:
+        pass
+
+    if bin > 1:
+        image = afwMath.binImage(image, bin)
+
+    afwRgb.RgbImageF(image, image, image, afwRgb.asinhMappingF(min, max - min, Q)).writeTiff(rgbFile)
+
+def assembleCcd(dataType, butler, snap=0, reNorm=False, **dataId):
+    """Return an Exposure of a raw data frame (or related image stored per-amp such as a flat or bias)
+
+    @param dataType	Desired type (e.g. "raw")
+    @param butler       An input butler
+    @param snap	        The desired snap, if appropriate
+    @param reNorm       Renormalise each amp image to unit gain
+    @param dataId       Dictionary of visit, ccd, etc.
+    """
+    if not ipIsr:
+        raise RuntimeError("Failed to import lsst.ip.isr -- is it setup?")
+
+    cg = butler.get("camera", **dataId)
+    md = butler.get("raw_md",  snap=snap, channel="0,0", **dataId)
+
+    mat = re.search(r"R(\d)(\d)_S(\d)(\d)", md.get("CCDID"))
+    r0, r1, s0, s1 = [int(d) for d in mat.groups()]
+    id = cameraGeom.Id("R:%d,%d S:%d,%d" % (r0, r1, s0, s1))
+
+    ccd = cameraGeomUtils.findCcd(cg, id)
+    
+    ampList = []
+    for n,a in enumerate(ccd):
+        serial = a.getId().getSerial()
+        channel = "%d,%d" % (serial//8, serial%8)
+
+        exp = butler.get(dataType, snap=snap, channel=channel, **dataId)
+        try:
+            exp = exp.convertF()
+        except AttributeError:          # already F
+            pass
+
+        exp.setDetector(a)
+        exp.setFilter(afwImage.Filter(md))
+        try:
+            exp.setCalib(afwImage.Calib(md))
+        except AttributeError:          # pre afw 4.3.2.1
+            calib = afwImage.Calib(md)
+            exp.getCalib().setExptime(calib.getExptime())
+            
+        ampList.append(exp)
+
+    return ipIsr.assembleCcd(ampList, ccd, reNorm=reNorm)
+
+def splitId(oid):
+    """Split an ObjectId into visit, raft, sensor, and objId"""
+    objId = int((oid & 0xffff) - 1)     # Should be the same value as was set by apps code
+    oid >>= 16
+    raftSensorId = oid & 0x1ff
+    oid >>= 9
+    visit = int(oid)
+
+    raftId, sensorId = int(raftSensorId//10), int(raftSensorId%10)
+    raft = "%d,%d" % (raftId//5, raftId%5)
+    sensor = "%d,%d" % (sensorId//3, sensorId%3)
+
+    return visit, raft, sensor, objId
+
+class KeyHandlerId(object):
+    """A class to handle key strokes with matplotlib displays"""
+    def __init__(self, axes, xs, ys, ids, data):
+        self.axes = axes
+        self.xs = xs
+        self.ys = ys
+        self.ids = ids
+        self.data = data
+
+        self.cid = self.axes.figure.canvas.mpl_connect('key_press_event', self)
+
+    def __call__(self, ev):
+        if ev.inaxes != self.axes:
+            return
+        
+        if ev.key in ("i", "I", "p", "P"):
+            dist = np.hypot(self.xs - ev.xdata, self.ys - ev.ydata)
+            dmin = min(dist)
+
+            dist = np.hypot(self.xs - ev.xdata, self.ys - ev.ydata)
+            objId = self.ids[dist == min(dist)][0]
+
+            print "\r>>>",
+            print ("%.3f %.3f" % (ev.xdata, ev.ydata)), splitId(objId), \
+                  maUtils.explainDetectionFlags(self.data.flags[objId == self.data.ids][0]),
+            sys.stdout.flush()
+
+            if ev.key == "I":
+                print ""
+            elif ev.key in ("p", "P"):
+                x = self.data.xAstrom[objId == self.data.ids][0]
+                y = self.data.yAstrom[objId == self.data.ids][0]
+                ds9.pan(x, y)
+
+        else:
+            pass
+

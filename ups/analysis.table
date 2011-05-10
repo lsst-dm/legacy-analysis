@@ -2,6 +2,8 @@ setupRequired(obs_lsstSim)
 setupRequired(meas_algorithms)
 
 setupOptional(meas_astrom)
+setupOptional(ip_isr)
 setupOptional(matplotlib)
+setupOptional(afw_extensions_rgb)
 
 envPrepend(PYTHONPATH, ${PRODUCT_DIR}/python)
