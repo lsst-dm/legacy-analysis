@@ -48,7 +48,11 @@ except:
     log = pexLogging.Log.getDefaultLog()
     #log.setThreshold(pexLogging.Log.DEBUG);
 
-import MySQLdb
+try:
+    import MySQLdb
+except ImportError:
+    MySQLdb = None
+
 try:
     default_db_host
 except NameError:
