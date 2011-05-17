@@ -80,11 +80,11 @@ except NameError:
 
 flagsDict = maUtils.getDetectionFlags()
 
-def getMapper(registryRoot, defaultMapper=None):
+def getMapper(registryRoot, defaultMapper=None, mapperFile="mapper.py"):
     """
     Get proper mapper given a directory registryRoot
 
-    registryRoot should contain a file, "mapper.py" which
+    registryRoot should contain a file, mapperFile, which
     defines a variable called Mapper
 
     E.g. mapper.py might contain:
@@ -92,7 +92,7 @@ def getMapper(registryRoot, defaultMapper=None):
     """
     Mapper = None
     _locals = {}
-    mapper_py = os.path.join(registryRoot, "mapper.py")
+    mapper_py = os.path.join(registryRoot, mapperFile)
     try:
         execfile(mapper_py, {}, _locals)
         Mapper = _locals.get("Mapper")
@@ -318,7 +318,10 @@ class Data(object):
                 raise RuntimeError("I'm unable to find your registry in %s", registryRoot)
 
         Mapper = getMapper(registryRoot, defaultMapper=LsstSimMapper)
-        butler = dafPersist.ButlerFactory(mapper=Mapper(outRoot=dataRoot, registry=registry)).create()
+        try:
+            butler = dafPersist.ButlerFactory(mapper=Mapper(outRoot=dataRoot, registry=registry)).create()
+        except TypeError:               # outRoot wasn't accepted
+            butler = dafPersist.ButlerFactory(mapper=Mapper(root=dataRoot, registry=registry)).create()
         butler.mapperInfo = makeMapperInfo(butler.mapper)
 
         butlerDataRoot = dataRoot
@@ -1149,14 +1152,14 @@ If showPsfs is true, include a reconstructed psf mosaic in the lower left corner
 
     return ims
 
-def findSource(src, x, y, radius=2):
+def findSource(sourceSet, x, y, radius=2):
     ss = afwDetect.SourceSet()
 
     s = afwDetect.Source();
     s.setXAstrom(x); s.setYAstrom(y)
     ss.push_back(s)
 
-    matches = [m.first for m in afwDetect.matchXy(src, ss, radius)]
+    matches = [m.first for m in afwDetect.matchXy(sourceSet, ss, radius)]
     if len(matches) == 0:
         raise RuntimeError("Unable to find a source within %g pixels of (%g,%g)" % (radius, x, y))
 
