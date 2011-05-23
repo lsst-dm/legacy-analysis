@@ -71,6 +71,7 @@ try:
     butlerDataRoot
 except NameError:
     butlerDataRoot = None
+    butlerRerun = None
     butler = None
 
 try:
@@ -113,6 +114,9 @@ def makeMapperInfo(mapper):
     """Return an object with extra per-mapper information (e.g. which fields fully specify an exposure)"""
 
     class LsstSimMapperInfo(object):
+        def __init__(self, Mapper):
+            LsstSimMapperInfo.Mapper = Mapper
+
         @staticmethod
         def getFields(dataType):
             fields = ["visit", "filter", "raft", "sensor",]
@@ -140,7 +144,16 @@ def makeMapperInfo(mapper):
 
         assembleCcd = staticmethod(assembleCcdLsst)
 
+        @staticmethod
+        def getInButler(dataRoot, registry, butler=None):
+            inputRoot = os.path.join(os.path.split(dataRoot)[0], "input")
+            return dafPersist.ButlerFactory(mapper=LsstSimMapperInfo.Mapper(root=inputRoot,
+                                                                            registry=registry)).create()
+
     class SubaruMapperInfo(object):
+        def __init__(self, Mapper):
+            SubaruMapperInfo.Mapper = Mapper
+
         @staticmethod
         def getFields(dataType):
             if dataType in ("flat",):
@@ -158,7 +171,11 @@ def makeMapperInfo(mapper):
         @staticmethod
         def dataIdToTitle(dataId):
             filterName = afwImage.Filter(butler.get("calexp_md", **dataId)).getName()
-            return "%ld %s [%s]" % (dataId["visit"], dataId["ccd"], filterName)
+            title = "%ld %s [%s]" % (dataId["visit"], dataId["ccd"], filterName)
+            if rerunName:
+                title += " %s" % rerunName
+
+            return title
 
         @staticmethod
         def exposureToStr(exposure):
@@ -172,12 +189,16 @@ def makeMapperInfo(mapper):
 
         assembleCcd = staticmethod(assembleCcdSubaru)
     
+        @staticmethod
+        def getInButler(dataRoot, registry, butler=None):
+            return butler
+
     #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
     if isinstance(mapper, LsstSimMapper):
-        return LsstSimMapperInfo()
+        return LsstSimMapperInfo(LsstSimMapper)
     elif isinstance(butler.mapper, SuprimecamMapper):
-        return SubaruMapperInfo()
+        return SubaruMapperInfo(SuprimecamMapper)
     else:
         raise RuntimeError("Impossible mapper")
 
@@ -264,20 +285,14 @@ class Data(object):
 
         self.dataId.update(dataId)
             
-    def setButler(self, run=None,
-                  dataRoot=None, dataRootFormat="/lsst2/datarel-runs/pt1prod_im%04d/update",
-                  registryRoot=None, registryRun=None):
-        global butlerDataRoot, butler, inButler, rerun
+    def setButler(self, rerun=None, dataRoot=None, registryRoot=None):
+        global butlerDataRoot, butlerRerun, butler, inButler, rerunName
 
-        if run is None:
-            self.run = None
-        else:
-            self.run = run
-            butlerDataRoot = None
-
-        if butlerDataRoot and dataRoot != butlerDataRoot:
+        if \
+           (butlerDataRoot and dataRoot != butlerDataRoot) or \
+           (rerun and rerun != butlerRerun):
             butler = None
-            rerun = ""
+            rerunName = ""
 
         try:
             if butler is not None:
@@ -285,26 +300,17 @@ class Data(object):
         except NameError:
             butler = None
 
-        if run is None and dataRoot is None and not butler:
-            raise RuntimeError("Please specify a run or root")
+        if rerun is None and dataRoot is None and not butler:
+            raise RuntimeError("Please specify a rerun or root")
 
-        if run is None:
+        if rerun is None:
             if dataRoot is None:
-                return butler
-        else:
-            if not dataRoot:
-                dataRoot = dataRootFormat % run
+                if butler:
+                    return butler
+                raise RuntimeError("Please specify a rerun or root")
 
-        if registryRoot:
-            assert(registryRun is None)
-        else:
-            if registryRun is None and run:
-                registryRun = run
-
-            if registryRun:
-                registryRoot = dataRootFormat % registryRun
-            else:
-                registryRoot = dataRoot
+        if not registryRoot:
+            registryRoot = dataRoot
 
         registry = None
         if registryRoot:
@@ -319,20 +325,25 @@ class Data(object):
 
         Mapper = getMapper(registryRoot, defaultMapper=LsstSimMapper)
         try:
-            butler = dafPersist.ButlerFactory(mapper=Mapper(outRoot=dataRoot, registry=registry)).create()
-        except TypeError:               # outRoot wasn't accepted
+            butler = dafPersist.ButlerFactory(mapper=Mapper(outRoot=dataRoot, rerun=rerun,
+                                                            registry=registry)).create()
+        except TypeError:               # outRoot/rerun weren't accepted
             butler = dafPersist.ButlerFactory(mapper=Mapper(root=dataRoot, registry=registry)).create()
         butler.mapperInfo = makeMapperInfo(butler.mapper)
 
         butlerDataRoot = dataRoot
+        butlerRerun = rerun
 
-        inputRoot = os.path.join(os.path.split(dataRoot)[0], "input")
-        inButler = dafPersist.ButlerFactory(mapper=Mapper(root=inputRoot, registry=registry)).create()
+        inButler = butler.mapperInfo.getInButler(dataRoot, registry, butler)
 
-        bdr0 = os.path.split(butlerDataRoot)[0] # chop off last element (e.g. "update")
-        if os.path.islink(bdr0):
-            bdr0 = os.readlink(bdr0)
-        rerun = os.path.basename(bdr0)
+        if rerun:
+            rerunName = rerun
+        else:
+            bdr0 = os.path.split(butlerDataRoot)[0] # chop off last element (e.g. "update")
+            if os.path.islink(bdr0):
+                bdr0 = os.readlink(bdr0)
+
+            rerunName = os.path.basename(bdr0)
 
     def lookupDataBySkytile(self, dataType):
         """N.b. not converted to use dataId --- Lsst specific"""
@@ -1432,7 +1443,7 @@ If you specify visits, only that set of visits are considered for display
 
     for s in data.getSources(dataId)[0]:
         try:
-            if True or not np.isnan(s.getXAstrom() + s.getYAstrom()): # subtractPsf checks this as of 2011-05-21
+            if not np.isnan(s.getXAstrom() + s.getYAstrom()): # subtractPsf checks this as of 2011-05-21
                 measAlg.subtractPsf(psf, subtracted.getMaskedImage(), s.getXAstrom(), s.getYAstrom())
         except pexExcept.LsstCppException, e:
             pass
@@ -1448,9 +1459,11 @@ If you specify visits, only that set of visits are considered for display
         ds9.mtv(subtracted.getMaskedImage().getImage(), title=title, frame=frame + 1)
 
 
-def plotObject(exp, xc, yc, dir="-", hlen=10, findPeak=2, frame=None, fig=None):
+def plotObject(exp, xc, yc, dir="-", hlen=10, findPeak=0, frame=None, fig=None):
     """Plot a cross section through an object centered at (xc, yc) on the specified figure
     (horizontally if dir=="-", vertically if |"|")
+
+    Search a region of size +-findPeak for the highest pixel
     """
     try:
         image = exp.getMaskedImage().getImage()
