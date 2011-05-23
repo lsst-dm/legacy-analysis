@@ -390,9 +390,10 @@ raft or sensor may be None (meaning get all)
                 raise RuntimeError("fixOrientation only makes sense when reading an eimage")
 
         if dataType in butler.mapperInfo.getTrimmableData():
-            return [butler.mapperInfo.assembleCcd(dataType, butler, dataId)]
+            return [butler.mapperInfo.assembleCcd(dataType, inButler, dataId)]
         elif dataType in ("eimage",):
-            raw_filename = inButler.get('raw_filename', channel='0,0', snap=0, **dataId)[0]
+            sdataId = dataId.copy(); sdataId["snap"] = dataId.get("snap", 0)
+            raw_filename = inButler.get('raw_filename', channel='0,0', **sdataId)[0]
             dirName, fileName = os.path.split(re.sub(r"/raw/", "/raw/../eimage/", raw_filename))
             fileName = re.sub(r"^imsim", "eimage", fileName)
             fileName = re.sub(r"_C00_", "_", fileName)
@@ -1427,12 +1428,12 @@ If you specify visits, only that set of visits are considered for display
     exp = data.getDataset("calexp", dataId)[0]
     psf = exp.getPsf()
 
-    # We're missing this copy constructor: exp.Factory(exp, True)
-    subtracted =  exp.Factory(exp.getMaskedImage().Factory(exp.getMaskedImage(), True), exp.getWcs().clone())
+    subtracted =  exp.Factory(exp, True)
 
     for s in data.getSources(dataId)[0]:
         try:
-            measAlg.subtractPsf(psf, subtracted.getMaskedImage(), s.getXAstrom(), s.getYAstrom())
+            if True or not np.isnan(s.getXAstrom() + s.getYAstrom()): # subtractPsf checks this as of 2011-05-21
+                measAlg.subtractPsf(psf, subtracted.getMaskedImage(), s.getXAstrom(), s.getYAstrom())
         except pexExcept.LsstCppException, e:
             pass
 
