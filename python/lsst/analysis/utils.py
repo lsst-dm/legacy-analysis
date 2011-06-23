@@ -820,7 +820,8 @@ def queryDB(query, host=None, db=None, read_default_file="~/.my.cnf",):
     conn = MySQLdb.connect(host=host, db=db, read_default_file=read_default_file)
 
     for q in query.split(";"):
-        conn.query(q)
+        if q.strip():
+            conn.query(q)
 
     r = conn.use_result()
     return r.fetch_row(0)
@@ -1187,36 +1188,7 @@ def findSource(sourceSet, x, y, radius=2):
 def getRefCatalog(data, dataId):
     """Get the reference catalogue for dataId (a single CCD) as a SourceSet"""
 
-    if True:
-        query = """
-        select
-            scisql_s2CPolyToBin(llcRa, llcDecl, lrcRa, lrcDecl, urcRa, urcDecl, ulcRa, ulcDecl),
-            filterId, visit, raftName, ccdName
-        from
-           Science_Ccd_Exposure
-        where
-           visit = %(visit)d and raftName = '%(raft)s' and ccdName = '%(sensor)s'
-        into @poly, @filterId, @visit, @raftName, @ccdName;
-        
-        select
-           sro.refObjectId, ra, decl,
-           CASE WHEN @filterId = 0 THEN uMag
-                WHEN @filterId = 1 THEN gMag
-        	WHEN @filterId = 2 THEN rMag
-        	WHEN @filterId = 3 THEN iMag
-        	WHEN @filterId = 4 THEN zMag
-        	WHEN @filterId = 5 THEN yMag
-           END as Mag,
-           sro.isStar, sro.varClass,
-           @visit, @raftName, @ccdName
-        from
-            SimRefObject as sro join RefSrcMatch as rsm on sro.refObjectId = rsm.refObjectId
-        where
-            scisql_s2PtInCPoly(ra, decl, @poly) and
-            (sourceId is NULL or closestToRef = 1)
-        """ % dataId
-    else:
-        query = """
+    query = """
         select
             scisql_s2CPolyToBin(llcRa, llcDecl, lrcRa, lrcDecl, urcRa, urcDecl, ulcRa, ulcDecl),
             filterId, visit, raftName, ccdName
@@ -1235,8 +1207,7 @@ def getRefCatalog(data, dataId):
                 WHEN @filterId = 4 THEN zMag
                 WHEN @filterId = 5 THEN yMag
            END as Mag,
-           sro.isStar, sro.varClass,
-           @visit, @raftName, @ccdName
+           sro.isStar, sro.varClass
         from
            SimRefObject as sro
         where
@@ -1273,7 +1244,7 @@ def _getSourceSetFromQuery(data, dataId, queryStr):
 
     ss = afwDetect.SourceSet()
 
-    for Id, ra, dec, mag, isStar, varClass, visit, raftName, ccdName in queryDB(queryStr % dataId):
+    for Id, ra, dec, mag, isStar, varClass in queryDB(queryStr % dataId):
         s = afwDetect.Source();
 
         s.setId(Id)
@@ -1290,7 +1261,7 @@ def _getSourceSetFromQuery(data, dataId, queryStr):
         s.setApFlux(flux); s.setPsfFlux(flux); s.setModelFlux(flux)
 
         flag = flagsDict["BINNED1"]
-        if isStar:
+        if isStar > 0:
             flag |= flagsDict["STAR"]
         if varClass > 0:                    # 0 => non variable
             flag |= flagsDict["PEAKCENTER"] # XXX
@@ -1307,8 +1278,7 @@ def getSpurious(data, dataId):
 select
    s.sourceId, s.ra, s.decl,
    dnToABMag(s.psfFlux, exp.fluxMag0) as psfMag,
-   -1, -1,
-   visit, raftName, ccdName
+   -1, 0
 from
    Source as s join
    Science_Ccd_Exposure as exp on s.scienceCcdExposureId = exp.scienceCcdExposureId join
@@ -1321,8 +1291,7 @@ where
 def getMatched(data, dataId):
     """Return a SourceSet of all the catalogue objects that we detected for dataId (a single CCD)"""
 
-    if True:
-        query = """
+    query = """
 select
    sro.refObjectId, sro.ra, sro.decl,
    CASE WHEN exp.filterId = 0 THEN uMag
@@ -1332,8 +1301,7 @@ select
 	WHEN exp.filterId = 4 THEN zMag
 	WHEN exp.filterId = 5 THEN yMag
    END as Mag,
-   sro.isStar, sro.varClass,
-   visit, raftName, ccdName
+   sro.isStar, sro.varClass
 from
    Source as s join
    Science_Ccd_Exposure as exp on s.scienceCcdExposureId = exp.scienceCcdExposureId join
@@ -1343,36 +1311,6 @@ where
    visit = %(visit)d and raftName = '%(raft)s' and ccdName = '%(sensor)s'
    and rsm.refObjectId is not Null
    """
-    else:
-        query = """
-select
-    scisql_s2CPolyToBin(llcRa, llcDecl, lrcRa, lrcDecl, urcRa, urcDecl, ulcRa, ulcDecl),
-    filterId, visit, raftName, ccdName
-from
-   Science_Ccd_Exposure
-where
-   visit = %(visit)d and raftName = '%(raft)s' and ccdName = '%(sensor)s'
-into @poly, @filterId, @visit, @raftName, @ccdName;
-
-select
-   sro.refObjectId, sro.ra, sro.decl,
-   CASE WHEN @filterId = 0 THEN uMag
-        WHEN @filterId = 1 THEN gMag
-	WHEN @filterId = 2 THEN rMag
-	WHEN @filterId = 3 THEN iMag
-	WHEN @filterId = 4 THEN zMag
-	WHEN @filterId = 5 THEN yMag
-   END as Mag,
-   sro.isStar, sro.varClass,
-   @visit, @raftName, @ccdName
-from
-   SimRefObject as sro join RefSrcMatch as rsm on sro.refObjectId = rsm.refObjectId join
-   Source as s on s.sourceId = rsm.sourceId join
-   Science_Ccd_Exposure exp on exp.scienceCcdExposureId = s.scienceCcdExposureId
-where
-   (visit = @visit and raftName = @raftName and ccdName = @ccdName) and
-   scisql_s2PtInCPoly(sro.ra, sro.decl, @poly) -- and closestToRef = 1
-   """
 
     return _getSourceSetFromQuery(data, dataId, query)
     
@@ -1380,88 +1318,36 @@ where
 def getMissed(data, dataId):
     """Return a SourceSet of all the catalogue objects that we failed to detect for dataId (a single CCD)"""
 
-    #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-    if False:
-        query = """
-select
-    scisql_s2CPolyToBin(llcRa, llcDecl, lrcRa, lrcDecl, urcRa, urcDecl, ulcRa, ulcDecl),
-    filterId, visit, raftName, ccdName
-from
-   Science_Ccd_Exposure
-where
-   visit = %(visit)d and raftName = '%(raft)s' and ccdName = '%(sensor)s'
-into @poly, @filterId, @visit, @raftName, @ccdName;
-
-select
-   sro.refObjectId, sro.ra, sro.decl,
-   CASE WHEN @filterId = 0 THEN uMag
-        WHEN @filterId = 1 THEN gMag
-	WHEN @filterId = 2 THEN rMag
-	WHEN @filterId = 3 THEN iMag
-	WHEN @filterId = 4 THEN zMag
-	WHEN @filterId = 5 THEN yMag
-   END as Mag,
-   sro.isStar, sro.varClass,
-   @visit, @raftName, @ccdName
-from
-   SimRefObject as sro join RefSrcMatch as rsm on sro.refObjectId = rsm.refObjectId join
-   Source as s on s.sourceId = rsm.sourceId join
-   Science_Ccd_Exposure exp on exp.scienceCcdExposureId = s.scienceCcdExposureId
-where
-   scisql_s2PtInCPoly(sro.ra, sro.decl, @poly) and (rsm.sourceId is Null or
-   not (visit = @visit and raftName = @raftName and ccdName = @ccdName))
-   """
-    else:
-        query = """
-SELECT
-   scisql_s2CPolyToBin(llcRa, llcDecl, lrcRa, lrcDecl, urcRa, urcDecl, ulcRa, ulcDecl),
-   scienceCcdExposureId, filterId
-FROM
-  Science_Ccd_Exposure
-WHERE
-    visit = %(visit)d and raftName = '%(raft)s' and ccdName = '%(sensor)s'
-INTO @poly, @sceId, @filterId;
-
-SELECT
-   sro.refObjectId, sro.ra, sro.decl,
-   CASE WHEN @filterId = 0 THEN uMag
-        WHEN @filterId = 1 THEN gMag
-	WHEN @filterId = 2 THEN rMag
-	WHEN @filterId = 3 THEN iMag
-	WHEN @filterId = 4 THEN zMag
-	WHEN @filterId = 5 THEN yMag
-   END as Mag,
-   sro.isStar, sro.varClass,
-   %(visit)d, '%(raft)s', '%(sensor)s'
-FROM
-  SimRefObject AS sro INNER JOIN
-  RefSrcMatch AS rsm ON (sro.refObjectId = rsm.refObjectId)
-WHERE
-  scisql_s2PtInCPoly(sro.ra, sro.decl, @poly) = 1 AND
-  rsm.sourceId IS NULL
-
-UNION ALL
-
-SELECT
-   sro.refObjectId, sro.ra, sro.decl,
-   CASE WHEN @filterId = 0 THEN uMag
-        WHEN @filterId = 1 THEN gMag
-	WHEN @filterId = 2 THEN rMag
-	WHEN @filterId = 3 THEN iMag
-	WHEN @filterId = 4 THEN zMag
-	WHEN @filterId = 5 THEN yMag
-   END as Mag,
-   sro.isStar, sro.varClass,
-   %(visit)d, '%(raft)s', '%(sensor)s'
-FROM
-  SimRefObject AS sro INNER JOIN
-  RefSrcMatch AS rsm ON (sro.refObjectId = rsm.refObjectId) INNER JOIN
-  Source AS s ON (rsm.sourceId = s.sourceId)
-WHERE
-  scisql_s2PtInCPoly(sro.ra, sro.decl, @poly) = 1
-GROUP BY sro.refObjectId
-HAVING SUM(s.scienceCcdExposureId = @sceId) = 0
-"""
+    query = """
+        SELECT
+           scisql_s2CPolyToBin(llcRa, llcDecl, lrcRa, lrcDecl, urcRa, urcDecl, ulcRa, ulcDecl),
+           scienceCcdExposureId, filterId
+        FROM
+          Science_Ccd_Exposure
+        WHERE
+            visit = %(visit)d and raftName = '%(raft)s' and ccdName = '%(sensor)s'
+        INTO @poly, @sceId, @filterId;
+        
+        SELECT
+           sro.refObjectId, sro.ra, sro.decl,
+           CASE WHEN @filterId = 0 THEN uMag
+                WHEN @filterId = 1 THEN gMag
+        	WHEN @filterId = 2 THEN rMag
+        	WHEN @filterId = 3 THEN iMag
+        	WHEN @filterId = 4 THEN zMag
+        	WHEN @filterId = 5 THEN yMag
+           END as Mag,
+           sro.isStar, sro.varClass
+        FROM
+           SimRefObject AS sro LEFT OUTER JOIN
+           (
+               SELECT DISTINCT rsm.refObjectId AS refObjectId
+               FROM RefSrcMatch AS rsm INNER JOIN
+                    Source AS s ON (rsm.sourceId = s.sourceId)
+               WHERE s.scienceCcdExposureId = @sceId
+           ) AS t ON (sro.refObjectId = t.refObjectId)
+        WHERE t.refObjectId IS NULL AND scisql_s2PtInCPoly(sro.ra, sro.decl, @poly) = 1;
+        """
 
     return _getSourceSetFromQuery(data, dataId, query)
 
@@ -1532,38 +1418,73 @@ def showSourceSet(sourceSet, exp=None, wcs=None, raDec=None, magmin=None, magmax
     ds9.cmdBuffer.popSize()
 
 
-def showCatalog(data, dataId, calexp=None, frame=0, **kwargs):
+def showCatalog(data, dataId, calexp=None, refOnly=None, detected=None, spurious=None, ss=None,
+                frame=0, **kwargs):
     if not calexp:
         calexp = data.getDataset("calexp", dataId)[0]
 
-    ss = data.getSources(dataId)[0]
+    if not ss:
+        ss = data.getSources(dataId)[0]
 
-    refOnly = getMissed(data, dataId)
-    detected = getMatched(data, dataId)
-    spurious = getSpurious(data, dataId)
+    if not refOnly:
+        refOnly = getMissed(data, dataId)
+    if not detected:
+        detected = getMatched(data, dataId)
+    if not spurious:
+        spurious = getSpurious(data, dataId)
 
     showSourceSet(refOnly, calexp, ctype=ds9.BLUE, symb="o", size=3, frame=frame, **kwargs)
     showSourceSet(detected, calexp, ctype=ds9.GREEN, symb="o", size=3, frame=frame, **kwargs)
     showSourceSet(spurious, calexp, ctype=ds9.RED, symb="o", size=3, frame=frame, **kwargs)
 
-    showSourceSet(ss, ctype=ds9.YELLOW, frame=frame)
+    showSourceSet(ss, calexp, ctype=ds9.YELLOW, frame=frame, **kwargs)
 
-def plotCompleteness(data, dataId, refCat=None, matchRadius=2, **kwargs):
+def plotCompleteness(data, dataId, refCat=None, calexp=None, matchRadius=2, **kwargs):
     """Plot completeness plots in matplotlib (and maybe ds9)"""
     ss = data.getSources(dataId)[0]
-    if not refCat:
-        refCat = getRefCatalog(data, dataId)
 
-    matched, spurious, refOnly = getMatches(ss, refCat, matchRadius)
+    if False:
+        if not refCat:
+            refCat = getRefCatalog(data, dataId)
 
+        matched, spurious, refOnly = getMatches(ss, refCat, matchRadius)
+        detected = matched["src"]
+    else:
+        refOnly = getMissed(data, dataId)
+        detected = getMatched(data, dataId)
+        spurious = getSpurious(data, dataId)
+
+    if not calexp:
+        calexp = data.getDataset("calexp", dataId)[0]
+
+    orefOnly = refOnly
+    blended = afwDetect.SourceSet()
+    refOnly = afwDetect.SourceSet()
+
+    for s in orefOnly:
+        x, y = int(s.getXAstrom() + 0.5), int(s.getYAstrom() + 0.5)
+        try:
+            if calexp.getMaskedImage().getMask().get(x, y) & afwImage.MaskU.getPlaneBitMask("DETECTED"):
+                blended.push_back(s)
+                continue
+        except pexExcept.LsstCppException:
+            pass
+
+        refOnly.push_back(s)
+            
     if not kwargs.has_key("title"):
         kwargs["title"] = str(dataId)
 
-    return (plotCounts(data, matched["src"], refOnly, spurious, **kwargs), ss, refCat)
+    return (plotCounts(data, detected, refOnly, spurious, blended, **kwargs), ss, refCat)
 
-def plotCounts(data, matched, refOnly, spurious, includeDetOnly=True, magType="model",
-               magmin=14, magmax=25, dmag=0.5, stars=None, galaxies=None,
+def plotCounts(data, matched, refOnly, spurious, blended, includeSpurious=True, magType="model",
+               magmin=None, magmax=None, dmag=0.5, stars=None, galaxies=None,
                log=True, stacked=True, title=None, fig=None, frame=None):
+
+    if magmin is None:
+        magmin = 14
+    if magmax is None:
+        magmax = 25
 
     if not title:
         title = data.name
@@ -1575,7 +1496,6 @@ def plotCounts(data, matched, refOnly, spurious, includeDetOnly=True, magType="m
         stars, galaxies = False, False
 
     if stars or galaxies:
-        includeDetOnly = False
         title += " [%s]" % ("stars" if stars else "galaxies")
     if stacked:
         title += " [stacked histograms]"
@@ -1584,7 +1504,7 @@ def plotCounts(data, matched, refOnly, spurious, includeDetOnly=True, magType="m
 
     arrays = []                         # our data arrays
     xyPos = []                          # [xy]Astrom for objects
-    for s in [matched, refOnly, spurious]:
+    for s in [matched, blended, refOnly, spurious]:
         ids, flags, xAstrom, yAstrom, apMags, modelMags, psfMags = data.getMags(s, resetCalib=False)
 
         if magType == "ap":
@@ -1616,7 +1536,7 @@ def plotCounts(data, matched, refOnly, spurious, includeDetOnly=True, magType="m
         ds9.erase(frame=frame)
         ds9.cmdBuffer.pushSize()
 
-        for i, ct in enumerate([ds9.GREEN, ds9.BLUE, ds9.RED]):
+        for i, ct in enumerate([ds9.GREEN, ds9.CYAN, ds9.BLUE, ds9.RED]):
             for mag, x, y in xyPos[i]:
                 if mag > magmin and mag < magmax:
                     ds9.dot("o", x, y, size=3, frame=frame, ctype=ct)
@@ -1631,20 +1551,37 @@ def plotCounts(data, matched, refOnly, spurious, includeDetOnly=True, magType="m
 
     kwargs = {}
     if stacked:
-        kwargs["bottom"] = arrays[0]
-        alpha = 1.0
+        alpha = 1.0 - 0.5
     else:
         alpha = 0.7
 
     left = bins[0:-1] - 0.5*dmag        # left side of bins
-    axes.bar(left, arrays[0], width=dmag, log=log, label="matched", color="green", alpha=alpha)
-    axes.bar(left, arrays[1], width=dmag, log=log, label="refOnly", color="blue", alpha=alpha, **kwargs)
-    if includeDetOnly:
-        axes.bar(left, arrays[2], width=dmag, log=log, label="detOnly", alpha=alpha, color="red")
+    try:
+        axes.bar(left, arrays[0], width=dmag, log=log, label="matched", color="green", alpha=alpha)
+    except ValueError:
+        pass
+
+    if stacked:
+        kwargs["bottom"] = arrays[0]
+    try:
+        axes.bar(left, arrays[1], width=dmag, log=log, label="blended", color="cyan", alpha=alpha, **kwargs)
+    except ValueError:
+        pass
+
+    if stacked:
+        kwargs["bottom"] = arrays[0] + arrays[1]
+    try:
+        axes.bar(left, arrays[2], width=dmag, log=log, label="refOnly", color="blue", alpha=alpha, **kwargs)
+    except ValueError:
+        pass
+
+    if includeSpurious:
+        axes.bar(left, arrays[3], width=dmag, log=log, label="spurious", alpha=alpha, color="red")
 
     axes.legend(loc=2)
     axes.set_xlim(magmin, magmax)
-    axes.set_ylim(0.5 if log else -1, 1.05*max(arrays[0] + arrays[1]))
+    axes.set_ylim(0.5 if log else -1, 1.05*max(arrays[0] + arrays[1] + arrays[2] +
+                                               arrays[3]*(1 if includeSpurious else 0)))
     axes.set_xlabel(magType)
 
     axes.set_title(title)
