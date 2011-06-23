@@ -1380,7 +1380,9 @@ where
 def getMissed(data, dataId):
     """Return a SourceSet of all the catalogue objects that we failed to detect for dataId (a single CCD)"""
 
-    return _getSourceSetFromQuery(data, dataId, """
+    #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+    if False:
+        query = """
 select
     scisql_s2CPolyToBin(llcRa, llcDecl, lrcRa, lrcDecl, urcRa, urcDecl, ulcRa, ulcDecl),
     filterId, visit, raftName, ccdName
@@ -1408,7 +1410,60 @@ from
 where
    scisql_s2PtInCPoly(sro.ra, sro.decl, @poly) and (rsm.sourceId is Null or
    not (visit = @visit and raftName = @raftName and ccdName = @ccdName))
-   """)
+   """
+    else:
+        query = """
+SELECT
+   scisql_s2CPolyToBin(llcRa, llcDecl, lrcRa, lrcDecl, urcRa, urcDecl, ulcRa, ulcDecl),
+   scienceCcdExposureId, filterId
+FROM
+  Science_Ccd_Exposure
+WHERE
+    visit = %(visit)d and raftName = '%(raft)s' and ccdName = '%(sensor)s'
+INTO @poly, @sceId, @filterId;
+
+SELECT
+   sro.refObjectId, sro.ra, sro.decl,
+   CASE WHEN @filterId = 0 THEN uMag
+        WHEN @filterId = 1 THEN gMag
+	WHEN @filterId = 2 THEN rMag
+	WHEN @filterId = 3 THEN iMag
+	WHEN @filterId = 4 THEN zMag
+	WHEN @filterId = 5 THEN yMag
+   END as Mag,
+   sro.isStar, sro.varClass,
+   %(visit)d, '%(raft)s', '%(sensor)s'
+FROM
+  SimRefObject AS sro INNER JOIN
+  RefSrcMatch AS rsm ON (sro.refObjectId = rsm.refObjectId)
+WHERE
+  scisql_s2PtInCPoly(sro.ra, sro.decl, @poly) = 1 AND
+  rsm.sourceId IS NULL
+
+UNION ALL
+
+SELECT
+   sro.refObjectId, sro.ra, sro.decl,
+   CASE WHEN @filterId = 0 THEN uMag
+        WHEN @filterId = 1 THEN gMag
+	WHEN @filterId = 2 THEN rMag
+	WHEN @filterId = 3 THEN iMag
+	WHEN @filterId = 4 THEN zMag
+	WHEN @filterId = 5 THEN yMag
+   END as Mag,
+   sro.isStar, sro.varClass,
+   %(visit)d, '%(raft)s', '%(sensor)s'
+FROM
+  SimRefObject AS sro INNER JOIN
+  RefSrcMatch AS rsm ON (sro.refObjectId = rsm.refObjectId) INNER JOIN
+  Source AS s ON (rsm.sourceId = s.sourceId)
+WHERE
+  scisql_s2PtInCPoly(sro.ra, sro.decl, @poly) = 1
+GROUP BY sro.refObjectId
+HAVING SUM(s.scienceCcdExposureId = @sceId) = 0
+"""
+
+    return _getSourceSetFromQuery(data, dataId, query)
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
@@ -1487,7 +1542,7 @@ def showCatalog(data, dataId, calexp=None, frame=0, **kwargs):
     detected = getMatched(data, dataId)
     spurious = getSpurious(data, dataId)
 
-    #showSourceSet(refOnly, calexp, ctype=ds9.BLUE, symb="o", size=3, frame=frame, **kwargs)
+    showSourceSet(refOnly, calexp, ctype=ds9.BLUE, symb="o", size=3, frame=frame, **kwargs)
     showSourceSet(detected, calexp, ctype=ds9.GREEN, symb="o", size=3, frame=frame, **kwargs)
     showSourceSet(spurious, calexp, ctype=ds9.RED, symb="o", size=3, frame=frame, **kwargs)
 
