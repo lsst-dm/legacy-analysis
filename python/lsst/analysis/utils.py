@@ -1471,13 +1471,11 @@ def plotCompleteness(data, dataId, refCat=None, calexp=None, matchRadius=2, **kw
             pass
 
         refOnly.push_back(s)
-            
-    if not kwargs.has_key("title"):
-        kwargs["title"] = str(dataId)
+        
+    return (plotCounts(data, detected, refOnly, spurious, blended, ss, calexp, **kwargs), ss, refCat)
 
-    return (plotCounts(data, detected, refOnly, spurious, blended, **kwargs), ss, refCat)
-
-def plotCounts(data, matched, refOnly, spurious, blended, includeSpurious=True, magType="model",
+def plotCounts(data, matched, refOnly, spurious, blended, ss=None, calexp=None,
+               includeSpurious=True, magType="model",
                magmin=None, magmax=None, dmag=0.5, stars=None, galaxies=None,
                log=True, stacked=True, title=None, fig=None, frame=None):
 
@@ -1529,6 +1527,25 @@ def plotCounts(data, matched, refOnly, spurious, blended, includeSpurious=True, 
 
         xyPos.append(zip(mags, xAstrom[np.logical_not(bad)], yAstrom[np.logical_not(bad)]))
         arrays.append(np.histogram(mags, bins)[0])
+
+    if ss:
+        m, x, y = [], [], []
+        for s in ss:
+            if magType == "ap":
+                flux = s.getApFlux()
+            elif magType == "model":
+                flux = s.getModelFlux()
+            elif magType == "psf":
+                flux = s.getPsfFlux()
+            else:
+                raise RuntimeError("Uknown magnitude type %s" % magType)
+
+            m.append(calexp.getCalib().getMagnitude(flux))
+
+            x.append(s.getXAstrom())
+            y.append(s.getYAstrom())
+
+        xyPos.append(zip(m, x, y))
     #
     # ds9?
     #
@@ -1536,10 +1553,14 @@ def plotCounts(data, matched, refOnly, spurious, blended, includeSpurious=True, 
         ds9.erase(frame=frame)
         ds9.cmdBuffer.pushSize()
 
-        for i, ct in enumerate([ds9.GREEN, ds9.CYAN, ds9.BLUE, ds9.RED]):
+        for i, ct in enumerate([ds9.GREEN, ds9.CYAN, ds9.BLUE, ds9.RED, ds9.YELLOW]):
+            if i >= len(xyPos):
+                break
+            
+            symb = "+" if ct == ds9.YELLOW else "o"
             for mag, x, y in xyPos[i]:
                 if mag > magmin and mag < magmax:
-                    ds9.dot("o", x, y, size=3, frame=frame, ctype=ct)
+                    ds9.dot(symb, x, y, size=3, frame=frame, ctype=ct)
         
         ds9.cmdBuffer.popSize()
     #
@@ -1551,7 +1572,7 @@ def plotCounts(data, matched, refOnly, spurious, blended, includeSpurious=True, 
 
     kwargs = {}
     if stacked:
-        alpha = 1.0 - 0.5
+        alpha = 1.0
     else:
         alpha = 0.7
 
