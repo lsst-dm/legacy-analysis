@@ -65,7 +65,7 @@ try:
     default_db_host
 except NameError:
     default_db_host = "lsst10.ncsa.uiuc.edu"
-    default_db_table = "buildbot_PT1_2_u_wp_trunk_2011_0507_160801"
+    default_db_table = None # "buildbot_PT1_2_u_wp_trunk_2011_0507_160801"
 
 try:
     butlerDataRoot
@@ -425,7 +425,7 @@ raft or sensor may be None (meaning get all)
             else:
                 mask = None
 
-            return afwImage.makeExposure(afwImage.makeMaskedImage(eimage, mask), eimageExposure.getWcs())
+            return [afwImage.makeExposure(afwImage.makeMaskedImage(eimage, mask), eimageExposure.getWcs())]
 
         self.setVRS(reset=True, **dataId)
 
@@ -814,9 +814,13 @@ def queryDB(query, host=None, db=None, read_default_file="~/.my.cnf",):
     if db is None:
         db = default_db_table
 
+    if not db:
+        raise RuntimeError("Please set utils.default_db_table")
+
     conn = MySQLdb.connect(host=host, db=db, read_default_file=read_default_file)
 
-    conn.query(query)
+    for q in query.split(";"):
+        conn.query(q)
 
     r = conn.use_result()
     return r.fetch_row(0)
@@ -1182,59 +1186,64 @@ def findSource(sourceSet, x, y, radius=2):
 
 def getRefCatalog(data, dataId):
     """Get the reference catalogue for dataId (a single CCD) as a SourceSet"""
-    ss = afwDetect.SourceSet()
 
-    calexp_md = butler.get('calexp_md', **dataId)
-    data.wcs = afwImage.makeWcs(calexp_md)
-    data.calib = afwImage.Calib(calexp_md)
-    data.zp = data.calib.getMagnitude(1.0)
+    if True:
+        query = """
+        select
+            scisql_s2CPolyToBin(llcRa, llcDecl, lrcRa, lrcDecl, urcRa, urcDecl, ulcRa, ulcDecl),
+            filterId, visit, raftName, ccdName
+        from
+           Science_Ccd_Exposure
+        where
+           visit = %(visit)d and raftName = '%(raft)s' and ccdName = '%(sensor)s'
+        into @poly, @filterId, @visit, @raftName, @ccdName;
+        
+        select
+           sro.refObjectId, ra, decl,
+           CASE WHEN @filterId = 0 THEN uMag
+                WHEN @filterId = 1 THEN gMag
+        	WHEN @filterId = 2 THEN rMag
+        	WHEN @filterId = 3 THEN iMag
+        	WHEN @filterId = 4 THEN zMag
+        	WHEN @filterId = 5 THEN yMag
+           END as Mag,
+           sro.isStar, sro.varClass,
+           @visit, @raftName, @ccdName
+        from
+            SimRefObject as sro join RefSrcMatch as rsm on sro.refObjectId = rsm.refObjectId
+        where
+            scisql_s2PtInCPoly(ra, decl, @poly) and
+            (sourceId is NULL or closestToRef = 1)
+        """ % dataId
+    else:
+        query = """
+        select
+            scisql_s2CPolyToBin(llcRa, llcDecl, lrcRa, lrcDecl, urcRa, urcDecl, ulcRa, ulcDecl),
+            filterId, visit, raftName, ccdName
+        from
+           Science_Ccd_Exposure
+        where
+           visit = %(visit)d and raftName = '%(raft)s' and ccdName = '%(sensor)s'
+        into @poly, @filterId, @visit, @raftName, @ccdName;
 
-    for refObjectId, ra, dec, mag, isStar, isVar, visit, raftName, ccdName \
-            in queryDB("""
-    select
-       refObjectId, sro.ra, sro.decl,
-       CASE WHEN exp.filterId = 0 THEN uMag
-            WHEN exp.filterId = 1 THEN gMag
-            WHEN exp.filterId = 2 THEN rMag
-            WHEN exp.filterId = 3 THEN iMag
-            WHEN exp.filterId = 4 THEN zMag
-            WHEN exp.filterId = 5 THEN yMag
-       END as Mag,
-       sro.isStar, sro.isVar,
-       exp.visit, exp.raftName, exp.ccdName
-    from
-       SimRefObject as sro,
-       Science_Ccd_Exposure as exp
-    where
-       visit = %(visit)d and raftName = '%(raft)s' and ccdName = '%(sensor)s' and
-       qserv_ptInSphPoly(sro.ra, sro.decl, concat_ws(' ',
-                         llcRa, llcDecl, lrcRa, lrcDecl, urcRa, urcDecl, ulcRa, ulcDecl))
-          """ % dataId):
-        s = afwDetect.Source();
+        select
+           refObjectId, sro.ra, sro.decl,
+           CASE WHEN @filterId = 0 THEN uMag
+                WHEN @filterId = 1 THEN gMag
+                WHEN @filterId = 2 THEN rMag
+                WHEN @filterId = 3 THEN iMag
+                WHEN @filterId = 4 THEN zMag
+                WHEN @filterId = 5 THEN yMag
+           END as Mag,
+           sro.isStar, sro.varClass,
+           @visit, @raftName, @ccdName
+        from
+           SimRefObject as sro
+        where
+           scisql_s2PtInCPoly(ra, decl, @poly)
+       """ % dataId
 
-        s.setId(refObjectId)
-        ra, dec = math.radians(ra), math.radians(dec)
-        s.setRa(ra); s.setDec(dec)
-
-        if skyToPixel_takes_degrees:
-            ra, dec = math.degrees(ra), math.degrees(dec)
-
-        x, y = data.wcs.skyToPixel(ra, dec)
-        s.setXAstrom(x), s.setYAstrom(y)
-
-        flux = 10**(-0.4*(mag - data.zp))
-        s.setApFlux(flux); s.setPsfFlux(flux); s.setModelFlux(flux)
-
-        flag = flagsDict["BINNED1"]
-        if isStar:
-            flag |= flagsDict["STAR"]
-        if isVar:
-            flag |= flagsDict["PEAKCENTER"] # XXX
-        s.setFlagForDetection(flag)
-
-        ss.push_back(s)
-
-    return ss
+    return _getSourceSetFromQuery(data, dataId, query)
 
 def showRefCatalog(data, dataId, wcs=None, frame=0):
     ss = data.getSources(dataId)[0]
@@ -1252,8 +1261,159 @@ def showRefCatalog(data, dataId, wcs=None, frame=0):
 
     return ss, refCat
 
-def showSourceSet(sourceSet, exp=None, wcs=None, raDec=None, magmin=-100, magmax=None, magType="psf",
-                  frame=0, ctype=ds9.GREEN, symb="+", size=2, mask=None):
+#-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+def _getSourceSetFromQuery(data, dataId, queryStr):
+    """Return a SourceSet given a Data object and query string that returns certain information"""
+    
+    calexp_md = butler.get('calexp_md', **dataId)
+    data.wcs = afwImage.makeWcs(calexp_md)
+    data.calib = afwImage.Calib(calexp_md)
+    data.zp = data.calib.getMagnitude(1.0)
+
+    ss = afwDetect.SourceSet()
+
+    for Id, ra, dec, mag, isStar, varClass, visit, raftName, ccdName in queryDB(queryStr % dataId):
+        s = afwDetect.Source();
+
+        s.setId(Id)
+        ra, dec = math.radians(ra), math.radians(dec)
+        s.setRa(ra); s.setDec(dec)
+
+        if skyToPixel_takes_degrees:
+            ra, dec = math.degrees(ra), math.degrees(dec)
+
+        x, y = data.wcs.skyToPixel(ra, dec)
+        s.setXAstrom(x), s.setYAstrom(y)
+
+        flux = 10**(-0.4*(mag - data.zp))
+        s.setApFlux(flux); s.setPsfFlux(flux); s.setModelFlux(flux)
+
+        flag = flagsDict["BINNED1"]
+        if isStar:
+            flag |= flagsDict["STAR"]
+        if varClass > 0:                    # 0 => non variable
+            flag |= flagsDict["PEAKCENTER"] # XXX
+        s.setFlagForDetection(flag)
+
+        ss.push_back(s)
+
+    return ss
+
+def getSpurious(data, dataId):
+    """Return a SourceSet of all sources that don't match any in the catalogue for dataId (a single CCD)"""
+
+    return _getSourceSetFromQuery(data, dataId, """
+select
+   s.sourceId, s.ra, s.decl,
+   dnToABMag(s.psfFlux, exp.fluxMag0) as psfMag,
+   -1, -1,
+   visit, raftName, ccdName
+from
+   Source as s join
+   Science_Ccd_Exposure as exp on s.scienceCcdExposureId = exp.scienceCcdExposureId join
+   RefSrcMatch as rsm on rsm.SourceId = s.SourceId
+where
+   visit = %(visit)d and raftName = '%(raft)s' and ccdName = '%(sensor)s'
+   and rsm.refObjectId is Null
+   """ % dataId)   
+
+def getMatched(data, dataId):
+    """Return a SourceSet of all the catalogue objects that we detected for dataId (a single CCD)"""
+
+    if True:
+        query = """
+select
+   sro.refObjectId, sro.ra, sro.decl,
+   CASE WHEN exp.filterId = 0 THEN uMag
+        WHEN exp.filterId = 1 THEN gMag
+	WHEN exp.filterId = 2 THEN rMag
+	WHEN exp.filterId = 3 THEN iMag
+	WHEN exp.filterId = 4 THEN zMag
+	WHEN exp.filterId = 5 THEN yMag
+   END as Mag,
+   sro.isStar, sro.varClass,
+   visit, raftName, ccdName
+from
+   Source as s join
+   Science_Ccd_Exposure as exp on s.scienceCcdExposureId = exp.scienceCcdExposureId join
+   RefSrcMatch as rsm on rsm.SourceId = s.SourceId join
+   SimRefObject as sro on sro.refObjectId = rsm.refObjectId
+where
+   visit = %(visit)d and raftName = '%(raft)s' and ccdName = '%(sensor)s'
+   and rsm.refObjectId is not Null
+   """
+    else:
+        query = """
+select
+    scisql_s2CPolyToBin(llcRa, llcDecl, lrcRa, lrcDecl, urcRa, urcDecl, ulcRa, ulcDecl),
+    filterId, visit, raftName, ccdName
+from
+   Science_Ccd_Exposure
+where
+   visit = %(visit)d and raftName = '%(raft)s' and ccdName = '%(sensor)s'
+into @poly, @filterId, @visit, @raftName, @ccdName;
+
+select
+   sro.refObjectId, sro.ra, sro.decl,
+   CASE WHEN @filterId = 0 THEN uMag
+        WHEN @filterId = 1 THEN gMag
+	WHEN @filterId = 2 THEN rMag
+	WHEN @filterId = 3 THEN iMag
+	WHEN @filterId = 4 THEN zMag
+	WHEN @filterId = 5 THEN yMag
+   END as Mag,
+   sro.isStar, sro.varClass,
+   @visit, @raftName, @ccdName
+from
+   SimRefObject as sro join RefSrcMatch as rsm on sro.refObjectId = rsm.refObjectId join
+   Source as s on s.sourceId = rsm.sourceId join
+   Science_Ccd_Exposure exp on exp.scienceCcdExposureId = s.scienceCcdExposureId
+where
+   (visit = @visit and raftName = @raftName and ccdName = @ccdName) and
+   scisql_s2PtInCPoly(sro.ra, sro.decl, @poly) -- and closestToRef = 1
+   """
+
+    return _getSourceSetFromQuery(data, dataId, query)
+    
+
+def getMissed(data, dataId):
+    """Return a SourceSet of all the catalogue objects that we failed to detect for dataId (a single CCD)"""
+
+    return _getSourceSetFromQuery(data, dataId, """
+select
+    scisql_s2CPolyToBin(llcRa, llcDecl, lrcRa, lrcDecl, urcRa, urcDecl, ulcRa, ulcDecl),
+    filterId, visit, raftName, ccdName
+from
+   Science_Ccd_Exposure
+where
+   visit = %(visit)d and raftName = '%(raft)s' and ccdName = '%(sensor)s'
+into @poly, @filterId, @visit, @raftName, @ccdName;
+
+select
+   sro.refObjectId, sro.ra, sro.decl,
+   CASE WHEN @filterId = 0 THEN uMag
+        WHEN @filterId = 1 THEN gMag
+	WHEN @filterId = 2 THEN rMag
+	WHEN @filterId = 3 THEN iMag
+	WHEN @filterId = 4 THEN zMag
+	WHEN @filterId = 5 THEN yMag
+   END as Mag,
+   sro.isStar, sro.varClass,
+   @visit, @raftName, @ccdName
+from
+   SimRefObject as sro join RefSrcMatch as rsm on sro.refObjectId = rsm.refObjectId join
+   Source as s on s.sourceId = rsm.sourceId join
+   Science_Ccd_Exposure exp on exp.scienceCcdExposureId = s.scienceCcdExposureId
+where
+   scisql_s2PtInCPoly(sro.ra, sro.decl, @poly) and (rsm.sourceId is Null or
+   not (visit = @visit and raftName = @raftName and ccdName = @ccdName))
+   """)
+
+#-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+def showSourceSet(sourceSet, exp=None, wcs=None, raDec=None, magmin=None, magmax=None, magType="psf",
+                  mask=None, symb="+", **kwargs):
     """Show a SourceSet on ds9.
 
     If mask, it's a set of bitplane names (e.g. INTERP) which must be set to display the source"""
@@ -1275,6 +1435,12 @@ def showSourceSet(sourceSet, exp=None, wcs=None, raDec=None, magmin=-100, magmax
         if not wcs:
             raise RuntimeError("You'll have to provide a wcs if you want me to plot the (ra, dec) positions")
 
+    if magmin is not None or magmax is not None:
+        if not exp:
+            raise RuntimeError("You'll have to provide an exposure if you want me to use magnitude limits")
+        if magmin is None:
+            magmin = -100
+
     for s in sourceSet:
         if mask:
             if not (s.getFlagForDetection() & mask):
@@ -1289,11 +1455,12 @@ def showSourceSet(sourceSet, exp=None, wcs=None, raDec=None, magmin=-100, magmax
                 flux = s.getPsfFlux()
             else:
                 raise RuntimeError("Uknown magnitude type %s" % magType)
-                
-            mag = exp.getCalib().getMagnitude(flux)
 
-            if mag < magmin or mag > magmax:
-                continue
+            if exp:
+                mag = exp.getCalib().getMagnitude(flux)
+                
+                if mag < magmin or mag > magmax:
+                    continue
 
         if raDec:
             ra, dec = s.getRa(), s.getDec()
@@ -1305,32 +1472,64 @@ def showSourceSet(sourceSet, exp=None, wcs=None, raDec=None, magmin=-100, magmax
         else:
             x, y = s.getXAstrom(), s.getYAstrom()
 
-        ds9.dot(symb, x, y, frame=frame, ctype=ctype, size=size)
+        ds9.dot((symb if symb != "id" else ("%d" % s.getId())), x, y, **kwargs)
 
     ds9.cmdBuffer.popSize()
 
+
+def showCatalog(data, dataId, calexp=None, frame=0, **kwargs):
+    if not calexp:
+        calexp = data.getDataset("calexp", dataId)[0]
+
+    ss = data.getSources(dataId)[0]
+
+    refOnly = getMissed(data, dataId)
+    detected = getMatched(data, dataId)
+    spurious = getSpurious(data, dataId)
+
+    #showSourceSet(refOnly, calexp, ctype=ds9.BLUE, symb="o", size=3, frame=frame, **kwargs)
+    showSourceSet(detected, calexp, ctype=ds9.GREEN, symb="o", size=3, frame=frame, **kwargs)
+    showSourceSet(spurious, calexp, ctype=ds9.RED, symb="o", size=3, frame=frame, **kwargs)
+
+    showSourceSet(ss, ctype=ds9.YELLOW, frame=frame)
+
 def plotCompleteness(data, dataId, refCat=None, matchRadius=2, **kwargs):
+    """Plot completeness plots in matplotlib (and maybe ds9)"""
     ss = data.getSources(dataId)[0]
     if not refCat:
         refCat = getRefCatalog(data, dataId)
 
-    matched, detectedOnly, refOnly = getMatches(ss, refCat, matchRadius)
+    matched, spurious, refOnly = getMatches(ss, refCat, matchRadius)
 
     if not kwargs.has_key("title"):
         kwargs["title"] = str(dataId)
 
-    return (plotCounts(data, matched["src"], refOnly, detectedOnly, **kwargs), ss, refCat)
+    return (plotCounts(data, matched["src"], refOnly, spurious, **kwargs), ss, refCat)
 
-def plotCounts(data, matched, refOnly, detectedOnly, includeDetOnly=True, magType="model",
-               magmin=14, magmax=26, dmag=0.5, log=True, title=None, fig=None):
-    
+def plotCounts(data, matched, refOnly, spurious, includeDetOnly=True, magType="model",
+               magmin=14, magmax=25, dmag=0.5, stars=None, galaxies=None,
+               log=True, stacked=True, title=None, fig=None, frame=None):
+
     if not title:
         title = data.name
+
+    if log:
+        stacked = False
+
+    if stars is None and galaxies is None:
+        stars, galaxies = False, False
+
+    if stars or galaxies:
+        includeDetOnly = False
+        title += " [%s]" % ("stars" if stars else "galaxies")
+    if stacked:
+        title += " [stacked histograms]"
 
     bins = np.arange(magmin, magmax + 0.5*dmag, dmag)
 
     arrays = []                         # our data arrays
-    for s in [matched, refOnly, detectedOnly]:
+    xyPos = []                          # [xy]Astrom for objects
+    for s in [matched, refOnly, spurious]:
         ids, flags, xAstrom, yAstrom, apMags, modelMags, psfMags = data.getMags(s, resetCalib=False)
 
         if magType == "ap":
@@ -1343,19 +1542,50 @@ def plotCounts(data, matched, refOnly, detectedOnly, includeDetOnly=True, magTyp
             raise RuntimeError("Uknown magnitude type %s" % magType)
 
         bad = np.bitwise_and(flags, (flagsDict["INTERP_CENTER"] | flagsDict["EDGE"]))
+
+        if stars or galaxies:
+            isStar = np.bitwise_and(flags, flagsDict["STAR"])
+            if stars:
+                bad = np.logical_or(bad, np.logical_not(isStar))
+            else:
+                bad = np.logical_or(bad, isStar)
+                
         mags = mags[np.logical_not(bad)]
 
+        xyPos.append(zip(mags, xAstrom[np.logical_not(bad)], yAstrom[np.logical_not(bad)]))
         arrays.append(np.histogram(mags, bins)[0])
+    #
+    # ds9?
+    #
+    if frame is not None:
+        ds9.erase(frame=frame)
+        ds9.cmdBuffer.pushSize()
 
+        for i, ct in enumerate([ds9.GREEN, ds9.BLUE, ds9.RED]):
+            for mag, x, y in xyPos[i]:
+                if mag > magmin and mag < magmax:
+                    ds9.dot("o", x, y, size=3, frame=frame, ctype=ct)
+        
+        ds9.cmdBuffer.popSize()
+    #
+    # Time for matplotlib
+    #
     fig = getMpFigure(fig)
 
     axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
 
+    kwargs = {}
+    if stacked:
+        kwargs["bottom"] = arrays[0]
+        alpha = 1.0
+    else:
+        alpha = 0.7
+
     left = bins[0:-1] - 0.5*dmag        # left side of bins
-    axes.bar(left, arrays[0], width=dmag, log=log, label="matched", color="green")
-    axes.bar(left, arrays[1], bottom=arrays[0], width=dmag, log=log, label="refOnly", color="blue")
+    axes.bar(left, arrays[0], width=dmag, log=log, label="matched", color="green", alpha=alpha)
+    axes.bar(left, arrays[1], width=dmag, log=log, label="refOnly", color="blue", alpha=alpha, **kwargs)
     if includeDetOnly:
-        axes.bar(left, arrays[2], width=dmag, log=log, label="detOnly", alpha=0.7, color="red")
+        axes.bar(left, arrays[2], width=dmag, log=log, label="detOnly", alpha=alpha, color="red")
 
     axes.legend(loc=2)
     axes.set_xlim(magmin, magmax)
@@ -1373,7 +1603,7 @@ def getMatches(ss, refCat, radius=2):
 
     Return three lists:
        matches          As dictionary of two SourceSets (keys ref and src) of Sources from refCat and ss
-       detectedOnly     A SourceSet of Sources from ss that don't match
+       spurious     A SourceSet of Sources from ss that don't match
        refOnly          A SourceSet of Sources from refCat that don't match
     """
     matches = afwDetect.matchRaDec(refCat, ss, 2000) # all objects should match
@@ -1381,7 +1611,7 @@ def getMatches(ss, refCat, radius=2):
     matchedRefs = {}                    # matched pairs;  reference object is unique
     matchedSrcs = {}                    # list of matched objects from ss
     
-    detectedOnly = afwDetect.SourceSet()
+    spurious = afwDetect.SourceSet()
     refOnly = afwDetect.SourceSet()
 
     for m in matches:
@@ -1408,9 +1638,11 @@ def getMatches(ss, refCat, radius=2):
         ref, src = m.first, m.second
 
         if m.distance < radius:
-            # Set the quality flags from the src
+            # Set the quality flags from the src, and STAR from the ref
             ref.setFlagForDetection( ref.getFlagForDetection() |
                                     (src.getFlagForDetection() & ~flagsDict["STAR"]))
+            src.setFlagForDetection( src.getFlagForDetection() |
+                                    (ref.getFlagForDetection() & flagsDict["STAR"]))
 
             matched["ref"].push_back(ref)
             matched["src"].push_back(src)
@@ -1421,15 +1653,15 @@ def getMatches(ss, refCat, radius=2):
     for ref, src, distance in matchedSrcs.values():
         sids.add(src.getId())
         if distance >= radius:
-            detectedOnly.push_back(src)
+            spurious.push_back(src)
     #
     # It's possible for a src to match to no reference object (think of one in the interior of a triangle)
     #
     for src in ss:
         if src.getId() not in sids:
-            detectedOnly.push_back(src)
+            spurious.push_back(src)
             
-    return matched, detectedOnly, refOnly
+    return matched, spurious, refOnly
 
 def subtractModels(data, dataId, frame=0, showExposure=True):
     """Show and return all the images for some objectId and filterId (a maximum of maxDs9 are displayed, starting at ds9 frame0).
