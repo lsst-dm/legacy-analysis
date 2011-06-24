@@ -1,5 +1,8 @@
-setupRequired(obs_lsstSim)
 setupRequired(meas_algorithms)
+
+setupOptional(obs_subaru)
+setupOptional(obs_cfht)
+setupOptional(obs_lsstSim)
 
 setupOptional(meas_astrom)
 setupOptional(ip_isr)
