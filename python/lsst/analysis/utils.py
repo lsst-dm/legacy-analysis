@@ -150,9 +150,13 @@ def makeMapperInfo(mapper):
 
         @staticmethod
         def dataIdToTitle(dataIds):
-            if len(dataIds) > 1:
-                print >> sys.stderr, "Fit dataIdToTitle for more than one dataId"
-            dataId = dataIds[0]
+            try:
+                dataId = dataIds[0]
+
+                if len(dataIds) > 1:
+                    print >> sys.stderr, "Fit dataIdToTitle for more than one dataId"
+            except KeyError:
+                dataId = dataIds
                 
             filterName = afwImage.Filter(butler.get("calexp_md", **dataId)).getName()
             return "%ld %s %s [%s]" % (dataId["visit"], dataId["raft"], dataId["sensor"], filterName)
@@ -1466,6 +1470,9 @@ def showCatalog(data, dataId, calexp=None, refOnly=None, detected=None, spurious
 
 def plotCompleteness(data, dataId, refCat=None, calexp=None, matchRadius=2, **kwargs):
     """Plot completeness plots in matplotlib (and maybe ds9)"""
+
+    data.name = butler.mapperInfo.dataIdToTitle(dataId)
+
     ss = data.getSources(dataId)[0]
 
     if False:
