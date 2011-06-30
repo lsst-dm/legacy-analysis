@@ -568,92 +568,25 @@ raft or sensor may be None (meaning get all)
 
         return sources
 
-    def getMags(self, ss, resetCalib=True, dataId=None):
-        """Return numpy arrays constructed from SourceSet ss"""
-        ids = np.empty(len(ss), dtype='L')
-        flags = np.empty(len(ss), dtype='L')
-        apMags = np.empty(len(ss))
-        modelMags = np.empty(len(ss))
-        psfMags = np.empty(len(ss))
-        xAstrom = np.empty(len(ss))
-        yAstrom = np.empty(len(ss))
+    def getMagsByType(self, magType, good=None, magDict=None):
+        if magDict:
+            mags = magDict[magType]
+        else:
+            if magType == "ap":
+                mags = self.apMags
+            elif magType == "inst":
+                mags = self.instMags
+            elif magType == "model":
+                mags = self.modelMags
+            elif magType == "psf":
+                mags = self.psfMags
+            else:
+                raise RuntimeError("Unknown magnitude type %s" % magType)
 
-        for i in range(len(ss)):
-            ids[i] = ss[i].getId()
-            flags[i] = ss[i].getFlagForDetection()
-            apMags[i]  = ss[i].getApFlux()
-            modelMags[i]  = ss[i].getModelFlux()
-            psfMags[i] = ss[i].getPsfFlux()
+        if good is not None:
+            mags = mags[good]
 
-            xAstrom[i] = ss[i].getXAstrom()
-            yAstrom[i] = ss[i].getYAstrom()
-
-        if resetCalib:
-            if dataId is None:
-                dataId = self.dataId
-
-            calexp_md = butler.get('calexp_md', **dataId)
-            self.wcs = afwImage.makeWcs(calexp_md)
-            self.calib = afwImage.Calib(calexp_md)
-            self.zp = self.calib.getMagnitude(1.0)
-
-        for i in range(len(ss)):
-            try:
-                apMags[i]  = self.calib.getMagnitude(apMags[i])
-            except:
-                apMags[i]  = np.nan
-
-            try:
-                psfMags[i]  = self.calib.getMagnitude(psfMags[i])
-            except:
-                psfMags[i]  = np.nan
-
-            try:
-                modelMags[i]  = self.calib.getMagnitude(modelMags[i])
-            except:
-                modelMags[i]  = np.nan
-
-        good = np.logical_and(np.isfinite(apMags), np.isfinite(psfMags))
-
-        ids = ids[good]
-        flags = flags[good]
-        apMags = apMags[good]
-        modelMags = modelMags[good]
-        psfMags = psfMags[good]
-        xAstrom = xAstrom[good]
-        yAstrom = yAstrom[good]
-
-        return ids, flags, xAstrom, yAstrom, apMags, modelMags, psfMags
-
-    def _getMags(self, ss, ids=None, flags=None, xAstrom=None, yAstrom=None,
-                 apMags=None, modelMags=None, psfMags=None, dataId=None):
-        """Return python arrays constructed from SourceSet ss, and possibly extending {ap,model,psf}Mags"""
-        if not ids:
-            ids = array.array('L')
-        if not flags:
-            flags = array.array('L')
-        if not xAstrom:
-            xAstrom = array.array('d')
-        if not yAstrom:
-            yAstrom = array.array('d')
-        if not apMags:
-            apMags = array.array('d')
-        if not modelMags:
-            modelMags = array.array('d')
-        if not psfMags:
-            psfMags = array.array('d')
-
-        _ids, _flags, _xAstrom, _yAstrom, _apMags, _modelMags, _psfMags = self.getMags(ss, dataId=dataId)
-
-        ids.extend(_ids)
-        flags.extend(_flags)
-        xAstrom.extend(_xAstrom)
-        yAstrom.extend(_yAstrom)
-        apMags.extend(_apMags)
-        modelMags.extend(_modelMags)
-        psfMags.extend(_psfMags)
-
-        return ids, flags, xAstrom, yAstrom, apMags, modelMags, psfMags
+        return mags
 
     def expandDataId(self, dataId, nSensor=0):
         """Return a list of fully qualified dataIds, given a possibly-ambiguous one"""
@@ -684,21 +617,25 @@ raft or sensor may be None (meaning get all)
 
         dataIds = self.expandDataId(dataId, nSensor)
 
-        ids, flags, xAstrom, yAstrom, apMags, modelMags, psfMags = None, None, None, None, None, None, None
+        ids, flags, stellar, xAstrom, yAstrom, apMags, instMags, modelMags, psfMags = \
+             None, None, None, None, None, None, None, None, None
 
         for did in dataIds:
             ss = self.getSources(did)[0]
-            ids, flags, xAstrom, yAstrom, apMags, modelMags, psfMags = \
-                    self._getMags(ss, ids=ids, flags=flags, xAstrom=xAstrom, yAstrom=yAstrom,
-                                  apMags=apMags, modelMags=modelMags, psfMags=psfMags, dataId=did)
+            ids, flags, stellar, xAstrom, yAstrom, apMags, instMags, modelMags, psfMags = \
+                 _getMagsFromSS(ss, did, ids=ids, flags=flags, stellar=stellar,
+                                xAstrom=xAstrom, yAstrom=yAstrom,
+                                apMags=apMags, instMags=instMags, modelMags=modelMags, psfMags=psfMags)
 
         self.name = butler.mapperInfo.dataIdToTitle(dataIds)
 
         self.ids       = np.ndarray(len(ids),       dtype='L', buffer=ids)
         self.flags     = np.ndarray(len(flags),     dtype='L', buffer=flags)
+        self.stellar   = np.ndarray(len(stellar),   dtype='d', buffer=stellar)
         self.xAstrom   = np.ndarray(len(xAstrom),   dtype='d', buffer=xAstrom)
         self.yAstrom   = np.ndarray(len(yAstrom),   dtype='d', buffer=yAstrom)
         self.apMags    = np.ndarray(len(apMags),    dtype='d', buffer=apMags)
+        self.instMags  = np.ndarray(len(instMags),  dtype='d', buffer=instMags)
         self.modelMags = np.ndarray(len(modelMags), dtype='d', buffer=modelMags)
         self.psfMags   = np.ndarray(len(psfMags),   dtype='d', buffer=psfMags)
 
@@ -834,6 +771,109 @@ raft or sensor may be None (meaning get all)
         measAstrom.joinMatchList(self.matches, self.sources, first=False, log=log, **args)
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+#
+# Convert SourceSets to numpy arrays
+#
+def getMagsFromSS(ss, dataId):
+    """Return numpy arrays constructed from SourceSet ss"""
+    ids = np.empty(len(ss), dtype='L')
+    flags = np.empty(len(ss), dtype='L')
+    stellar = np.empty(len(ss))
+    apMags = np.empty(len(ss))
+    instMags = np.empty(len(ss))
+    modelMags = np.empty(len(ss))
+    psfMags = np.empty(len(ss))
+    xAstrom = np.empty(len(ss))
+    yAstrom = np.empty(len(ss))
+
+    for i in range(len(ss)):
+        ids[i] = ss[i].getId()
+        flags[i] = ss[i].getFlagForDetection()
+        stellar[i] = ss[i].getApDia()
+        apMags[i]  = ss[i].getApFlux()
+        instMags[i]  = ss[i].getInstFlux()
+        modelMags[i]  = ss[i].getModelFlux()
+        psfMags[i] = ss[i].getPsfFlux()
+
+        xAstrom[i] = ss[i].getXAstrom()
+        yAstrom[i] = ss[i].getYAstrom()
+
+    calexp_md = butler.get('calexp_md', **dataId)
+    calib = afwImage.Calib(calexp_md)
+
+    for i in range(len(ss)):
+        try:
+            apMags[i]  = calib.getMagnitude(apMags[i])
+        except:
+            apMags[i]  = np.nan
+
+        try:
+            psfMags[i]  = calib.getMagnitude(psfMags[i])
+        except:
+            psfMags[i]  = np.nan
+
+        try:
+            instMags[i]  = calib.getMagnitude(instMags[i])
+        except:
+            instMags[i]  = np.nan
+
+        try:
+            modelMags[i]  = calib.getMagnitude(modelMags[i])
+        except:
+            modelMags[i]  = np.nan
+
+    good = np.logical_and(np.isfinite(apMags), np.isfinite(psfMags))
+
+    ids = ids[good]
+    flags = flags[good]
+    stellar = stellar[good]
+    apMags = apMags[good]
+    instMags = instMags[good]
+    modelMags = modelMags[good]
+    psfMags = psfMags[good]
+    xAstrom = xAstrom[good]
+    yAstrom = yAstrom[good]
+
+    return ids, flags, stellar, xAstrom, yAstrom, dict(ap=apMags, inst=instMags, model=modelMags, psf=psfMags)
+
+def _getMagsFromSS(ss, dataId, ids=None, flags=None, stellar=None, xAstrom=None, yAstrom=None,
+                   apMags=None, instMags=None, modelMags=None, psfMags=None):
+    """Return python arrays constructed from SourceSet ss, and possibly extending {ap,model,psf}Mags"""
+    if not ids:
+        ids = array.array('L')
+    if not flags:
+        flags = array.array('L')
+    if not stellar:
+        stellar = array.array('d')
+    if not xAstrom:
+        xAstrom = array.array('d')
+    if not yAstrom:
+        yAstrom = array.array('d')
+    if not apMags:
+        apMags = array.array('d')
+    if not modelMags:
+        modelMags = array.array('d')
+    if not instMags:
+        instMags = array.array('d')
+    if not psfMags:
+        psfMags = array.array('d')
+
+    _ids, _flags, _stellar, _xAstrom, _yAstrom, _mags = getMagsFromSS(ss, dataId)
+    _apMags, _instMags, _modelMags, _psfMags = _mags["ap"], _mags["inst"], _mags["model"], _mags["psf"]
+
+    ids.extend(_ids)
+    flags.extend(_flags)
+    stellar.extend(_stellar)
+    xAstrom.extend(_xAstrom)
+    yAstrom.extend(_yAstrom)
+    apMags.extend(_apMags)
+    instMags.extend(_instMags)
+    modelMags.extend(_modelMags)
+    psfMags.extend(_psfMags)
+
+    return ids, flags, stellar, xAstrom, yAstrom, apMags, instMags, modelMags, psfMags
+
+#-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 def queryDB(query, host=None, db=None, read_default_file="~/.my.cnf",):
     """Submit a query.  If host/db is None, use default_db_{host,db}
@@ -869,8 +909,8 @@ def getFluxMag0DB(visit, raft, sensor, db=None):
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-def plotDmag(data, fig=None, magType="model", maglim=20, markersize=1, color="red"):
-    """Plot (aper - psf) v. psf mags"""
+def plotDmag(data, magType1="model", magType2="psf", maglim=20, markersize=1, color="red", frames=[0], fig=None):
+    """Plot (magType1 - magType2) v. magType1 mags (e.g. "model" and "psf")"""
     fig = getMpFigure(fig)
 
     axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
@@ -888,18 +928,14 @@ def plotDmag(data, fig=None, magType="model", maglim=20, markersize=1, color="re
         amp30 = np.logical_and(amp30, data.yAstrom < 2000)
         good = np.logical_and(good, amp30)
 
-    if magType == "ap":
-        a = data.apMags[good]
-    elif magType == "model":
-        a = data.modelMags[good]
-    else:
-        raise RuntimeError("Unknown magnitude type %s" % magType)
-    p = data.psfMags[good]
-    delta = a - p
+    mag1 = data.getMagsByType(magType1, good)
+    mag2 = data.getMagsByType(magType2, good)
+    delta = mag1 - mag2
 
     sgVal = 0.05
-    stellar = np.abs(delta) < sgVal
-    locus = np.logical_and(a < maglim, stellar)
+    stellar = data.stellar[good] > 0.99
+    nonStellar = np.logical_not(stellar)
+    locus = np.logical_and(mag1 < maglim, np.abs(delta) < sgVal)
 
     try:
         stats = afwMath.makeStatistics(delta[locus], afwMath.STDEVCLIP | afwMath.MEANCLIP)
@@ -908,11 +944,13 @@ def plotDmag(data, fig=None, magType="model", maglim=20, markersize=1, color="re
         mean, stdev = np.nan, np.nan
 
     if False:
-        axes.plot(p[locus], delta[locus], "o", markersize=2*markersize, color="blue")
+        axes.plot(mag2[locus], delta[locus], "o", markersize=2*markersize, color="blue")
     else:
         axes.plot((0, maglim, maglim, 0, 0), sgVal*np.array([-1, -1, 1, 1, -1]), "g:")
 
-    axes.plot(a, delta, "o", markersize=markersize, color=color)
+    color2 = "green"
+    axes.plot(mag1[nonStellar], delta[nonStellar], "o", markersize=markersize, markeredgewidth=0, color=color)
+    axes.plot(mag1[stellar], delta[stellar], "o", markersize=markersize, markeredgewidth=0, color=color2)
     axes.plot((0, 30), (0, 0), "b-")
 
     if False:
@@ -928,7 +966,7 @@ def plotDmag(data, fig=None, magType="model", maglim=20, markersize=1, color="re
             dmin, dmax = -0.2, -0.1
 
         axes.plot([magmax, magmin, magmin, magmax, magmax], [dmin, dmin, dmax, dmax, dmin], "r-")
-        objs = np.logical_and(np.logical_and(a > magmin, a < magmax),
+        objs = np.logical_and(np.logical_and(mag1 > magmin, mag1 < magmax),
                               np.logical_and(delta > dmin, delta < dmax))
         ids = data.ids[good]
         for i in sorted(ids[objs]):
@@ -936,8 +974,8 @@ def plotDmag(data, fig=None, magType="model", maglim=20, markersize=1, color="re
 
     axes.set_ylim(0.2, -0.8)
     axes.set_xlim(14, 26)
-    axes.set_xlabel(magType)
-    axes.set_ylabel("%s - psf" % magType)
+    axes.set_xlabel(magType1)
+    axes.set_ylabel("%s - %s" % (magType1, magType2))
     axes.set_title(data.name)
 
     fig.text(0.20, 0.85, r"$%.3f \pm %.3f$" % (mean, stdev), fontsize="larger")
@@ -949,7 +987,7 @@ def plotDmag(data, fig=None, magType="model", maglim=20, markersize=1, color="re
     x = data.xAstrom[good]
     y = data.yAstrom[good]
     ids = data.ids[good]
-    eventHandlers[fig] = EventHandler(axes, a, delta, ids, x, y, flags, frames=[0, 1])
+    eventHandlers[fig] = EventHandler(axes, mag1, delta, ids, x, y, flags, frames=frames)
 
     fig.show()
 
@@ -957,8 +995,8 @@ def plotDmag(data, fig=None, magType="model", maglim=20, markersize=1, color="re
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-def plotDmagHistograms(data, fig=None, magType="model", color="red"):
-    """Plot (aper - psf) v. psf mags"""
+def plotDmagHistograms(data, magType1="model", magType2="psf", color="red", fig=None):
+    """Plot (magType1 - magType2) v. magType2 mags"""
     fig = getMpFigure(fig)
 
     try:
@@ -974,15 +1012,9 @@ def plotDmagHistograms(data, fig=None, magType="model", color="red"):
         amp30 = np.logical_and(amp30, data.yAstrom < 2000)
         good = np.logical_and(good, amp30)
 
-    if magType == "ap":
-        a = data.apMags[good]
-    elif magType == "model":
-        a = data.modelMags[good]
-    else:
-        raise RuntimeError("Unknown magnitude type %s" % magType)
-
-    p = data.psfMags[good]
-    delta = a - p
+    mag1 = data.getMagsByType(magType1, good)
+    mag2 = data.getMagsByType(magType2, good)
+    delta = mag1 - mag2
 
     sgVal = 0.10
     stellar = np.abs(delta) < sgVal
@@ -994,9 +1026,9 @@ def plotDmagHistograms(data, fig=None, magType="model", color="red"):
     subplots = makeSubplots(fig, nx=1, ny=len(binEdge))
 
     for edge in binEdge:
-        inBin = np.logical_and(np.logical_and(a >= edge, a < edge + dmag), stellar)
+        inBin = np.logical_and(np.logical_and(mag1 >= edge, mag1 < edge + dmag), stellar)
 
-        pp = p[inBin]        
+        pp = mag2[inBin]        
         dd = delta[inBin]
 
         if len(dd) == 0:
@@ -1017,7 +1049,7 @@ def plotDmagHistograms(data, fig=None, magType="model", color="red"):
         axes.set_xlabel("%.2f" % (edge + 0.5*dmag))
         axes.set_title("%.4f" % (stdev), fontsize="smaller") 
 
-    fig.suptitle("%s - psf: %s" % (magType, data.name))
+    fig.suptitle("%s - %s: %s" % (magType1, magType2, data.name))
 
     fig.show()
 
@@ -1038,8 +1070,9 @@ If plotBand is provided, draw lines at +- plotBand
     if not data.matches:
         raise RuntimeError("You need to call the Data.getCalibObjects method before calling this routine")
 
-    mstars = [m for m in data.matches if (m.second.getFlagForDetection() & flagsDict["STAR"])] # data
-    realStars = [(m.first.getFlagForDetection() & flagsDict["STAR"]) != 0                      # catalogue
+    mstars = [m for m in data.matches if
+              (m.second and (m.second.getFlagForDetection() & flagsDict["STAR"]))] # data
+    realStars = [(m.first.getFlagForDetection() & flagsDict["STAR"]) != 0          # catalogue
                  for m in data.matches if (m.first and \
                                            m.second and (m.second.getFlagForDetection() & flagsDict["STAR"]))]
 
@@ -1496,20 +1529,26 @@ def plotCompleteness(data, dataId, refCat=None, calexp=None, matchRadius=2, **kw
     for s in orefOnly:
         x, y = int(s.getXAstrom() + 0.5), int(s.getYAstrom() + 0.5)
         try:
-            if calexp.getMaskedImage().getMask().get(x, y) & afwImage.MaskU.getPlaneBitMask("DETECTED"):
-                blended.push_back(s)
-                continue
+            mval = calexp.getMaskedImage().getMask().get(x, y)
         except pexExcept.LsstCppException:
-            pass
+            mval = 0x0
+
+        if mval & afwImage.MaskU.getPlaneBitMask("EDGE"):
+            continue
+
+        if mval & afwImage.MaskU.getPlaneBitMask("DETECTED"):
+            blended.push_back(s)
+            continue
 
         refOnly.push_back(s)
         
-    return (plotCounts(data, detected, refOnly, spurious, blended, ss, calexp, **kwargs), ss, refCat)
+    return (plotCounts(data, detected, refOnly, spurious, blended, ss, calexp,
+                       **kwargs), ss, refCat)
 
 def plotCounts(data, matched, refOnly, spurious, blended, ss=None, calexp=None,
                includeSpurious=True, magType="model",
                magmin=None, magmax=None, dmag=0.5, stars=None, galaxies=None,
-               log=True, stacked=True, title=None, fig=None, frame=None):
+               log=True, stacked=True, title=None, completeness=False, fig=None, frame=None):
 
     if magmin is None:
         magmin = 14
@@ -1535,16 +1574,7 @@ def plotCounts(data, matched, refOnly, spurious, blended, ss=None, calexp=None,
     arrays = []                         # our data arrays
     xyPos = []                          # [xy]Astrom for objects
     for s in [matched, blended, refOnly, spurious]:
-        ids, flags, xAstrom, yAstrom, apMags, modelMags, psfMags = data.getMags(s, resetCalib=False)
-
-        if magType == "ap":
-            mags = apMags
-        elif magType == "model":
-            mags = modelMags
-        elif magType == "psf":
-            mags = psfMags
-        else:
-            raise RuntimeError("Uknown magnitude type %s" % magType)
+        ids, flags, stellar, xAstrom, yAstrom, mags = getMagsFromSS(s, data.dataId)
 
         bad = np.bitwise_and(flags, (flagsDict["INTERP_CENTER"] | flagsDict["EDGE"]))
 
@@ -1554,8 +1584,8 @@ def plotCounts(data, matched, refOnly, spurious, blended, ss=None, calexp=None,
                 bad = np.logical_or(bad, np.logical_not(isStar))
             else:
                 bad = np.logical_or(bad, isStar)
-                
-        mags = mags[np.logical_not(bad)]
+                 
+        mags = data.getMagsByType(magType, np.logical_not(bad), mags)
 
         xyPos.append(zip(mags, xAstrom[np.logical_not(bad)], yAstrom[np.logical_not(bad)]))
         arrays.append(np.histogram(mags, bins)[0])
@@ -1563,7 +1593,12 @@ def plotCounts(data, matched, refOnly, spurious, blended, ss=None, calexp=None,
     if ss:
         m, x, y = [], [], []
         for s in ss:
-            m.append(calexp.getCalib().getMagnitude(getFlux(s, magType)))
+            try:
+                mag = calexp.getCalib().getMagnitude(getFlux(s, magType))
+            except pexExcept.LsstCppException:
+                mag = np.nan
+                
+            m.append(mag)
             x.append(s.getXAstrom())
             y.append(s.getYAstrom())
 
@@ -1590,7 +1625,8 @@ def plotCounts(data, matched, refOnly, spurious, blended, ss=None, calexp=None,
     #
     fig = getMpFigure(fig)
 
-    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
+    plottingArea = (0.1, 0.1, 0.85, 0.80)
+    axes = fig.add_axes(plottingArea)
 
     kwargs = {}
     if stacked:
@@ -1622,12 +1658,28 @@ def plotCounts(data, matched, refOnly, spurious, blended, ss=None, calexp=None,
         axes.bar(left, arrays[3], width=dmag, log=log, label="spurious", alpha=alpha, color="red")
 
     axes.legend(loc=2)
-    axes.set_xlim(magmin, magmax)
+    axes.set_xlim(magmin - 0.75*dmag, magmax)
     axes.set_ylim(0.5 if log else -1, 1.05*max(arrays[0] + arrays[1] + arrays[2] +
                                                arrays[3]*(1 if includeSpurious else 0)))
     axes.set_xlabel(magType)
 
     axes.set_title(title)
+
+    if completeness:
+        detected = arrays[0] + arrays[1]
+        missed = arrays[2]
+
+        detected[detected + missed == 0] = 1
+        completeness = 1.0*detected/(detected + missed)
+
+        axes2 = fig.add_axes(plottingArea, frameon=False)
+        axes2.yaxis.tick_right()
+        axes2.plot(bins[:-1], completeness, color="black")
+        axes2.set_xlim(axes.get_xlim())
+        axes2.yaxis.set_label_position('right')
+        axes2.set_ylabel('Completeness')
+        axes2.set_ylim(-0.05, 1.05)
+        axes.set_yticks([])
 
     fig.show()
 
@@ -1855,6 +1907,8 @@ def psf(exposure, ngrid=40, fig=None):
 def getFlux(s, magType="psf"):
     if magType == "ap":
         return s.getApFlux()
+    elif magType == "inst":
+        return s.getInstFlux()
     elif magType == "model":
         return s.getModelFlux()
     elif magType == "psf":
@@ -1984,7 +2038,6 @@ class EventHandler(object):
                     ds9.pan(x, y, frame=frame)
                 ds9.cmdBuffer.flush()
         else:
-            print "RHL ev", ev.key
             pass
 
 def showPsfResiduals(data, dataId, fluxLim=9e4, sigma=0, frame=0, **kwargs):
