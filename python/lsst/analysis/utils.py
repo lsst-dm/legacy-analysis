@@ -951,7 +951,8 @@ def plotDmag(data, magType1="model", magType2="psf", maglim=20, markersize=1, co
         raise RuntimeError("Please call da.getMagsByVisit, then try again")
 
     bad = np.bitwise_and(data.flags, (flagsDict["INTERP_CENTER"] | flagsDict["EDGE"]))
-    good = np.logical_not(bad)
+    suspect = np.bitwise_and(data.flags, (flagsDict["INTERP"] | flagsDict["SATUR"]))
+    good = np.logical_and(np.logical_not(bad), np.logical_not(suspect))
 
     if False:
         amp30 = np.logical_and(data.xAstrom > 1526, data.xAstrom < 2036)
@@ -981,6 +982,8 @@ def plotDmag(data, magType1="model", magType2="psf", maglim=20, markersize=1, co
     color2 = "green"
     axes.plot(mag1[nonStellar], delta[nonStellar], "o", markersize=markersize, markeredgewidth=0, color=color)
     axes.plot(mag1[stellar], delta[stellar], "o", markersize=markersize, markeredgewidth=0, color=color2)
+    axes.plot(mag1[suspect], delta[suspect], "o", markersize=markersize, markeredgewidth=0, color="blue")
+    axes.plot(mag1[bad], delta[bad], "+", markersize=markersize, markeredgewidth=0, color="red")
     axes.plot((0, 30), (0, 0), "b-")
 
     if False:
