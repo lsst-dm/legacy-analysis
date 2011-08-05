@@ -220,8 +220,13 @@ def makeMapperInfo(mapper):
             ccds = set()
             visits = set()
             for dataId in dataIds:
-                filters.add(afwImage.Filter(butler.get("calexp_md", **dataId)).getName())
-                ccds.add(dataId["ccd"])
+                if dataId["ccd"] == None:
+                    did = dataId.copy(); did["ccd"] = 0
+                    filters.add(afwImage.Filter(butler.get("calexp_md", **did)).getName())
+                    ccds.add("all")
+                else:
+                    filters.add(afwImage.Filter(butler.get("calexp_md", **dataId)).getName())
+                    ccds.add(dataId["ccd"])
                 visits.add(dataId["visit"])
 
             ccds = sorted(list(ccds))
@@ -353,6 +358,25 @@ def makeSubplots(figure, nx=2, ny=2):
     """Return a generator of a set of subplots"""
     for window in range(nx*ny):  
         yield figure.add_subplot(nx, ny, window + 1) # 1-indexed
+
+class DataId(dict):
+    """A class to represent an dataset, as specified by e.g. visit/ccd
+
+    Note that DataId inherits from dict
+    """
+    def __init__(self, *args, **kwargs):
+        dict.__init__(self, *args, **kwargs)
+
+    def __str__(self):
+        return butler.mapperInfo.dataIdToTitle([self])
+
+    def copy(self, **kwargs):
+        """Return a copy, setting any fields specified by kwargs"""
+        new = DataId(self)
+        for k, v in kwargs.items():
+            new[k] = v
+
+        return new
 
 class Data(object):
     def __init__(self, *args, **kwargs):
@@ -595,7 +619,7 @@ raft or sensor may be None (meaning get all)
 
         d = self.lookupDataByVisit("src", dataId)
         if not d:
-            raise RuntimeError("Unable to find any data that matches your requirements")
+            return []
 
         self.setVRS(False, **dataId)
 
@@ -610,12 +634,18 @@ raft or sensor may be None (meaning get all)
         if nSensor > 0:
             d[visit] = d[visit][0:nSensor]
 
-        return d[visit]
+        return [DataId(did) for did in d[visit]]
 
     def getMagsByVisit(self, dataId, nSensor=0):
         """Set the "self.magnitudes" for a visit"""
 
-        dataIds = self.expandDataId(dataId, nSensor)
+        try:
+            dataId.count
+        except:
+            dataId = [dataId]
+
+        dataIds = sum([self.expandDataId(did, nSensor) for did in dataId], [])
+        dataIds = [d for d in dataIds if d]
 
         ids, flags, stellar, xAstrom, yAstrom, apMags, instMags, modelMags, psfMags = \
              None, None, None, None, None, None, None, None, None
@@ -2066,8 +2096,8 @@ def showPsfResiduals(data, dataId, fluxLim=9e4, sigma=0, frame=0, **kwargs):
 
     return mos.makeMosaic(frame=frame, title="%s %s" % (data.name.split()[-1], data.name.split()[0][-5:-1]), mode=5)
 
-def showStackedPsfResiduals(data=None, dataId={}, exposure=None, sourceSet=None,
-                            magType="psf", magMin=14, magMax=22, dmag=0.5,
+def showStackedPsfResiduals(data=None, dataId={}, exposure=None, sourceSet=None, sigma=None,
+                            magType="psf", magMin=14, magMax=22, dmag=0.5, gutter=4,
                             normalize=True, frame=None):
     """Stack PSF residuals binned by magnitude"""
 
@@ -2076,6 +2106,7 @@ def showStackedPsfResiduals(data=None, dataId={}, exposure=None, sourceSet=None,
             raise RuntimeError("Please specify Data and dataId or an exposure and sourceSet")
         if not exposure:
             exposure = data.getDataset("calexp", dataId)[0]
+                
         if not sourceSet:
             sourceSet = data.getSources(dataId)[0]
 
@@ -2089,6 +2120,7 @@ def showStackedPsfResiduals(data=None, dataId={}, exposure=None, sourceSet=None,
     #
     # Make the images that we'll stack into
     #
+    magMax -= 1e-4
     def bin(mag):
         return int((mag - magMin)/dmag)
     nbin = bin(magMax) + 1
@@ -2096,7 +2128,7 @@ def showStackedPsfResiduals(data=None, dataId={}, exposure=None, sourceSet=None,
     residualImages = []
     for i in range(nbin):
         residualImages.append([Image(psfWidth, psfHeight), Image(psfWidth, psfHeight),
-                               magMin + i*dmag + 0.5, 0])
+                               magMin + (i + 0.5)*dmag, 0])
 
     for s in sourceSet:
         x, y = s.getXAstrom(), s.getYAstrom()
@@ -2129,14 +2161,21 @@ def showStackedPsfResiduals(data=None, dataId={}, exposure=None, sourceSet=None,
         residualImages[bin(mag)][1] += expIm
         residualImages[bin(mag)][3] += 1
         
-    objects = ds9Utils.Mosaic()
-    residuals = ds9Utils.Mosaic()
+    objects = ds9Utils.Mosaic(gutter=gutter)
+    residuals = ds9Utils.Mosaic(gutter=gutter)
 
     for obj, res, mag, n in residualImages:
         if normalize and n > 0:
             peak = afwMath.makeStatistics(obj, afwMath.MAX).getValue()
             obj /= peak
             res /= peak
+
+        if sigma > 0:
+            gaussFunc = afwMath.GaussianFunction1D(sigma)
+            kernel = afwMath.SeparableKernel(int(5*sigma + 1), int(5*sigma + 1), gaussFunc, gaussFunc)
+            cres = res.Factory(res, True)
+            afwMath.convolve(cres, res, kernel, afwMath.ConvolutionControl(True, True))
+            res = cres
 
         lab = "%.2f %d" % (mag, n) if n else ""
         objects.append(obj, lab)
@@ -2147,19 +2186,80 @@ def showStackedPsfResiduals(data=None, dataId={}, exposure=None, sourceSet=None,
     nx = 2
     mosaics.append(objects.makeMosaic(mode=nx, title=title, frame=frame))
     mosaics.append(residuals.makeMosaic(mode=nx, title=title, frame=None if frame is None else frame+1))
+    mosaics.append([(mag, n) for obj, res, mag, n in residualImages])
 
     return mosaics
 
-def showStackedPsfResidualsCamera(data, dataId, frame=0, **kwargs):
-    """Suprime cam specific!"""
+def showStackedPsfResidualsCamera(data, dataId, frame=0, overlay=False, normalize=False, **kwargs):
+    """
+    Show the stackedPsfResiduals laid out in true camera positions (unless overlay is True, in which case the
+    chip are simply added
 
-    mos = ds9Utils.Mosaic(gutter=2, background=0.02)
+    Position of CCDs in Suprime cam specific!
+
+    """
+
+    subGutter, gutter = 4, 2
+    mos = ds9Utils.Mosaic(gutter=gutter, background=0.02)
 
     dataId = dataId.copy()
-    for ccd in (8, 9, 5, 4, 3, 6, 7, 2, 1, 0,):
+
+    mags, n = None, None
+
+    ccds = (8, 9, 5, 4, 3, 6, 7, 2, 1, 0,)
+    for ccd in ccds:
         dataId["ccd"] = ccd
 
-        mos.append(showStackedPsfResiduals(data, dataId, frame=None, **kwargs)[1], "%d" % ccd)
+        try:
+            object, resid, labels = showStackedPsfResiduals(data, dataId, normalize=not overlay and normalize,
+                                                            gutter=subGutter, frame=None, **kwargs)
+        except (RuntimeError, TypeError), e:
+            print "Failed to return residuals for %s: %s" % (dataId, e)
+            continue
+            
+        if not mags:
+            mags  = [m for m, n in labels]
+            nstar = np.array([m for m, n in labels])
+        else:
+            nstar += [n for m, n in labels]
 
-    return mos.makeMosaic(frame=frame, title="%s %s" % (data.name.split()[-1], data.name.split()[0][-5:-1]), mode=5)
+        if overlay:
+            if not mos.images:
+                mos.append(resid)
+            else:
+                mos.images[0] += resid
+        else:
+            mos.append(resid, "%d" % ccd)
 
+    im = mos.makeMosaic(frame=None if overlay else frame,
+                        title="%s %s" % (data.name.split()[-1], data.name.split()[0][-5:-1]),
+                        mode=1 if overlay else len(ccds)//2)
+
+    if overlay:
+        w, h = im.getDimensions()
+        npanel = len(mags); nx = 2; ny = npanel//nx
+        if ny*nx != npanel:
+            ny += 1
+            
+        w = (w - (nx - 1)*subGutter)//nx
+        h = (h - (ny - 1)*subGutter)/ny
+
+        labs = []
+        for i, mn in enumerate(zip(mags, nstar)):
+            m, n = mn
+            ix, iy = i%nx, i//nx
+            x, y = ix*(w + subGutter), iy*(h + subGutter)
+            bbox = afwGeom.BoxI(afwGeom.PointI(x, y), afwGeom.ExtentI(w, h))
+            sim = im.Factory(im, bbox, afwImage.PARENT)
+
+            peak = afwMath.makeStatistics(sim, afwMath.MAX).getValue()
+            
+            sim /= peak
+
+            labs.append(["%.2f %d" % (m, n), x + 0.5*w, y])
+
+        ds9.mtv(im, frame=frame, title=str(dataId))
+        for lab, x, y in labs:
+            ds9.dot(lab, x, y, frame=frame)
+
+    return im
