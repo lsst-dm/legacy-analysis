@@ -830,6 +830,11 @@ def getMagsFromSS(ss, dataId):
 
     calexp_md = butler.get('calexp_md', **dataId)
     calib = afwImage.Calib(calexp_md)
+    fluxMag0, fluxMag0Err = calib.getFluxMag0()
+    if fluxMag0 <= 0.0:
+        fluxMag0 = 1e12
+        print >> sys.stderr, "Setting fluxMag0 to %g" % fluxMag0
+        calib.setFluxMag0(fluxMag0, fluxMag0Err)
 
     for i in range(len(ss)):
         try:
