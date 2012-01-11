@@ -1,8 +1,5 @@
-
-# /
-/.sconsign.dblite
-/config.log
-/.sconf_temp
-
-# /doc/
+.sconsign.dblite
+config.log
+.sconf_temp
+*.pyc
 /doc/htmlDir
