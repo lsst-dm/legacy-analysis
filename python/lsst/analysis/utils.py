@@ -237,7 +237,7 @@ def makeMapperInfo(mapper):
                 print >> sys.stderr, \
                       "I don't know how to make a title out of multiple visits and filters: %s %s" % \
                       (visits, filters)
-                visits = visits[0]
+                visits = visits[0:1]
 
             title = "%s CCD%s [%s]" % \
                     (", ".join([str(x) for x in visits]), getCcdName(ccds), ", ".join(filters))
