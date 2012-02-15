@@ -1054,7 +1054,7 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     mag2 = data.getMagsByType(magType2, good)
     delta = mag1 - mag2
 
-    locus = np.logical_and(mag1 > magmin, mag1 < maglim, np.abs(delta - meanDelta) < sgVal)
+    locus = np.logical_and(np.logical_and(mag1 > magmin, mag1 < maglim), np.abs(delta - meanDelta) < sgVal)
 
     stellar = data.stellar[good] > 0.99
     nonStellar = np.logical_not(stellar)
@@ -1078,11 +1078,10 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
                 print "Adjusting mean for CCD %d: %s" % (ccd, e)
 
     if False:
-        axes.plot(mag2[locus], delta[locus], "o", markersize=2*markersize, color="blue")
-    else:
-        axes.plot((magmin, maglim, maglim, magmin, magmin),
-                  meanDelta + sgVal*np.array([-1, -1, 1, 1, -1]), "b:")
-        axes.plot((0, 30), meanDelta + np.array([0, 0]), "b-")
+        axes.plot(mag1[locus], delta[locus], "o", markersize=2*markersize, color="blue")
+
+    axes.plot((magmin, maglim, maglim, magmin, magmin), meanDelta + sgVal*np.array([-1, -1, 1, 1, -1]), "b:")
+    axes.plot((0, 30), meanDelta + np.array([0, 0]), "b-")
 
     color2 = "green"
     axes.plot(mag1[nonStellar], delta[nonStellar], "o", markersize=markersize, markeredgewidth=0, color=color)
