@@ -439,7 +439,7 @@ class Data(object):
                     registry = f
                     break
             if not registry:
-                raise RuntimeError("I'm unable to find your registry in %s", registryRoot)
+                raise RuntimeError("I'm unable to find your registry in %s" % registryRoot)
 
         Mapper = getMapper(registryRoot, defaultMapper=LsstSimMapper)
         try:
