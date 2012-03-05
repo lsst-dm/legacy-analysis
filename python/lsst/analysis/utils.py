@@ -2516,3 +2516,121 @@ def showStackedPsfResidualsCamera(data, dataId, frame=0, overlay=False, normaliz
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
+def smooth(x, windowLen, windowType="boxcar"):
+    """Adapted from http://www.scipy.org/Cookbook/SignalSmooth"""
+    if x.ndim != 1:
+        raise ValueError("smooth only accepts 1 dimension arrays.")
+ 
+    if x.size < windowLen:
+        raise ValueError("Input vector needs to be bigger than window size.")
+
+    if windowLen < 3:
+        return x
+
+    if windowType == "boxcar":
+        w = np.ones(windowLen,'d')
+    elif windowType == "hamming":
+        w = np.hamming(windowLen)
+    elif windowType == "hanning":
+        w = np.hanning(windowLen)
+    elif windowType == "bartlett":
+        w = np.bartlett(windowLen)
+    elif windowType == "blackman":
+        w = np.blackman(windowLen)
+    else:
+        raise ValueError("windowType %s is not one of 'boxcar', 'hanning', 'hamming', 'bartlett', 'blackman'"
+                         % windowType)
+
+    s = np.r_[x[windowLen-1:0:-1],x,x[-1:-windowLen:-1]]
+
+    y = np.convolve(w/w.sum(), s, mode='valid')
+
+    return y[windowLen//2:-windowLen//2 + 1]
+
+def plotImageHistogram(calexp, minDN=None, maxDN=None, binwidth=None,
+                       bitmask=["DETECTED", "EDGE"], showStats=False,
+                       windowLen=0, windowType='hamming',
+                       title=None, log=False, showUnclipped=False, fig=None):
+    """Plot a histogram of image pixels
+    @param calexp The Exposure to process
+    @param minDN    The minimum value to plot (default: -maxDN)
+    @param maxDN    The maximum value to plot (default: 1000)
+    @param binwidth The width of the bins (default: 1)
+    @param bitmask Hex mask for pixels to ignore, or list of bit names (default: ["DETECTED"])
+    @param showStats Show median etc. estimated from the Exposure
+    @param title
+    @param log
+    """
+    if maxDN is None:
+        maxDN = 1000
+    if minDN is None:
+        minDN = -maxDN
+    if binwidth is None:
+        binwidth = 1
+
+    img = calexp.getMaskedImage().getImage()
+    msk = calexp.getMaskedImage().getMask()
+    try:
+        _bitmask = 0x0
+        for n in bitmask:
+            _bitmask |= msk.getPlaneBitMask(n)
+        bitmask = _bitmask
+    except TypeError:
+        bitmask = _bitmask
+
+    img = img.getArray()
+    msk = msk.getArray()
+   
+    x,y = np.where(np.logical_not(np.bitwise_and(msk, bitmask)))
+
+    bins = np.arange(minDN, maxDN, binwidth)
+    sky = np.histogram(img[x,y], bins)[0]
+    if showUnclipped:
+        unclipped = np.histogram(img, bins)[0]
+
+    fig = getMpFigure(fig)
+
+    plottingArea = (0.1, 0.1, 0.85, 0.80)
+    axes = fig.add_axes(plottingArea)
+
+    if showUnclipped:
+        axes.bar(bins[0:-1] - 0.5*binwidth, unclipped, width=binwidth, log=log,
+                 color="red", linewidth=0, alpha=0.8)
+    axes.bar(bins[0:-1] - 0.5*binwidth, sky, width=binwidth, log=log,
+             color="green", linewidth=0, alpha=0.8)
+    if windowLen > 3:
+        axes.bar(bins[0:-1] - 0.5*binwidth, smooth(sky, windowLen, windowType), width=binwidth, log=log,
+                 color="blue", linewidth=0, alpha=0.4)
+    axes.set_xlim(minDN - 0.75*binwidth, maxDN - 1.25*binwidth)
+    axes.set_xlabel("DN")
+
+    axes.set_ylim(axes.get_ylim()[0], 1.05*axes.get_ylim()[1])
+    if log:
+        ymin, ymax = axes.get_ylim()
+        axes.set_ylim(max([0.5, ymin]), ymax)
+        
+    if title:
+        axes.set_title(title)
+
+    if showStats:
+        sctrl = afwMath.StatisticsControl()
+        sctrl.setAndMask(bitmask)
+
+        vals = ["MEAN", "MEDIAN", "MEANCLIP", "STDEVCLIP",]
+        stats = afwMath.makeStatistics(calexp.getMaskedImage(),
+                                       reduce(lambda x, y:
+                                                  x | afwMath.stringToStatisticsProperty(y), vals, 0), sctrl)
+
+        ctypes = ["red", "blue", "green", "yellow", "cyan"]
+        for i, v in enumerate(vals):
+            val = stats.getValue(afwMath.stringToStatisticsProperty(v))
+            axes.plot((val, val), axes.get_ylim(), linestyle="-", color=ctypes[i%len(ctypes)],
+                      label="%-9s %.2f" % (v, val))
+        i += 1
+        axes.plot((0, 0), axes.get_ylim(), linestyle="--", color=ctypes[i%len(ctypes)])
+            
+        axes.legend(loc=1)
+
+    fig.show()
+
+    return fig
