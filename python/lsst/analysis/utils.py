@@ -2037,11 +2037,13 @@ def getMatches(ss, refCat, radius=2):
             
     return matched, spurious, refOnly
 
-def subtractModels(data, dataId, magType="psf", frame=0, subtractedOnly=False, showExposure=True, ccd=None):
+def subtractModels(data, dataId, magType="psf", frame=0, subtractedOnly=False, showExposure=True, ccd=None,
+                   fitAmplitude=False):
     """Show and return all the images for some objectId and filterId (a maximum of maxDs9 are displayed, starting at ds9 frame0).
 If you specify visits, only that set of visits are considered for display
 If showExposure is False, show the Image not the Exposure
 If subtractedOnly is True, don't show the unsubtracted images
+If fitAmplitude, fit the object's amplitudes rather than using the measured fluxes
     """
 
     if ccd is not None:
@@ -2055,10 +2057,13 @@ If subtractedOnly is True, don't show the unsubtracted images
     subtracted =  exp.Factory(exp, True)
 
     for s in data.getSources(dataId)[0]:
+        if (s.getFlagForDetection() & flagsDict["SATUR_CENTER"]):
+            continue
+
+        flux = np.nan if fitAmplitude else getFlux(s, magType)
         try:
             if s.getApDia() > 0.5:
-                measAlg.subtractPsf(psf, subtracted.getMaskedImage(), s.getXAstrom(), s.getYAstrom(),
-                                    getFlux(s, magType))
+                measAlg.subtractPsf(psf, subtracted.getMaskedImage(), s.getXAstrom(), s.getYAstrom(), flux)
         except pexExcept.LsstCppException, e:
             pass
 
