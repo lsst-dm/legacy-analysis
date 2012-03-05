@@ -1020,7 +1020,7 @@ def getFluxMag0DB(visit, raft, sensor, db=None):
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 def plotDmag(data, magType1="model", magType2="psf", maglim=20, magmin=14,
-             sgVal=0.05, meanDelta=0.0, adjustMean=False,
+             showMedians=False, sgVal=0.05, meanDelta=0.0, adjustMean=False,
              xmin=None, xmax=None, ymin=None, ymax=None,
              title="+", markersize=1, color="red", frames=[0], fig=None):
     """Plot (magType1 - magType2) v. magType1 mags (e.g. "model" and "psf")
@@ -1091,6 +1091,16 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     axes.plot(mag1[suspect], delta[suspect], "o", markersize=markersize, markeredgewidth=0, color="blue")
     axes.plot(mag1[bad], delta[bad], "+", markersize=markersize, markeredgewidth=0, color="red")
     #axes.plot((0, 30), (0, 0), "b-")
+
+    if showMedians:
+        binwidth = 1.0
+        bins = np.arange(int(magmin), int(max(mag1[stellar])), binwidth)
+        vals = np.empty_like(bins)
+        for i in range(len(bins) - 1):
+            inBin = np.logical_and(mag1 > bins[i], mag1 <= bins[i] + binwidth)
+            vals[i] = np.median(delta[np.where(np.logical_and(stellar, inBin))])
+
+        axes.plot(bins + 0.5*binwidth, vals, linestyle="-", marker="o", color="cyan")
 
     if False:
         if False:                           # clump
