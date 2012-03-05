@@ -504,7 +504,8 @@ class Data(object):
 
         return self.dataSets
 
-    def getDataset(self, dataType, dataId, ids=True, calibrate=False, setMask=None, fixOrientation=None):
+    def getDataset(self, dataType, dataId, ids=True, calibrate=False, setMask=None, fixOrientation=None,
+                   fixAmpLevels=False):
         """Get all the data of the given type (e.g. "psf"); visit may be None (meaning use default);
 raft or sensor may be None (meaning get all)
 """
@@ -520,7 +521,7 @@ raft or sensor may be None (meaning get all)
                 raise RuntimeError("fixOrientation only makes sense when reading an eimage")
 
         if dataType in butler.mapperInfo.getTrimmableData():
-            return [butler.mapperInfo.assembleCcd(dataType, inButler, dataId)]
+            return [butler.mapperInfo.assembleCcd(dataType, inButler, dataId, fixAmpLevels=fixAmpLevels)]
         elif dataType in ("eimage",):
             sdataId = dataId.copy(); sdataId["snap"] = dataId.get("snap", 0)
             raw_filename = inButler.get('raw_filename', channel='0,0', **sdataId)[0]
@@ -2237,13 +2238,13 @@ If bin is specified, it should be an integer > 1;  the output file will be binne
 
     afwRgb.RgbImageF(image, image, image, afwRgb.asinhMappingF(min, max - min, Q)).writeTiff(rgbFile)
 
-def assembleCcdLsst(dataType, butler, dataId, snap=0, reNorm=False):
+def assembleCcdLsst(dataType, butler, dataId, snap=0, fixAmpLevels=False):
     """Return an Exposure of a raw data frame (or related image stored per-amp such as a flat or bias)
 
     @param dataType	Desired type (e.g. "raw")
     @param butler       An input butler
     @param snap	        The desired snap, if appropriate
-    @param reNorm       Renormalise each amp image to unit gain
+    @param fixAmpLevels       Renormalise each amp image to unit gain
     @param dataId       Dictionary of visit, ccd, etc.
     """
     if not ipIsr:
@@ -2279,16 +2280,28 @@ def assembleCcdLsst(dataType, butler, dataId, snap=0, reNorm=False):
             
         ampList.append(exp)
 
-    return ipIsr.assembleCcd(ampList, ccd, reNorm=reNorm)
+    return ipIsr.assembleCcd(ampList, ccd, fixAmpLevels=fixAmpLevels)
 
-def assembleCcdSubaru(dataType, butler, dataId):
+def assembleCcdSubaru(dataType, butler, dataId, fixAmpLevels=False):
     """Return an Exposure of a raw data frame (or related image stored per-amp such as a flat or bias)
 
     @param dataType	Desired type (e.g. "raw")
     @param butler       An input butler
     @param dataId       Dictionary of visit, ccd, etc.
     """
-    return cameraGeomUtils.trimExposure(butler.get(dataType, **dataId))
+    exp = cameraGeomUtils.trimExposure(butler.get(dataType, **dataId))
+    if fixAmpLevels:
+        ampWidth = 512
+        for x in range(4):
+            bbox = afwGeom.BoxI(afwGeom.PointI(ampWidth*x, 0), afwGeom.ExtentI(ampWidth, exp.getHeight()))
+            smi = exp.Factory(exp, bbox).getMaskedImage()
+            median = afwMath.makeStatistics(smi, afwMath.MEDIAN).getValue()
+            if x == 0:
+                median0 = median
+            else:
+                smi += int(median0 - median + 0.5)
+
+    return exp
 
 class EventHandler(object):
     """A class to handle key strokes with matplotlib displays"""
