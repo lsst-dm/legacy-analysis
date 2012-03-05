@@ -457,7 +457,7 @@ class Data(object):
         if rerun:
             rerunName = rerun
         else:
-            bdr0 = os.path.split(butlerDataRoot)[0] # chop off last element (e.g. "update")
+            bdr0 = butlerDataRoot # os.path.split(butlerDataRoot)[0] # chop off last element (e.g. "update")
             if os.path.islink(bdr0):
                 bdr0 = os.readlink(bdr0)
 
