@@ -704,6 +704,8 @@ ccd may be a list"""
 
     def getCalibObjects(self, dataId, nSensor=0, fixup=False, useDB=False):
         dataIds = self.expandDataId(dataId, nSensor)
+        if not dataIds:
+            raise RuntimeError("%s doesn't expand to any valid dataIds" % dataId)
 
         self.setVRS([dataIds])
 
