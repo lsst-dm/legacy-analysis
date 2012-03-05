@@ -2049,6 +2049,7 @@ If subtractedOnly is True, don't show the unsubtracted images
         dataId["ccd"] = ccd
 
     exp = data.getDataset("calexp", dataId)[0]
+    exp.getPsf().setDetector(exp.getDetector())
     psf = exp.getPsf()
 
     subtracted =  exp.Factory(exp, True)
