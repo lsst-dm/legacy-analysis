@@ -2601,44 +2601,67 @@ def smooth(x, windowLen, windowType="boxcar"):
 
 def plotImageHistogram(calexp, minDN=None, maxDN=None, binwidth=None,
                        bitmask=["DETECTED", "EDGE"], showStats=False,
-                       windowLen=0, windowType='hamming',
+                       windowLen=0, windowType='hamming', maxBins=1000,
                        title=None, log=False, showUnclipped=False, fig=None):
     """Plot a histogram of image pixels
-    @param calexp The Exposure to process
+    @param calexp The Exposure/MaskedImage/Image to process
     @param minDN    The minimum value to plot (default: -maxDN)
     @param maxDN    The maximum value to plot (default: 1000)
     @param binwidth The width of the bins (default: 1)
+    @param maxBins  The maximum number of bins in the histogram
     @param bitmask Hex mask for pixels to ignore, or list of bit names (default: ["DETECTED"])
     @param showStats Show median etc. estimated from the Exposure
-    @param title
-    @param log
+    @param title    Title of plot
+    @param log      Take log of histogram?
     """
+
+    try:
+        mi = calexp.getMaskedImage()
+    except AttributeError:
+        mi = calexp
+
+    try:
+        img = mi.getImage()
+    except AttributeError:
+        img = mi
+
+    try:
+        msk = mi.getMask()
+    except AttributeError:
+        msk = None
+
+    if msk is not None:
+        try:
+            _bitmask = 0x0
+            for n in bitmask:
+                _bitmask |= msk.getPlaneBitMask(n)
+            bitmask = _bitmask
+        except TypeError:
+            bitmask = _bitmask
+
+    img = img.getArray()
+    if msk is not None:
+        msk = msk.getArray()
+   
     if maxDN is None:
-        maxDN = 1000
+        maxDN = np.max(img)
     if minDN is None:
-        minDN = -maxDN
+        minDN = np.min(img)
     if binwidth is None:
         binwidth = 1
 
-    img = calexp.getMaskedImage().getImage()
-    msk = calexp.getMaskedImage().getMask()
-    try:
-        _bitmask = 0x0
-        for n in bitmask:
-            _bitmask |= msk.getPlaneBitMask(n)
-        bitmask = _bitmask
-    except TypeError:
-        bitmask = _bitmask
-
-    img = img.getArray()
-    msk = msk.getArray()
-   
-    x,y = np.where(np.logical_not(np.bitwise_and(msk, bitmask)))
-
     bins = np.arange(minDN, maxDN, binwidth)
-    sky = np.histogram(img[x,y], bins)[0]
-    if showUnclipped:
-        unclipped = np.histogram(img, bins)[0]
+    if len(bins) > maxBins:
+        raise RuntimeError("Too many bins: %d > maxBins == %d" % (len(bins), maxBins))
+
+    if msk is None:
+        sky = np.histogram(img, bins)[0]
+        showUnclipped = False
+    else:
+        x,y = np.where(np.logical_not(np.bitwise_and(msk, bitmask)))
+        sky = np.histogram(img[x,y], bins)[0]
+        if showUnclipped:
+            unclipped = np.histogram(img, bins)[0]
 
     fig = getMpFigure(fig)
 
@@ -2666,10 +2689,12 @@ def plotImageHistogram(calexp, minDN=None, maxDN=None, binwidth=None,
 
     if showStats:
         sctrl = afwMath.StatisticsControl()
-        sctrl.setAndMask(bitmask)
 
         vals = ["MEAN", "MEDIAN", "MEANCLIP", "STDEVCLIP",]
-        stats = afwMath.makeStatistics(calexp.getMaskedImage(),
+        if msk is not None:
+            sctrl.setAndMask(bitmask)
+
+        stats = afwMath.makeStatistics(mi,
                                        reduce(lambda x, y:
                                                   x | afwMath.stringToStatisticsProperty(y), vals, 0), sctrl)
 
