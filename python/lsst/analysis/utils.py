@@ -108,23 +108,23 @@ def getMapper(registryRoot, defaultMapper=None, mapperFile="mapper.py"):
     else:
         return Mapper
 
-def getCcdName(ccds):
-    """Convert a list of ccd numbers into a string, merging consecutive values"""
-    if not ccds:
+def getNameOfSet(vals):
+    """Convert a list of numbers into a string, merging consecutive values"""
+    if not vals:
         return ""
 
-    ccdName = []
-    ccd0 = ccds[0]; ccd1 = ccd0
-    for ccd in ccds[1:]:
-        if ccd == ccd1 + 1:
-            ccd1 = ccd
+    valName = []
+    val0 = vals[0]; val1 = val0
+    for val in vals[1:]:
+        if val == val1 + 1:
+            val1 = val
         else:
-            ccdName.append("%d-%d" % (ccd0, ccd1) if ccd1 != ccd0 else str(ccd0))
-            ccd0 = ccd; ccd1 = ccd0
+            valName.append("%d-%d" % (val0, val1) if val1 != val0 else str(val0))
+            val0 = val; val1 = val0
 
-    ccdName.append("%d-%d" % (ccd0, ccd1) if ccd1 != ccd0 else str(ccd0))
+    valName.append("%d-%d" % (val0, val1) if val1 != val0 else str(val0))
 
-    return ", ".join(ccdName)
+    return ", ".join(valName)
 
 def makeMapperInfo(mapper):
     """Return an object with extra per-mapper information (e.g. which fields fully specify an exposure)"""
@@ -231,7 +231,11 @@ def makeMapperInfo(mapper):
                     except:
                         filters.add("?")
                     ccds.add(dataId["ccd"])
-                visits.add(dataId["visit"])
+                try:
+                    visits.add(dataId["visit"])
+                except TypeError:
+                    for v in dataId["visit"]:
+                        visits.add(v)
 
             ccds = sorted(list(ccds))
             filters = sorted(list(filters))
@@ -244,7 +248,8 @@ def makeMapperInfo(mapper):
                 visits = visits[0:1]
 
             title = "%s CCD%s [%s]" % \
-                    (", ".join([str(x) for x in visits]), getCcdName(ccds), ", ".join(filters))
+                    (", ".join([str(x) for x in visits]), getNameOfSet(ccds), ", ".join(filters))
+            title = "%s CCD%s [%s]" % (getNameOfSet(visits), getNameOfSet(ccds), ", ".join(filters))
             if rerunName:
                 title += " %s" % rerunName
 
@@ -488,19 +493,24 @@ class Data(object):
         dataId = dict([(k, v) for k, v in dataId.items() if v is not None])
         fields = butler.mapperInfo.getFields(dataType)
 
+        try:
+            dataId["visit"][0]
+        except TypeError:
+            dataId["visit"] = [dataId["visit"]]
+        visits = dataId["visit"]; dataId["visit"] = None
+
         dataSets = {}
-        for vals in butler.queryMetadata("raw", "visit", fields, **dataId):
-            dataId = {}
-            for f, k in zip(fields, vals):
-                dataId[f] = k
+        for v in visits:
+            dataId["visit"] = v
+            for vals in butler.queryMetadata("raw", "visit", fields, **dataId):
+                _dataId = dict(zip(fields, vals))
 
-            v = dataId["visit"]
-            if butler.datasetExists(dataType, **dataId):
-                if not dataSets.has_key(v):
-                    dataSets[v] = []
-                dataSets[v].append(dataId)
+                if butler.datasetExists(dataType, **_dataId):
+                    if not dataSets.has_key(v):
+                        dataSets[v] = []
+                    dataSets[v].append(_dataId)
 
-        self.dataSets = dataSets
+            self.dataSets = dataSets
 
         return self.dataSets
 
@@ -629,11 +639,11 @@ raft or sensor may be None (meaning get all)
 ccd may be a list"""
         
         try:
-            ccds = [c for c in dataId["ccd"]]
+            ccds = dataId["ccd"]
             dataId["ccd"] = None        # all
         except:
             ccds = None
-            
+
         dataId = dict([(k, v) for k, v in dataId.items() if v is not None])
 
         d = self.lookupDataByVisit("src", dataId)
@@ -642,18 +652,29 @@ ccd may be a list"""
 
         self.setVRS(False, **dataId)
 
-        visit = dataId.get("visit")
+        if not dataId["visit"] and len(d) > 0:
+            dataId["visit"] = [d.keys()[0]]
 
-        if not visit and len(d) > 0:
-            visit = d.keys()[0]
+        try:
+            dataId.get("visit")[0]
+        except TypeError:
+            dataId["visit"] = [dataId.get("visit")]
 
-        if not visit:
-            raise RuntimeError("Please specify a visit")
+        dids = []
+        for visit in dataId["visit"]:
+            if not visit and len(d) > 0:
+                visit = d.keys()[0]
 
-        if nSensor > 0:
-            d[visit] = d[visit][0:nSensor]
+            if not visit:
+                raise RuntimeError("Please specify a visit")
 
-        dids = [DataId(did) for did in d[visit]]
+            if nSensor > 0:
+                d[visit] = d[visit][0:nSensor]
+
+            try:
+                dids += [DataId(did) for did in d[visit]]
+            except KeyError:
+                pass
 
         if ccds:
             dids = [d for d in dids if d["ccd"] in ccds]
