@@ -22,6 +22,7 @@ import lsst.afw.display.ds9 as ds9
 import lsst.afw.display.utils as ds9Utils
 import lsst.afw.cameraGeom as cameraGeom
 import lsst.afw.cameraGeom.utils as cameraGeomUtils
+import lsst.afw.table as afwTable
 try:
     import lsst.afw.extensions.rgb as afwRgb
 except ImportError:
@@ -40,6 +41,15 @@ try:
     from lsst.obs.suprimecam.suprimecamMapper import SuprimecamMapper
 except ImportError:
     class SuprimecamMapper(object): pass
+
+try:
+    flagsDict
+except:
+    flagsDict, i = {}, 0
+    for n in ["STAR", "flags.pixel.interpolated.center", "flags.pixel.interpolated.any",
+              "flags.pixel.saturated.center", "flags.pixel.saturated.any",
+              "flags.pixel.edge", "BINNED1", "flags.badcentroid"]:
+        flagsDict[n] = 1 << i; i += 1
 
 try:
     import lsst.ip.isr as ipIsr
@@ -76,8 +86,6 @@ except NameError:
     mpFigures = {0 : None}              # matplotlib (actually pyplot) figures
     eventHandlers = {}                  # event handlers for matplotlib figures
 
-
-flagsDict = maUtils.getDetectionFlags()
 
 def getMapper(registryRoot, defaultMapper=None, mapperFile="mapper.py"):
     """
@@ -601,8 +609,8 @@ raft or sensor may be None (meaning get all)
         dataIdMask = butler.mapperInfo.getDataIdMask(dataId)
         sources = []
         dataSets = self.dataSets
-        for pss in self.getDataset("src", dataId):
-            ss = pss.getSources()
+        for ss_file in self.getDataset("src_filename", dataId):
+            ss = afwTable.SourceCatalog.readFits(ss_file[0])
             for s in ss:
                 s.setId(s.getId() | dataIdMask)
 
@@ -755,16 +763,14 @@ ccd may be a list"""
 
     @staticmethod
     def _getCalibObjectsImpl(dataId, fixup=False, verbose=0):
-        psources = butler.get('icSrc', **dataId)
-        pmatches = butler.get('icMatch', **dataId)
+        sources = butler.get('icSrc', **dataId)
+        matches = butler.get('icMatch', **dataId)
         
         matchmeta = pmatches.getSourceMatchMetadata()
-        matches = pmatches.getSourceMatches()
-        sources = psources.getSources()
         
         useOutputSrc = False             # use fluxes from the "src", not "icSrc"
         if useOutputSrc:
-            srcs = butler.get('src', **dataId).getSources()
+            srcs = butler.get('src', **dataId)
             pmMatch = afwDetect.matchXy(sources, srcs, 1.0, True)
             for icSrc, src, d in pmMatch:
                 icSrc.setPsfFlux(src.getPsfFlux())
@@ -876,46 +882,32 @@ ccd may be a list"""
 #
 # Convert SourceSets to numpy arrays
 #
-def getMagsFromSS(ss, dataId, extraApFlux=0.0):
-    """Return numpy arrays constructed from SourceSet ss"""
-    ids = np.empty(len(ss), dtype='L')
-    flags = np.empty(len(ss), dtype='L')
-    stellar = np.empty(len(ss))
-    apMags = np.empty(len(ss))
-    instMags = np.empty(len(ss))
-    modelMags = np.empty(len(ss))
-    psfMags = np.empty(len(ss))
-    xAstrom = np.empty(len(ss))
-    yAstrom = np.empty(len(ss))
-    shape = [np.empty(len(ss)), np.empty(len(ss)), np.empty(len(ss))]
+def getMagsFromSS(table, dataId, extraApFlux=0.0):
+    """Return numpy arrays constructed from SourceTable table"""
 
-    if False:
-        global ss2
-        if ss2:
-            rad = 3.0
-            mat = afwDetect.matchXy(ss, ss2, rad)
+    nrow = len(table)
+    ss = table.getColumnView()
 
-            for src in ss:
-                src.setModelFlux(-1)
-
-            for src, src2, d in mat:
-                src.setModelFlux(src2.getApFlux())
+    ids = ss["id"]
+    flags = np.zeros(nrow, dtype=np.uint64)
+    for name, val in flagsDict.items():
+        if name == "BINNED1":
+            flags |= val
+        elif name == "STAR":
+            pass
+        else:
+            flags |= np.where(ss[name], np.uint64(val), np.uint64(0x0))
         
-    for i in range(len(ss)):
-        ids[i] = ss[i].getId()
-        flags[i] = ss[i].getFlagForDetection()
-        stellar[i] = ss[i].getApDia()
-        apMags[i]  = ss[i].getApFlux() + extraApFlux
-        instMags[i]  = ss[i].getInstFlux()
-        modelMags[i]  = ss[i].getModelFlux()
-        psfMags[i] = ss[i].getPsfFlux()
-
-        xAstrom[i] = ss[i].getXAstrom()
-        yAstrom[i] = ss[i].getYAstrom()
-
-        shape[0][i] = ss[i].getIxx()
-        shape[1][i] = ss[i].getIxy()
-        shape[2][i] = ss[i].getIyy()
+    stellar = ss["classification.extendedness"] < 0.5
+    psfMags = np.copy(ss[table.table.getPsfFluxKey()]) # we're going to convert flux to mag
+    apMags = np.copy(ss[table.table.getApFluxKey()]) + extraApFlux
+    instMags = np.copy(ss[table.table.getInstFluxKey()])
+    modelMags = np.copy(ss[table.table.getModelFluxKey()])
+    xAstrom = ss[table.table.getCentroidKey().getX()]
+    yAstrom = ss[table.table.getCentroidKey().getY()]
+    shape = [ss[table.table.getShapeKey().getIxx()],
+             ss[table.table.getShapeKey().getIxy()],
+             ss[table.table.getShapeKey().getIyy()]]
 
     calexp_md = butler.get('calexp_md', **dataId)
     calib = afwImage.Calib(calexp_md)
@@ -925,7 +917,7 @@ def getMagsFromSS(ss, dataId, extraApFlux=0.0):
         print >> sys.stderr, "Setting fluxMag0 to %g" % fluxMag0
         calib.setFluxMag0(fluxMag0, fluxMag0Err)
 
-    for i in range(len(ss)):
+    for i in range(nrow):
         try:
             apMags[i]  = calib.getMagnitude(apMags[i])
         except:
@@ -1065,8 +1057,10 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     except AttributeError:
         raise RuntimeError("Please call da.getMagsByVisit, then try again")
 
-    bad = np.bitwise_and(data.flags, (flagsDict["INTERP_CENTER"] | flagsDict["EDGE"]))
-    suspect = np.bitwise_and(data.flags, (flagsDict["INTERP"] | flagsDict["SATUR"]))
+    bad = np.bitwise_and(data.flags, (flagsDict["flags.pixel.interpolated.center"] |
+                                      flagsDict["flags.pixel.edge"]))
+    suspect = np.bitwise_and(data.flags, (flagsDict["flags.pixel.interpolated.any"] |
+                                          flagsDict["flags.pixel.saturated.any"]))
     good = np.logical_and(np.logical_not(bad), np.logical_not(suspect))
 
     if False:
@@ -1174,7 +1168,8 @@ def plotSizes(data, magType="psf",
     except AttributeError:
         raise RuntimeError("Please call da.getMagsByVisit, then try again")
 
-    bad = np.bitwise_and(data.flags, (flagsDict["INTERP_CENTER"] | flagsDict["EDGE"]))
+    bad = np.bitwise_and(data.flags, (flagsDict["flags.pixel.interpolated.center"] |
+                                      flagsDict["flags.pixel.edge"]))
     good = np.logical_not(bad)
 
     fig = getMpFigure(fig)
@@ -1223,7 +1218,8 @@ def plotDmagHistograms(data, magType1="model", magType2="psf", color="red", fig=
     except AttributeError:
         raise RuntimeError("Please call da.getMagsByVisit, then try again")
 
-    bad = np.bitwise_and(data.flags, (flagsDict["INTERP_CENTER"] | flagsDict["EDGE"]))
+    bad = np.bitwise_and(data.flags, (flagsDict["flags.pixel.interpolated.center"] |
+                                      flagsDict["flags.pixel.edge"]))
     good = np.logical_not(bad)
 
     fig = getMpFigure(fig)
@@ -1652,7 +1648,7 @@ def _getSourceSetFromQuery(data, dataId, queryStr):
         if isStar > 0:
             flag |= flagsDict["STAR"]
         if varClass != 0:                   # variable
-            flag |= flagsDict["PEAKCENTER"] # XXX
+            flag |= flagsDict["flags.badcentroid"] # XXX
         s.setFlagForDetection(flag)
 
         ss.push_back(s)
@@ -1886,7 +1882,8 @@ def plotCounts(data, matched, refOnly, spurious, blended, ss=None, calexp=None,
     for s in [matched, blended, refOnly, spurious]:
         ids, flags, stellar, xAstrom, yAstrom, shape, mags = getMagsFromSS(s, data.dataId)
 
-        bad = np.bitwise_and(flags, (flagsDict["INTERP_CENTER"] | flagsDict["EDGE"]))
+        bad = np.bitwise_and(flags, (flagsDict["flags.pixel.interpolated.center"] |
+                                     flagsDict["flags.pixel.edge"]))
 
         if stars or galaxies:
             isStar = np.bitwise_and(flags, flagsDict["STAR"])
@@ -2078,7 +2075,7 @@ If fitAmplitude, fit the object's amplitudes rather than using the measured flux
     subtracted =  exp.Factory(exp, True)
 
     for s in data.getSources(dataId)[0]:
-        if (s.getFlagForDetection() & flagsDict["SATUR_CENTER"]):
+        if (s.getFlagForDetection() & flagsDict["flags.pixel.saturated.center"]):
             continue
 
         flux = np.nan if fitAmplitude else getFlux(s, magType)
@@ -2382,8 +2379,9 @@ def showPsfResiduals(data, dataId, fluxLim=9e4, sigma=0, frame=0, **kwargs):
 
         calexp = data.getDataset("calexp", dataId)[0]
 
-        ss = [s for s in data.getSources(dataId)[0] if \
-              s.getPsfFlux() > fluxLim and not (s.getFlagForDetection() & flagsDict["SATUR"]) and
+        ss = [s for s in data.getSources(dataId)[0] if
+              s.getPsfFlux() > fluxLim and not (s.getFlagForDetection() &
+                                                flagsDict["flags.pixel.saturated.any"]) and
               abs(2.5*math.log10(s.getPsfFlux()/s.getApFlux())) < 0.05]
         im = maUtils.showPsfResiduals(calexp, ss, frame=None, **kwargs)
         if sigma > 0:
@@ -2441,7 +2439,7 @@ def showStackedPsfResiduals(data=None, dataId={}, exposure=None, sourceSet=None,
             if not (magMin <= mag <= magMax):
                 continue
 
-            if (s.getFlagForDetection() & flagsDict["SATUR"]) or \
+            if (s.getFlagForDetection() & flagsDict["flags.pixel.saturated.any"]) or \
                abs(2.5*math.log10(s.getPsfFlux()/s.getApFlux())) > 0.05:
                 continue
 
