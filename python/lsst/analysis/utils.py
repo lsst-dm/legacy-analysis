@@ -1,7 +1,5 @@
 """
 Some utilities for looking at the outputs of processing runs
-
-Currently specialised to handle ImSim outputs --- but this restriction should be lifted!
 """
 import array, math, os, re, sys
 import numpy as np
@@ -76,9 +74,37 @@ except NameError:
     mpFigures = {0 : None}              # matplotlib (actually pyplot) figures
     eventHandlers = {}                  # event handlers for matplotlib figures
 
+#
+# These functions are only useful to ease the transition to the Summer2012 Source schema
+#
+if True:
+    def getFlagForDetection(s, flagName):
+        if flagName == "STAR":
+            return s.get("classification.extendedness") < 0.5
+        elif flagName == "BINNED1":
+            return True
+        elif flagName == "PEAKCENTER":
+            keyName = "centroid.sdss.err"
+        elif flagName == "SATUR_CENTER":
+            keyName = "flags.pixel.saturated.center"
+        else:
+            raise RuntimeError("Unknown flag: %s" % (flagName))
 
-flagsDict = maUtils.getDetectionFlags()
+        return s.get(keyName)
 
+    def setFlagForDetection(s, flagName, value):
+        if flagName == "STAR":
+            s.set("classification.extendedness", 0.0 if value else 1.0)
+            return
+        elif flagName == "BINNED1":
+            return
+        elif flagName == "PEAKCENTER":
+            keyName = "centroid.sdss.err"
+        else:
+            raise RuntimeError("Unknown flag: %s" % (flagName))
+
+        s.set(keyName, value)
+    
 def getMapper(registryRoot, defaultMapper=None, mapperFile="mapper.py"):
     """
     Get proper mapper given a directory registryRoot
@@ -431,6 +457,8 @@ class Data(object):
                 if butler:
                     return butler
                 raise RuntimeError("Please specify a rerun or root")
+        else:
+            dataRoot = os.path.join(dataRoot, "rerun", rerun)        
 
         if not registryRoot:
             registryRoot = dataRoot
@@ -601,8 +629,7 @@ raft or sensor may be None (meaning get all)
         dataIdMask = butler.mapperInfo.getDataIdMask(dataId)
         sources = []
         dataSets = self.dataSets
-        for pss in self.getDataset("src", dataId):
-            ss = pss.getSources()
+        for ss in self.getDataset("src", dataId):
             for s in ss:
                 s.setId(s.getId() | dataIdMask)
 
@@ -637,9 +664,14 @@ raft or sensor may be None (meaning get all)
         """Return a list of fully qualified dataIds, given a possibly-ambiguous one
 
 ccd may be a list"""
-        
+
         try:
             ccds = dataId["ccd"]
+            if ccds is not None:
+                try:
+                    ccds[0]
+                except TypeError:
+                    ccds = [ccds]
             dataId["ccd"] = None        # all
         except:
             ccds = None
@@ -706,21 +738,23 @@ ccd may be a list"""
 
         self.name = butler.mapperInfo.dataIdToTitle(dataIds)
 
-        if not ids:
+        if ids is None:
             raise RuntimeError("Failed to read any data for %s" % " ".join([str(d) for d in dataId]))
 
-        self.ids       = np.ndarray(len(ids),       dtype='L', buffer=ids)
-        self.flags     = np.ndarray(len(flags),     dtype='L', buffer=flags)
-        self.stellar   = np.ndarray(len(stellar),   dtype='d', buffer=stellar)
-        self.xAstrom   = np.ndarray(len(xAstrom),   dtype='d', buffer=xAstrom)
-        self.yAstrom   = np.ndarray(len(yAstrom),   dtype='d', buffer=yAstrom)
+        self.ids       = ids
+        self.flags     = {}
+        for k, v in flags.items():
+            self.flags[k] = flags[k]
+        self.stellar   = stellar
+        self.xAstrom   = xAstrom
+        self.yAstrom   = yAstrom
         self.shape = []
         for i in range(len(shape)):
-            self.shape.append(np.ndarray(len(shape[i]),   dtype='d', buffer=shape[i]))
-        self.apMags    = np.ndarray(len(apMags),    dtype='d', buffer=apMags)
-        self.instMags  = np.ndarray(len(instMags),  dtype='d', buffer=instMags)
-        self.modelMags = np.ndarray(len(modelMags), dtype='d', buffer=modelMags)
-        self.psfMags   = np.ndarray(len(psfMags),   dtype='d', buffer=psfMags)
+            self.shape.append(shape[i])
+        self.apMags    = apMags
+        self.instMags  = instMags
+        self.modelMags = modelMags
+        self.psfMags   = psfMags
 
     #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
@@ -755,16 +789,15 @@ ccd may be a list"""
 
     @staticmethod
     def _getCalibObjectsImpl(dataId, fixup=False, verbose=0):
-        psources = butler.get('icSrc', **dataId)
+        sources = butler.get('icSrc', **dataId)
         pmatches = butler.get('icMatch', **dataId)
         
         matchmeta = pmatches.getSourceMatchMetadata()
         matches = pmatches.getSourceMatches()
-        sources = psources.getSources()
         
         useOutputSrc = False             # use fluxes from the "src", not "icSrc"
         if useOutputSrc:
-            srcs = butler.get('src', **dataId).getSources()
+            srcs = butler.get('src', **dataId)
             pmMatch = afwDetect.matchXy(sources, srcs, 1.0, True)
             for icSrc, src, d in pmMatch:
                 icSrc.setPsfFlux(src.getPsfFlux())
@@ -836,7 +869,7 @@ ccd may be a list"""
             ref[i].setXAstrom(x)
             ref[i].setYAstrom(y)
             if stargal[i]:
-                ref[i].setFlagForDetection(ref[i].getFlagForDetection() | flagsDict["STAR"])
+                setFlagForDetection(ref[i], "STAR", True)
             keepref.append(ref[i])
             keepi.append(i)
             
@@ -878,44 +911,25 @@ ccd may be a list"""
 #
 def getMagsFromSS(ss, dataId, extraApFlux=0.0):
     """Return numpy arrays constructed from SourceSet ss"""
-    ids = np.empty(len(ss), dtype='L')
-    flags = np.empty(len(ss), dtype='L')
-    stellar = np.empty(len(ss))
-    apMags = np.empty(len(ss))
-    instMags = np.empty(len(ss))
-    modelMags = np.empty(len(ss))
-    psfMags = np.empty(len(ss))
-    xAstrom = np.empty(len(ss))
-    yAstrom = np.empty(len(ss))
-    shape = [np.empty(len(ss)), np.empty(len(ss)), np.empty(len(ss))]
 
-    if False:
-        global ss2
-        if ss2:
-            rad = 3.0
-            mat = afwDetect.matchXy(ss, ss2, rad)
+    ssc = ss.getColumnView()
 
-            for src in ss:
-                src.setModelFlux(-1)
-
-            for src, src2, d in mat:
-                src.setModelFlux(src2.getApFlux())
-        
-    for i in range(len(ss)):
-        ids[i] = ss[i].getId()
-        flags[i] = ss[i].getFlagForDetection()
-        stellar[i] = ss[i].getApDia()
-        apMags[i]  = ss[i].getApFlux() + extraApFlux
-        instMags[i]  = ss[i].getInstFlux()
-        modelMags[i]  = ss[i].getModelFlux()
-        psfMags[i] = ss[i].getPsfFlux()
-
-        xAstrom[i] = ss[i].getXAstrom()
-        yAstrom[i] = ss[i].getYAstrom()
-
-        shape[0][i] = ss[i].getIxx()
-        shape[1][i] = ss[i].getIxy()
-        shape[2][i] = ss[i].getIyy()
+    ids = ssc.get("id")
+    flags = dict(
+        EDGE =          ssc.get("flags.pixel.edge"),
+        INTERP =        ssc.get("flags.pixel.interpolated.any"),
+        INTERP_CENTER = ssc.get("flags.pixel.interpolated.center"),
+        SATUR =         ssc.get("flags.pixel.saturated.any"),
+        SATUR_CENTER =  ssc.get("flags.pixel.saturated.center"),
+        )
+    stellar = ssc.get("classification.extendedness") < 0.5
+    apMags = ssc.getApFlux() + extraApFlux # XXX Why is ssc.get("flux.sinc") different?
+    instMags = np.array(ssc.getInstFlux())
+    modelMags = np.array(ssc.getModelFlux())
+    psfMags = np.array(ssc.getPsfFlux())
+    xAstrom = ssc.getX()
+    yAstrom = ssc.getY()
+    shape = [ssc.getIxx(), ssc.getIxy(), ssc.getIyy()]
 
     calexp_md = butler.get('calexp_md', **dataId)
     calib = afwImage.Calib(calexp_md)
@@ -949,7 +963,8 @@ def getMagsFromSS(ss, dataId, extraApFlux=0.0):
     good = np.logical_and(np.isfinite(apMags), np.isfinite(psfMags))
 
     ids = ids[good]
-    flags = flags[good]
+    for k, v in flags.items():
+        flags[k] = v[good]
     stellar = stellar[good]
     apMags = apMags[good]
     instMags = instMags[good]
@@ -967,41 +982,38 @@ def _getMagsFromSS(ss, dataId, ids=None, flags=None, stellar=None, extraApFlux=0
                    shape=None,
                    apMags=None, instMags=None, modelMags=None, psfMags=None):
     """Return python arrays constructed from SourceSet ss, and possibly extending {ap,model,psf}Mags"""
-    if not ids:
-        ids = array.array('L')
-    if not flags:
-        flags = array.array('L')
-    if not stellar:
-        stellar = array.array('d')
-    if not xAstrom:
-        xAstrom = array.array('d')
-    if not yAstrom:
-        yAstrom = array.array('d')
-    if not shape:
-        shape = [array.array('d'), array.array('d'), array.array('d')]
-    if not apMags:
-        apMags = array.array('d')
-    if not modelMags:
-        modelMags = array.array('d')
-    if not instMags:
-        instMags = array.array('d')
-    if not psfMags:
-        psfMags = array.array('d')
 
     _ids, _flags, _stellar, _xAstrom, _yAstrom, _shape, _mags = getMagsFromSS(ss, dataId, extraApFlux)
     _apMags, _instMags, _modelMags, _psfMags = _mags["ap"], _mags["inst"], _mags["model"], _mags["psf"]
 
-    ids.extend(_ids)
-    flags.extend(_flags)
-    stellar.extend(_stellar)
-    xAstrom.extend(_xAstrom)
-    yAstrom.extend(_yAstrom)
-    for i in range(len(shape)):
-        shape[i].extend(_shape[i])
-    apMags.extend(_apMags)
-    instMags.extend(_instMags)
-    modelMags.extend(_modelMags)
-    psfMags.extend(_psfMags)
+    if ids is None:
+        ids = _ids
+        flags = {}
+        for k in _flags.keys():
+            flags[k] = _flags[k]
+        stellar = _stellar
+        xAstrom = _xAstrom
+        yAstrom = _yAstrom
+        shape = []
+        for i in range(len(_shape)):
+            shape.append(_shape[i])
+        apMags = _apMags
+        instMags = _instMags
+        modelMags = _modelMags
+        psfMags = _psfMags
+    else:
+        ids = np.append(ids, _ids)
+        for k in flags.keys():
+            flags[k] = np.append(flags[k], _flags[k])
+        stellar = np.append(stellar, _stellar)
+        xAstrom = np.append(xAstrom, _xAstrom)
+        yAstrom = np.append(yAstrom, _yAstrom)
+        for i in range(len(shape)):
+            shape[i] = np.append(shape[i], _shape[i])
+        apMags = np.append(apMags, _apMags)
+        instMags = np.append(instMags, _instMags)
+        modelMags = np.append(modelMags, _modelMags)
+        psfMags = np.append(psfMags, _psfMags)
 
     return ids, flags, stellar, xAstrom, yAstrom, shape, apMags, instMags, modelMags, psfMags
 
@@ -1065,14 +1077,8 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     except AttributeError:
         raise RuntimeError("Please call da.getMagsByVisit, then try again")
 
-    bad = np.bitwise_and(data.flags, (flagsDict["INTERP_CENTER"] | flagsDict["EDGE"]))
-    suspect = np.bitwise_and(data.flags, (flagsDict["INTERP"] | flagsDict["SATUR"]))
-    good = np.logical_and(np.logical_not(bad), np.logical_not(suspect))
-
-    if False:
-        amp30 = np.logical_and(data.xAstrom > 1526, data.xAstrom < 2036)
-        amp30 = np.logical_and(amp30, data.yAstrom < 2000)
-        good = np.logical_and(good, amp30)
+    bad = data.flags["EDGE"] | data.flags["INTERP_CENTER"] | data.flags["SATUR_CENTER"]
+    good = np.logical_not(bad)
 
     mag1 = data.getMagsByType(magType1, good)
     mag2 = data.getMagsByType(magType2, good)
@@ -1080,7 +1086,7 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
 
     locus = np.logical_and(np.logical_and(mag1 > magmin, mag1 < maglim), np.abs(delta - meanDelta) < sgVal)
 
-    stellar = data.stellar[good] > 0.99
+    stellar = data.stellar[good]
     nonStellar = np.logical_not(stellar)
 
     try:
@@ -1110,8 +1116,6 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     color2 = "green"
     axes.plot(mag1[nonStellar], delta[nonStellar], "o", markersize=markersize, markeredgewidth=0, color=color)
     axes.plot(mag1[stellar], delta[stellar], "o", markersize=markersize, markeredgewidth=0, color=color2)
-    axes.plot(mag1[suspect], delta[suspect], "o", markersize=markersize, markeredgewidth=0, color="blue")
-    axes.plot(mag1[bad], delta[bad], "+", markersize=markersize, markeredgewidth=0, color="red")
     #axes.plot((0, 30), (0, 0), "b-")
 
     if showMedians:
@@ -1154,7 +1158,9 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     # Make "i" print the object's ID, p pan ds9, etc.
     #
     global eventHandlers
-    flags = data.flags[good]
+    flags = {}
+    for k, v in data.flags.items():
+        flags[k] = data.flags[k][good]
     x = data.xAstrom[good]
     y = data.yAstrom[good]
     ids = data.ids[good]
@@ -1174,7 +1180,7 @@ def plotSizes(data, magType="psf",
     except AttributeError:
         raise RuntimeError("Please call da.getMagsByVisit, then try again")
 
-    bad = np.bitwise_and(data.flags, (flagsDict["INTERP_CENTER"] | flagsDict["EDGE"]))
+    bad = np.bitwise_or(data.flags["INTERP_CENTER"], data.flags["EDGE"])
     good = np.logical_not(bad)
 
     fig = getMpFigure(fig)
@@ -1289,11 +1295,9 @@ If plotBand is provided, draw lines at +- plotBand
     if not data.matches:
         raise RuntimeError("You need to call the Data.getCalibObjects method before calling this routine")
 
-    mstars = [m for m in data.matches if
-              (m.second and (m.second.getFlagForDetection() & flagsDict["STAR"]))] # data
-    realStars = [(m.first.getFlagForDetection() & flagsDict["STAR"]) != 0          # catalogue
-                 for m in data.matches if (m.first and \
-                                           m.second and (m.second.getFlagForDetection() & flagsDict["STAR"]))]
+    mstars = [m for m in data.matches if (m.second and getFlagForDetection(m.second, "STAR"))] # data
+    realStars = [getFlagForDetection(m.first, "STAR")                                          # catalogue
+                 for m in data.matches if (m.first and getFlagForDetection(m.second, "STAR"))]
 
     if frame is not None:
         kwargs = {}
@@ -1318,7 +1322,7 @@ If plotBand is provided, draw lines at +- plotBand
 
     x = np.array([s.second.getXAstrom() for s in mstars])
     y = np.array([s.second.getYAstrom() for s in mstars])
-    flags = np.array([s.second.getFlagForDetection() for s in mstars])
+    flags = np.zeros(len(mstars)) # np.array([s.second.getFlagForDetection() for s in mstars])
     if False:
         for i in range(len(ids)):
             print "%d4 %.2f %.2f (%.2f, %.2f)" % (ids[i], refmag[i], delta[i], x[i], y[i])
@@ -1382,10 +1386,10 @@ If plotBand is provided, draw lines at +- plotBand
         raise RuntimeError("You need to call the Data.getCalibObjects method before calling this routine")
 
     mstars = [m for m in data.matches if
-              (m.second and (m.second.getFlagForDetection() & flagsDict["STAR"]))] # data
-    realStars = [(m.first.getFlagForDetection() & flagsDict["STAR"]) != 0          # catalogue
+              m.second and getFlagForDetection(m.second, "STAR")] # data
+    realStars = [getFlagForDetection(m.first, "STAR") != 0        # catalogue
                  for m in data.matches if (m.first and \
-                                           m.second and (m.second.getFlagForDetection() & flagsDict["STAR"]))]
+                                               m.second and getFlagForDetection(m.second, "STAR"))]
 
     if frame is not None:
         kwargs = {}
@@ -1411,7 +1415,7 @@ If plotBand is provided, draw lines at +- plotBand
 
     delta = refx - srcx
 
-    flags = np.array([s.second.getFlagForDetection() for s in mstars])
+    flags = np.zeros(len(mstars)) # np.array([s.second.getFlagForDetection() for s in mstars])
     if False:
         for i in range(len(ids)):
             print "%d4 %.2f %.2f (%.2f, %.2f)" % (ids[i], refmag[i], delta[i], x[i], y[i])
@@ -1476,15 +1480,15 @@ Stars are green; galaxies are red based on our processing
         for m in data.matches:
             ref, src = m.first, m.second
             x1, y1 = src.getXAstrom(), src.getYAstrom()
-            if ref.getFlagForDetection() & flagsDict["STAR"]:
+            if getFlagForDetection(ref, "STAR"):
                 ptype = "+"
-                if src.getFlagForDetection() & flagsDict["STAR"]:
+                if getFlagForDetection(src, "STAR"):
                     ctype = ds9.GREEN
                 else:
                     ctype = ds9.YELLOW
             else:
                 ptype = "o"
-                if not (src.getFlagForDetection() & flagsDict["STAR"]):
+                if not getFlagForDetection(src, "STAR"):
                     ctype = ds9.RED
                 else:
                     ctype = ds9.MAGENTA
@@ -1648,12 +1652,11 @@ def _getSourceSetFromQuery(data, dataId, queryStr):
         flux = 10**(-0.4*(mag - data.zp))
         s.setApFlux(flux); s.setPsfFlux(flux); s.setModelFlux(flux)
 
-        flag = flagsDict["BINNED1"]
+        setFlagForDetection(s, "BINNED1")
         if isStar > 0:
-            flag |= flagsDict["STAR"]
+            setFlagForDetection(s, "STAR")
         if varClass != 0:                   # variable
-            flag |= flagsDict["PEAKCENTER"] # XXX
-        s.setFlagForDetection(flag)
+            setFlagForDetection(s, "PEAKCENTER") # XXX
 
         ss.push_back(s)
 
@@ -1771,7 +1774,7 @@ def showSourceSet(sourceSet, exp=None, wcs=None, raDec=None, magmin=None, magmax
     with ds9.Buffering():
         for s in sourceSet:
             if mask:
-                if not (s.getFlagForDetection() & mask):
+                if not getFlagForDetection(s, mask): # XXX not converted to S2012
                     continue
 
             if magmax is not None:
@@ -2034,6 +2037,7 @@ def getMatches(ss, refCat, radius=2):
 
         if m.distance < radius:
             # Set the quality flags from the src, and STAR from the ref
+            # XXX Need to be converted to S2012 conventions
             ref.setFlagForDetection( ref.getFlagForDetection() |
                                     (src.getFlagForDetection() & ~flagsDict["STAR"]))
             src.setFlagForDetection( src.getFlagForDetection() |
@@ -2078,7 +2082,7 @@ If fitAmplitude, fit the object's amplitudes rather than using the measured flux
     subtracted =  exp.Factory(exp, True)
 
     for s in data.getSources(dataId)[0]:
-        if (s.getFlagForDetection() & flagsDict["SATUR_CENTER"]):
+        if getFlagForDetection(s, "SATUR_CENTER"):
             continue
 
         flux = np.nan if fitAmplitude else getFlux(s, magType)
@@ -2355,9 +2359,15 @@ class EventHandler(object):
             dist = np.hypot(self.xs - ev.xdata, self.ys - ev.ydata)
             objId = self.ids[dist == min(dist)][0]
 
+            flagsInfo = []
+            for k in sorted(self.flags.keys()):
+                if self.flags[k][objId == self.ids]:
+                    flagsInfo.append(k)
+            flagsInfo = ", ".join(flagsInfo)
+
             print "\r>>>",
-            print ("%.3f %.3f" % (ev.xdata, ev.ydata)), butler.mapperInfo.splitId(objId), \
-                  maUtils.explainDetectionFlags(long(self.flags[objId == self.ids][0])),
+            print "%.3f %.3f %s %s%20s\r" % \
+                (ev.xdata, ev.ydata, butler.mapperInfo.splitId(objId), flagsInfo, ""),
             sys.stdout.flush()
 
             if ev.key == "I":
@@ -2382,8 +2392,8 @@ def showPsfResiduals(data, dataId, fluxLim=9e4, sigma=0, frame=0, **kwargs):
 
         calexp = data.getDataset("calexp", dataId)[0]
 
-        ss = [s for s in data.getSources(dataId)[0] if \
-              s.getPsfFlux() > fluxLim and not (s.getFlagForDetection() & flagsDict["SATUR"]) and
+        ss = [s for s in data.getSources(dataId)[0] if
+              s.getPsfFlux() > fluxLim and not getFlagForDetection(s, "SATUR") and
               abs(2.5*math.log10(s.getPsfFlux()/s.getApFlux())) < 0.05]
         im = maUtils.showPsfResiduals(calexp, ss, frame=None, **kwargs)
         if sigma > 0:
@@ -2441,8 +2451,8 @@ def showStackedPsfResiduals(data=None, dataId={}, exposure=None, sourceSet=None,
             if not (magMin <= mag <= magMax):
                 continue
 
-            if (s.getFlagForDetection() & flagsDict["SATUR"]) or \
-               abs(2.5*math.log10(s.getPsfFlux()/s.getApFlux())) > 0.05:
+            if getFlagForDetection(s, "SATUR") or \
+                    abs(2.5*math.log10(s.getPsfFlux()/s.getApFlux())) > 0.05:
                 continue
 
             bbox = afwGeom.BoxI(afwGeom.PointI(int(x) - psfWidth//2, int(y) - psfHeight//2),
