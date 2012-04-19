@@ -307,6 +307,7 @@ def makeMapperInfo(mapper):
             from lsst.meas.photocal.colorterms import Colorterm
             from lsst.obs.suprimecam.colorterms import colortermsData
             SubaruMapperInfo._Colorterm = Colorterm
+            SubaruMapperInfo.getColorterm = lambda x, y : Colorterm.getColorterm(y)
             SubaruMapperInfo._Colorterm.setColorterms(colortermsData, "Hamamatsu")
 
         @staticmethod
