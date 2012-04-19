@@ -4,5 +4,6 @@ config.log
 *.pyc
 /doc/html
 /doc/*.tag
+/doc/doxygen.conf
 python/lsst/analysis/version.py
 ups/analysis.cfgc
