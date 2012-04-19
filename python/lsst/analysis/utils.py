@@ -139,16 +139,24 @@ def getNameOfSet(vals):
     if not vals:
         return ""
 
+    def addPairToName(valName, val0, val1):
+        """Add a pair of values, val0 and val1, to the valName list"""
+        sval1 = str(val1)
+        if val0 != val1:
+            pre = os.path.commonprefix([str(val0), sval1])
+            sval1 = int(sval1[len(pre):])
+        valName.append("%s-%s" % (val0, sval1) if val1 != val0 else str(val0))
+
     valName = []
     val0 = vals[0]; val1 = val0
     for val in vals[1:]:
         if val == val1 + 1:
             val1 = val
         else:
-            valName.append("%d-%d" % (val0, val1) if val1 != val0 else str(val0))
+            addPairToName(valName, val0, val1)
             val0 = val; val1 = val0
 
-    valName.append("%d-%d" % (val0, val1) if val1 != val0 else str(val0))
+    addPairToName(valName, val0, val1)
 
     return ", ".join(valName)
 
@@ -224,6 +232,11 @@ def makeMapperInfo(mapper):
         def __init__(self, Mapper):
             SubaruMapperInfo.Mapper = Mapper
 
+            from lsst.meas.photocal.colorterms import Colorterm
+            from lsst.obs.suprimecam.colorterms import colortermsData
+            SubaruMapperInfo.Colorterm = Colorterm
+            SubaruMapperInfo.Colorterm.setColorterms(colortermsData, "Hamamatsu")
+
         @staticmethod
         def getFields(dataType):
             if dataType in ("flat",):
@@ -237,6 +250,11 @@ def makeMapperInfo(mapper):
         def getTrimmableData():
             """Return a list of data products that needs to be trimmed"""
             return ("raw",)
+
+        @staticmethod
+        def photometricTransform(desiredBand, primaryMag, secondaryMag):
+            """Return the primary/secondary magnitude transformed into the desiredBand"""
+            return SubaruMapperInfo.Colorterm.transformMags(desiredBand, primaryMag, secondaryMag)
 
         @staticmethod
         def dataIdToTitle(dataIds):
@@ -256,7 +274,12 @@ def makeMapperInfo(mapper):
                         filters.add(afwImage.Filter(butler.get("calexp_md", **dataId)).getName())
                     except:
                         filters.add("?")
-                    ccds.add(dataId["ccd"])
+
+                    try:
+                        ccds.add(dataId["ccd"])
+                    except TypeError:
+                        for c in dataId["ccd"]:
+                            ccds.add(c)
                 try:
                     visits.add(dataId["visit"])
                 except TypeError:
@@ -420,7 +443,8 @@ class Data(object):
 
         self.dataId = {}
 
-        self.matches = None
+        self.matches = None             # remove me when conversion to self.matched is complete
+        self.matched = None
         self.ZP0 = 31
         self.zp = None
 
@@ -543,7 +567,7 @@ class Data(object):
         return self.dataSets
 
     def getDataset(self, dataType, dataId, ids=True, calibrate=False, setMask=None, fixOrientation=None,
-                   fixAmpLevels=False):
+                   fixAmpLevels=False, trim=True):
         """Get all the data of the given type (e.g. "psf"); visit may be None (meaning use default);
 raft or sensor may be None (meaning get all)
 """
@@ -558,7 +582,7 @@ raft or sensor may be None (meaning get all)
             if fixOrientation:
                 raise RuntimeError("fixOrientation only makes sense when reading an eimage")
 
-        if dataType in butler.mapperInfo.getTrimmableData():
+        if trim and dataType in butler.mapperInfo.getTrimmableData():
             return [butler.mapperInfo.assembleCcd(dataType, inButler, dataId, fixAmpLevels=fixAmpLevels)]
         elif dataType in ("eimage",):
             sdataId = dataId.copy(); sdataId["snap"] = dataId.get("snap", 0)
@@ -665,6 +689,7 @@ raft or sensor may be None (meaning get all)
 
 ccd may be a list"""
 
+        dataId = dataId.copy()
         try:
             ccds = dataId["ccd"]
             if ccds is not None:
@@ -758,7 +783,11 @@ ccd may be a list"""
 
     #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-    def getCalibObjects(self, dataId, nSensor=0, fixup=False, useDB=False):
+    def getCalibObjects(self, dataId, nSensor=0, useDB=False,
+                        displayType="psf", frame=None, mtv=False, verbose=False):
+        """If frame is not None then information about displayType will be plotted on ds9; if
+        mtv is true the calexp will be displayed first
+        """
         dataIds = self.expandDataId(dataId, nSensor)
         if not dataIds:
             raise RuntimeError("%s doesn't expand to any valid dataIds" % dataId)
@@ -766,162 +795,164 @@ ccd may be a list"""
         self.setVRS([dataIds])
 
         self.name = butler.mapperInfo.dataIdToTitle(dataIds)
-        filterName = afwImage.Filter(butler.get("calexp_md", **dataIds[0])).getName()
 
-        self.sources = []
-        self.matches = []
-        self.ref = []
-        self.referrs = []
-        zpArr = []
-
-        for dataId in dataIds:
-            sources, matches, ref, referrs, zp = self._getCalibObjectsImpl(dataId, fixup=fixup)
+        if frame is not None:
+            if mtv:
+                calexp = butler.get("calexp", dataIds[0])
+                ds9.mtv(calexp, title=calexp.getDetector().getId(), frame=frame)
+            else:
+                ds9.erase(frame)
             
-            self.sources += sources
-            self.matches += matches
-            self.ref += ref
-            if referrs:
-                self.referrs += referrs
+        _matched = []
+        _zp = []
+        for dataId in dataIds:
+            if verbose:
+                print "Reading %s         \r" % dataId,
+                sys.stdout.flush()
+                
+            matched, zp = self._getCalibObjectsImpl(dataId, displayType, frame, verbose)
+            
+            _matched.append(matched)
+            _zp.append(zp)
+        if verbose:
+            print
 
-            zpArr.append(zp)
+        self.matched = sum([len(m) for m in _matched])*[None]
+        self.zp = np.empty(len(self.matched))
 
-        self.zp = np.mean(zpArr)
+        start = 0
+        for i, m in enumerate(_matched):
+            end = start + len(m)
+            self.matched[start:end] = m
+            self.zp[start:end] = _zp[i]*np.ones(end - start)
+            start = end
 
     @staticmethod
-    def _getCalibObjectsImpl(dataId, fixup=False, verbose=0):
+    def _getCalibObjectsImpl(dataId, displayType, frame, verbose):
         sources = butler.get('icSrc', **dataId)
-        pmatches = butler.get('icMatch', **dataId)
-        
-        matchmeta = pmatches.getSourceMatchMetadata()
-        matches = pmatches.getSourceMatches()
-        
-        useOutputSrc = False             # use fluxes from the "src", not "icSrc"
-        if useOutputSrc:
-            srcs = butler.get('src', **dataId)
-            pmMatch = afwDetect.matchXy(sources, srcs, 1.0, True)
-            for icSrc, src, d in pmMatch:
-                icSrc.setPsfFlux(src.getPsfFlux())
+        matches = butler.get('icMatch', **dataId)
+
+        astrom = measAstrom.Astrometry(measAstrom.MeasAstromConfig())
+        matched = astrom.joinMatchListWithCatalog(matches, sources, allFluxes=True) # array of ReferenceMatch
 
         calexp_md = butler.get('calexp_md', **dataId)
         wcs = afwImage.makeWcs(calexp_md)
         W, H = calexp_md.get("NAXIS1"), calexp_md.get("NAXIS2")
-
         filterName = afwImage.Filter(butler.get("calexp_md", **dataId)).getName()
 
         calib = afwImage.Calib(calexp_md)
         zp = calib.getMagnitude(1.0)
 
-        # ref sources
-        xc, yc = 0.5*W, 0.5*H
-        radec = wcs.pixelToSky(xc, yc)
-        ra = radec.getLongitude()
-        dec = radec.getLatitude()
-        radius = wcs.pixelScale()*math.hypot(xc, yc)*1.1
-        if False:
-            print 'Image W,H', W,H
-            print 'Image center RA,Dec', ra, dec
-            print 'Searching radius', radius, 'arcsec'
-        pol = pexPolicy.Policy()
-        pol.set('matchThreshold', 30)
-        solver = measAstrom.createSolver(pol, log)
-        idName = 'id'
-        # could get this from matchlist meta...
-        anid = matchmeta.getInt('ANINDID')
-        if False:
-            print 'Searching index with ID', anid
-            print 'Using ID column name', idName
-            print 'Using filter column name', filterName
-        X = solver.getCatalogue(ra, dec, radius, filterName, idName, anid)
-        ref = X.refsources
-        inds = X.inds
+        showDistortion = False
+        if displayType == "distortion":
+            showDistortion = False
+        elif displayType in ("psf", "ap"):
+            if displayType == "ap":
+                displayType = "sinc"
+            if matched:
+                ref, src, d = matched[0]
+                sch = src.getSchema()
+                fluxKey = sch.find("flux.%s" % displayType).getKey()
+                #
+                # Now the reference magnitude, which may need a colour term
+                #
+                sch = ref.getSchema()
 
-        referrs, stargal = None, None
-        cols = solver.getTagAlongColumns(anid)
-        colnames = [c.name for c in cols]
+                ct = butler.mapperInfo.Colorterm.getColorterm(filterName)
+                if ct:
+                    primary, secondary = ct.primary, ct.secondary
+                    primaryKey_r = sch.find(primary).getKey()
+                    secondaryKey_r = sch.find(secondary).getKey()
+                else:
+                    fluxKey_r = sch.find("flux").getKey()
 
-        if False:
-            print 'Tag-along columns:'
-            print cols
-            for c in cols:
-                print 'column: ', c.name, c.fitstype, c.ctype, c.units, c.arraysize
-
-        if False:
-            col = filterName + '_err'
-            if col in colnames:
-                referrs = solver.getTagAlongDouble(anid, col, inds)
-
-        col = 'starnotgal'
-        if col in colnames:
-            stargal1 = solver.getTagAlongBool(anid, col, inds)
-            stargal = []
-            for i in range(len(stargal1)):
-                stargal.append(stargal1[i])
-
-        if False:
-            print 'Got', len(ref), 'reference catalog sources'
-
-        keepref = []
-        keepi = []
-        for i in xrange(len(ref)):
-            x, y = wcs.skyToPixel(ref[i].getRa(), ref[i].getDec())
-            if x < 0 or y < 0 or x > W or y > H:
-                continue
-            ref[i].setXAstrom(x)
-            ref[i].setYAstrom(y)
-            if stargal[i]:
-                setFlagForDetection(ref[i], "STAR", True)
-            keepref.append(ref[i])
-            keepi.append(i)
+        else:
+            print >> sys.stderr, "Ignoring unknown displayType %s" % displayType
+            frame = None
             
+        if True:
+            return matched, zp
+
+        if showDistortion:
+            calexp = butler.get('calexp', **dataId)
+            ccd = cameraGeom.cast_Ccd(calexp.getDetector())
+            distortion = ccd.getDistortion()
+
+            import lsst.afw.geom.ellipses as geomEllipses
+            quad = geomEllipses.Quadrupole() # used for estimating distortion
+            quad.scale(1/math.sqrt(quad.getArea()))
+
+        keepMatched = []
+        deltaScale = 1000               # multiplier for mag_ref - mag_src to display on ds9
+        with ds9.Buffering():
+            for match in matched:
+                ref, src, d = match
+                x, y = wcs.skyToPixel(ref.getRa(), ref.getDec())
+                if x < 0 or y < 0 or x > W or y > H:
+                    continue
+                
+                keepMatched.append(match)
+
+                if frame is not None:
+                    if False:
+                        ds9.dot("o", x, y, frame=frame, ctype=ds9.GREEN)
+                        ds9.dot("+", src.getX(), src.getY(), frame=frame, ctype=ds9.RED)
+                    else:
+                        if showDistortion:
+                            delta = distortion.distort(afwGeom.PointD(x, y), quad, ccd).getArea() - 1
+                        else:
+                            if ct:
+                                p = -2.5*math.log10(ref.get(primaryKey_r))
+                                s = -2.5*math.log10(ref.get(secondaryKey_r))
+
+                                refmag = butler.mapperInfo.photometricTransform(filterName, p, s)
+                            else:
+                                refmag = -2.5*math.log10(ref.get(fluxKey_r))
+
+                            delta = refmag - (zp - 2.5*math.log10(src.get(fluxKey))) + 0.021
+
+                        size = min([100, max([deltaScale*delta, -100])])
+                        ds9.dot("o", src.getX(), src.getY(), size=abs(size),
+                                frame=frame, ctype=ds9.CYAN if size > 0 else ds9.MAGENTA)
+                        ds9.dot("o", src.getX(), src.getY(), size=deltaScale*0.01, # 10 mmag
+                                frame=frame, ctype=ds9.YELLOW)
+           
         if verbose:
-            print 'Kept', len(keepref), 'reference sources'
-        ref = keepref
+            print "Kept %d out of %d reference sources for %s" % (len(keepMatched), len(matched), dataId)
 
-        if referrs is not None:
-            referrs = [referrs[i] for i in keepi]
-        if stargal is not None:
-            stargal = [stargal[i] for i in keepi]
-
-        stargal = stargal
-        referrs = referrs
-
-        if False:
-            m0 = matches[0]
-            f,s = m0.first, m0.second
-            print 'match 0: ref %i, source %i' % (f.getSourceId(), s.getSourceId())
-            print '  ref x,y,flux = (%.1f, %.1f, %.1f)' % (f.getXAstrom(), f.getYAstrom(), f.getPsfFlux())
-            print '  src x,y,flux = (%.1f, %.1f, %.1f)' % (s.getXAstrom(), s.getYAstrom(), s.getPsfFlux())
-
-        measAstrom.joinMatchList(matches, ref, first=True, log=log)
-        args = {}
-        if fixup:
-            # ugh, mask and offset req'd because source ids are assigned at write-time
-            # and match list code made a deep copy before that.
-            # (see svn+ssh://svn.lsstcorp.org/DMS/meas/astrom/tickets/1491-b r18027)
-            args['mask'] = 0xffff
-            args['offset'] = -1
-        measAstrom.joinMatchList(matches, sources, first=False, log=log, **args)
-
-        return sources, matches, ref, referrs, zp
-    
+        return keepMatched, zp
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 #
 # Convert SourceSets to numpy arrays
 #
+def _setFlagsFromSource(ssc=None):
+    """Return a dictionary of status flags from a Source or table;  if ssc is None, return a
+    dictionary of the Source fields used"""
+    
+    names = dict(
+        EDGE =          "flags.pixel.edge",
+        INTERP =        "flags.pixel.interpolated.any",
+        INTERP_CENTER = "flags.pixel.interpolated.center",
+        SATUR =         "flags.pixel.saturated.any",
+        SATUR_CENTER =  "flags.pixel.saturated.center",
+        )
+
+    if ssc is None:
+        return names
+    else:
+        flags = {}
+        for k, n in names.items():
+            flags[k] = ssc.get(n)
+        return flags
+
 def getMagsFromSS(ss, dataId, extraApFlux=0.0):
     """Return numpy arrays constructed from SourceSet ss"""
 
     ssc = ss.getColumnView()
 
     ids = ssc.get("id")
-    flags = dict(
-        EDGE =          ssc.get("flags.pixel.edge"),
-        INTERP =        ssc.get("flags.pixel.interpolated.any"),
-        INTERP_CENTER = ssc.get("flags.pixel.interpolated.center"),
-        SATUR =         ssc.get("flags.pixel.saturated.any"),
-        SATUR_CENTER =  ssc.get("flags.pixel.saturated.center"),
-        )
+    flags = _setFlagsFromSource(ssc)
     stellar = ssc.get("classification.extendedness") < 0.5
     apMags = ssc.getApFlux() + extraApFlux # XXX Why is ssc.get("flux.sinc") different?
     instMags = np.array(ssc.getInstFlux())
@@ -1279,8 +1310,42 @@ def plotDmagHistograms(data, magType1="model", magType2="psf", color="red", fig=
 
     return fig
 
-def plotCalibration(data, plotBand=0.05, magType='psf', maglim=20,
-                    markersize=1, title="+",
+def getRefmag(mstars, desiredBand):
+    """Get the reference magnitude from a set of match objects"""
+    
+    try:
+        mstars[0]
+    except TypeError:
+        mstars = [mstars,]
+
+    refmag = np.empty(len(mstars))
+
+    if len(refmag) == 0:
+        return refmag
+
+    sch = mstars[0][0].getSchema()
+
+    ct = butler.mapperInfo.Colorterm.getColorterm(desiredBand)
+    if False:
+        print "RHL Not applying colour terms"
+        ct = None
+
+    if ct:
+        primaryKey = sch.find(ct.primary).getKey()
+        secondaryKey = sch.find(ct.secondary).getKey()
+
+        refMag = -2.5*np.log10(np.array([m[0].get(primaryKey)   for m in mstars]))
+        secMag = -2.5*np.log10(np.array([m[0].get(secondaryKey) for m in mstars]))
+
+        refMag = butler.mapperInfo.photometricTransform(desiredBand, refMag, secMag)
+    else:
+        fluxKey = sch.find("flux").getKey()
+        refMag = -2.5*np.log10(np.array([m[0].get(fluxKey) for m in mstars]))
+
+    return refMag
+
+def plotCalibration(data, plotBand=0.05, magType='psf', maglim=20, cursor=False,
+                    markersize=1, title="+", showMedians=False,
                     frame=None, ctype=None, ds9Size=None, fig=None):
     """Plot (instrumental - reference) v. reference magnitudes given a Data object.
 
@@ -1289,15 +1354,19 @@ The Data must have been initialised with a call to the getCalibObjects method
 Use the matplotlib Figure object fig; if none is provided it'll be created and saved in data (and if it's true, a new one will be created)
     
 If plotBand is provided, draw lines at +- plotBand
-    """
+
+If title is provided it's used as a plot title; if it starts + the usual title is prepended
+"""
     fig = getMpFigure(fig)
 
-    if not data.matches:
+    if not data.matched:
         raise RuntimeError("You need to call the Data.getCalibObjects method before calling this routine")
 
-    mstars = [m for m in data.matches if (m.second and getFlagForDetection(m.second, "STAR"))] # data
-    realStars = [getFlagForDetection(m.first, "STAR")                                          # catalogue
-                 for m in data.matches if (m.first and getFlagForDetection(m.second, "STAR"))]
+    mstars, zp = [], []
+    for m, z in zip(data.matched, data.zp):
+        if m[0].get("stargal"):         # m[0] == catalogue
+            mstars.append(m)
+            zp.append(z)
 
     if frame is not None:
         kwargs = {}
@@ -1306,27 +1375,36 @@ If plotBand is provided, draw lines at +- plotBand
         if ds9Size:
             kwargs["size"] = ds9Size
         for m in mstars:
-            s = m.second
-            ds9.dot("o", s.getXAstrom(), s.getYAstrom(), frame=frame, **kwargs)
+            s = m[1]
+            ds9.dot("o", s.getX(), s.getY(), frame=frame, **kwargs)
 
     axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
+    
+    refmag = getRefmag(mstars, "r")
 
-    refmag = np.array([-2.5*math.log10(s.first.getPsfFlux()) for s in mstars if s.first and s.second])
-    ids = np.array([s.second.getId() for s in mstars if s.first and s.second])
-    flux = [getFlux(s.second, magType) for s in mstars if s.first and s.second]
+    ids = np.array([s[1].getId() for s in mstars])
+    flux = [getFlux(s[1], magType) for s in mstars]
 
-    instmag = data.zp - 2.5*np.log10(np.array(flux))
-    realStars = np.array([m for m in realStars])
-
+    instmag = zp - 2.5*np.log10(np.array(flux))
     delta = refmag - instmag
 
-    x = np.array([s.second.getXAstrom() for s in mstars])
-    y = np.array([s.second.getYAstrom() for s in mstars])
-    flags = np.zeros(len(mstars)) # np.array([s.second.getFlagForDetection() for s in mstars])
-    if False:
-        for i in range(len(ids)):
-            print "%d4 %.2f %.2f (%.2f, %.2f)" % (ids[i], refmag[i], delta[i], x[i], y[i])
-    
+    if cursor:
+        x = np.empty(len(mstars))
+        y = np.empty_like(x)
+        flagNames, flags = _setFlagsFromSource(), {}
+        for k in flagNames.keys():
+            flags[k] = np.empty_like(x)
+
+        for i, s in enumerate(mstars):
+            src = s[1]
+            x[i], y[i] = src.getX(), src.getY()
+            for k, n in flagNames.items():
+                flags[k][i] = src.get(n)
+
+        if False:
+            for i in range(len(ids)):
+                print "%d4 %.2f %.2f (%.2f, %.2f)" % (ids[i], refmag[i], delta[i], x[i], y[i])
+
     stats = afwMath.makeStatistics(delta[refmag < maglim], afwMath.STDEVCLIP | afwMath.MEANCLIP)
     mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
 
@@ -1335,8 +1413,6 @@ If plotBand is provided, draw lines at +- plotBand
     minRef = min(refmag)
     axes.plot((minRef, maglim, maglim, minRef, minRef), 100*np.array([-1, -1, 1, 1, -1]), "g:")
 
-    #axes.plot(refmag[realStars], delta[realStars], "gx")
-        
     axes.plot((-100, 100), (0, 0), "g-")
     if plotBand:
         for i in (-plotBand, plotBand):
@@ -1347,25 +1423,27 @@ If plotBand is provided, draw lines at +- plotBand
     axes.set_xlim(13, 24)
     axes.set_xlabel("Reference")
     axes.set_ylabel("Reference - %s" % magType)
-    axes.set_title(data.name)
+    axes.set_title(re.sub(r"^\+\s*", data.name + " ", title))
+
+    if showMedians:
+        binwidth = 1.0
+        bins = np.arange(int(min(refmag)), int(max(refmag)), binwidth)
+        vals = np.empty_like(bins)
+        for i in range(len(bins) - 1):
+            inBin = np.logical_and(refmag > bins[i], refmag <= bins[i] + binwidth)
+            vals[i] = np.median(delta[np.where(inBin)])
+
+        axes.plot(bins + 0.5*binwidth, vals, linestyle="-", marker="o", color="cyan")
 
     fig.text(0.75, 0.85, r"$%.3f \pm %.3f$" % (mean, stdev), fontsize="larger")
     #
     # Make "i" print the object's ID, p pan ds9, etc.
     #
-    global eventHandlers
-    eventHandlers[fig] = EventHandler(axes, refmag, delta, ids, x, y, flags, [frame,])
+    if cursor:
+        global eventHandlers
+        eventHandlers[fig] = EventHandler(axes, refmag, delta, ids, x, y, flags, [frame,])
 
     fig.show()
-
-    if False:
-        _mstars = [m for m in mstars if math.fabs(-2.5*math.log10(m.first.getPsfFlux()) - 17.5) < 0.5]
-        for m in _mstars:
-            print "%.1f %.1f  %.2f %.2f" % (m.second.getXAstrom(), m.second.getYAstrom(),
-                                            -2.5*math.log10(m.first.getPsfFlux()),
-                                            -2.5*math.log10(m.first.getPsfFlux()) - 
-                                            (data.zp - 2.5*math.log10(m.second.getPsfFlux())))
-            ds9.dot("*", m.second.getXAstrom(), m.second.getYAstrom(), ctype=ds9.MAGENTA, size=10)
 
     return fig
 
@@ -1381,6 +1459,8 @@ Use the matplotlib Figure object fig; if none is provided it'll be created and s
 If plotBand is provided, draw lines at +- plotBand
     """
     fig = getMpFigure(fig)
+
+    raise RuntimeError("Please convert this routine to use data.matched")
 
     if not data.matches:
         raise RuntimeError("You need to call the Data.getCalibObjects method before calling this routine")
@@ -1473,6 +1553,8 @@ def displayCalibration(data, frame=0):
     """display the calibration objects in Data object data on ds9
 Stars are green; galaxies are red based on our processing
     """
+    raise RuntimeError("Please convert this routine to use data.matched")
+
     if not data.matches:
         raise RuntimeError("You need to call the Data.getCalibObjects method before calling this routine")
 
@@ -2619,7 +2701,7 @@ def plotImageHistogram(calexp, minDN=None, maxDN=None, binwidth=None,
     @param maxDN    The maximum value to plot (default: 1000)
     @param binwidth The width of the bins (default: 1)
     @param maxBins  The maximum number of bins in the histogram
-    @param bitmask Hex mask for pixels to ignore, or list of bit names (default: ["DETECTED"])
+    @param bitmask Hex mask for pixels to ignore, or list of bit names (default: ["DETECTED", "EDGE"])
     @param showStats Show median etc. estimated from the Exposure
     @param title    Title of plot
     @param log      Take log of histogram?
@@ -2653,12 +2735,17 @@ def plotImageHistogram(calexp, minDN=None, maxDN=None, binwidth=None,
     if msk is not None:
         msk = msk.getArray()
    
-    if maxDN is None:
+    if maxDN in ("max", None):
         maxDN = np.max(img)
-    if minDN is None:
+
+    if minDN == "min":
         minDN = np.min(img)
+    elif minDN is None:
+        minDN = -maxDN
     if binwidth is None:
         binwidth = 1
+    elif binwidth < 0:
+        binwidth = (maxDN - minDN)/maxBins
 
     bins = np.arange(minDN, maxDN, binwidth)
     if len(bins) > maxBins:
