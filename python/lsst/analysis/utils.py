@@ -1419,7 +1419,7 @@ def getRefmag(mstars, desiredBand):
     return refMag
 
 def plotCalibration(data, plotBand=0.05, magType='psf', maglim=20, cursor=False,
-                    markersize=1, title="+", showMedians=False,
+                    markersize=2, alpha=1.0, title="+", showMedians=False,
                     frame=None, ctype=None, ds9Size=None, fig=None):
     """Plot (instrumental - reference) v. reference magnitudes given a Data object.
 
@@ -1482,7 +1482,7 @@ If title is provided it's used as a plot title; if it starts + the usual title i
     stats = afwMath.makeStatistics(delta[refmag < maglim], afwMath.STDEVCLIP | afwMath.MEANCLIP)
     mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
 
-    axes.plot(refmag, delta, "m.", markersize=markersize)
+    axes.plot(refmag, delta, "m.", markeredgewidth=0, markersize=markersize, alpha=alpha)
 
     minRef = min(refmag)
     axes.plot((minRef, maglim, maglim, minRef, minRef), 100*np.array([-1, -1, 1, 1, -1]), "g:")
