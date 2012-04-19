@@ -160,12 +160,27 @@ def getNameOfSet(vals):
 
     return ", ".join(valName)
 
+def getNameOfSRSet(sr, n, omit=[]):
+    """Get the name of a set of Sensors or Rafts arranged in an n*n array (with elements of omit missing)"""
+    sindex = {}; sname = {}
+    k = 0
+    for i in range(n):
+        for j in range(n):
+            s = "%d,%d" % (i, j)
+            if s not in omit:
+                sindex[s] = k
+                sname[str(k)] = s
+                k += 1
+
+    return "-".join([sname[i] for i in getNameOfSet([sindex[s] for s in sr]).split('-')])
+
 def makeMapperInfo(mapper):
     """Return an object with extra per-mapper information (e.g. which fields fully specify an exposure)"""
 
     class LsstSimMapperInfo(object):
         def __init__(self, Mapper):
             LsstSimMapperInfo.Mapper = Mapper
+            LsstSimMapperInfo.getColorterm = lambda x, y: None
 
         @staticmethod
         def getFields(dataType):
@@ -182,16 +197,73 @@ def makeMapperInfo(mapper):
 
         @staticmethod
         def dataIdToTitle(dataIds):
-            try:
-                dataId = dataIds[0]
+            filters = set()
+            sensors = set()
+            rafts = set()
+            visits = set()
+            for dataId in dataIds:
+                if dataId["sensor"] == None:
+                    did = dataId.copy(); did["sensor"] = 0
+                    try:
+                        filters.add(afwImage.Filter(butler.get("calexp_md", **did)).getName())
+                    except:
+                        filters.add("?")
+                    sensors.add("all")
+                else:
+                    try:
+                        filters.add(afwImage.Filter(butler.get("calexp_md", **dataId)).getName())
+                    except:
+                        filters.add("?")
 
-                if len(dataIds) > 1:
-                    print >> sys.stderr, "Fit dataIdToTitle for more than one dataId"
-            except KeyError:
-                dataId = dataIds
-                
-            filterName = afwImage.Filter(butler.get("calexp_md", **dataId)).getName()
-            return "%ld %s %s [%s]" % (dataId["visit"], dataId["raft"], dataId["sensor"], filterName)
+                    try:
+                        sensors.add(dataId["sensor"])
+                    except TypeError:
+                        for c in dataId["sensor"]:
+                            sensors.add(c)
+
+                if dataId["raft"] == None:
+                    did = dataId.copy(); did["raft"] = 0
+                    try:
+                        filters.add(afwImage.Filter(butler.get("calexp_md", **did)).getName())
+                    except:
+                        filters.add("?")
+                    rafts.add("all")
+                else:
+                    try:
+                        filters.add(afwImage.Filter(butler.get("calexp_md", **dataId)).getName())
+                    except:
+                        filters.add("?")
+
+                    try:
+                        rafts.add(dataId["raft"])
+                    except TypeError:
+                        for c in dataId["raft"]:
+                            rafts.add(c)
+
+                try:
+                    visits.add(dataId["visit"])
+                except TypeError:
+                    for v in dataId["visit"]:
+                        visits.add(v)
+
+            sensors = sorted(list(sensors))
+            rafts = sorted(list(rafts))
+            visits = sorted(list(visits))
+            filters = sorted(list(filters))
+
+            if len(visits) > 1 and len(filters) > 1:
+                print >> sys.stderr, \
+                      "I don't know how to make a title out of multiple visits and filters: %s %s" % \
+                      (visits, filters)
+                visits = visits[0:1]
+
+            title = "%s R%s S%s [%s]" % (getNameOfSet(visits),
+                                         getNameOfSRSet(rafts, 5, ['0,0', '4,0', '0,4', '4,4']),
+                                         getNameOfSRSet(sensors, 3), ", ".join(filters))
+            if rerunName:
+                title += " %s" % rerunName
+
+            return title
 
         @staticmethod
         def exposureToStr(exposure):
@@ -234,8 +306,8 @@ def makeMapperInfo(mapper):
 
             from lsst.meas.photocal.colorterms import Colorterm
             from lsst.obs.suprimecam.colorterms import colortermsData
-            SubaruMapperInfo.Colorterm = Colorterm
-            SubaruMapperInfo.Colorterm.setColorterms(colortermsData, "Hamamatsu")
+            SubaruMapperInfo._Colorterm = Colorterm
+            SubaruMapperInfo._Colorterm.setColorterms(colortermsData, "Hamamatsu")
 
         @staticmethod
         def getFields(dataType):
@@ -254,7 +326,7 @@ def makeMapperInfo(mapper):
         @staticmethod
         def photometricTransform(desiredBand, primaryMag, secondaryMag):
             """Return the primary/secondary magnitude transformed into the desiredBand"""
-            return SubaruMapperInfo.Colorterm.transformMags(desiredBand, primaryMag, secondaryMag)
+            return SubaruMapperInfo._Colorterm.transformMags(desiredBand, primaryMag, secondaryMag)
 
         @staticmethod
         def dataIdToTitle(dataIds):
@@ -690,16 +762,17 @@ raft or sensor may be None (meaning get all)
 ccd may be a list"""
 
         dataId = dataId.copy()
-        try:
-            ccds = dataId["ccd"]
-            if ccds is not None:
-                try:
-                    ccds[0]
-                except TypeError:
-                    ccds = [ccds]
-            dataId["ccd"] = None        # all
-        except:
-            ccds = None
+        ccds = None
+        for detName in ("ccd", "sensor"):
+            if dataId.has_key(detName):
+                ccds = dataId[detName]
+                if ccds is not None:
+                    try:
+                        ccds[0]
+                    except TypeError:
+                        ccds = [ccds]
+                dataId[detName] = None      # all
+                break
 
         dataId = dict([(k, v) for k, v in dataId.items() if v is not None])
 
@@ -734,9 +807,9 @@ ccd may be a list"""
                 pass
 
         if ccds:
-            dids = [d for d in dids if d["ccd"] in ccds]
+            dids = [d for d in dids if d[detName] in ccds]
             for v, ds in self.dataSets.items():
-                self.dataSets[v] = [d for d in ds if d["ccd"] in ccds]
+                self.dataSets[v] = [d for d in ds if d[detName] in ccds]
 
         return dids
 
@@ -761,10 +834,10 @@ ccd may be a list"""
                                xAstrom=xAstrom, yAstrom=yAstrom, shape=shape,
                                apMags=apMags, instMags=instMags, modelMags=modelMags, psfMags=psfMags)
 
-        self.name = butler.mapperInfo.dataIdToTitle(dataIds)
-
         if ids is None:
             raise RuntimeError("Failed to read any data for %s" % " ".join([str(d) for d in dataId]))
+
+        self.name = butler.mapperInfo.dataIdToTitle(dataIds)
 
         self.ids       = ids
         self.flags     = {}
@@ -858,7 +931,7 @@ ccd may be a list"""
                 #
                 sch = ref.getSchema()
 
-                ct = butler.mapperInfo.Colorterm.getColorterm(filterName)
+                ct = butler.mapperInfo.getColorterm(filterName)
                 if ct:
                     primary, secondary = ct.primary, ct.secondary
                     primaryKey_r = sch.find(primary).getKey()
@@ -1325,7 +1398,7 @@ def getRefmag(mstars, desiredBand):
 
     sch = mstars[0][0].getSchema()
 
-    ct = butler.mapperInfo.Colorterm.getColorterm(desiredBand)
+    ct = butler.mapperInfo.getColorterm(desiredBand)
     if False:
         print "RHL Not applying colour terms"
         ct = None
