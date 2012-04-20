@@ -162,7 +162,8 @@ def getNameOfSet(vals):
 
 def getNameOfSRSet(sr, n, omit=[]):
     """Get the name of a set of Sensors or Rafts arranged in an n*n array (with elements of omit missing)"""
-    sindex = {}; sname = {}
+
+    sindex = {}; sname = {}             # generate mapping from Raft/Sensor names to indexes
     k = 0
     for i in range(n):
         for j in range(n):
@@ -172,7 +173,16 @@ def getNameOfSRSet(sr, n, omit=[]):
                 sname[str(k)] = s
                 k += 1
 
-    return "-".join([sname[i] for i in getNameOfSet([sindex[s] for s in sr]).split('-')])
+    for s in ("all",):
+        sindex[s] = k
+        sname[str(k)] = s
+        k += 1
+
+    name = []
+    for subsr in getNameOfSet([sindex[s] for s in sr]).split(", "):
+        name.append("-".join([sname[i] for i in subsr.split('-')]).replace(",", ""))
+
+    return ", ".join(name)
 
 def makeMapperInfo(mapper):
     """Return an object with extra per-mapper information (e.g. which fields fully specify an exposure)"""
@@ -202,7 +212,7 @@ def makeMapperInfo(mapper):
             rafts = set()
             visits = set()
             for dataId in dataIds:
-                if dataId["sensor"] == None:
+                if dataId.get("sensor") == None:
                     did = dataId.copy(); did["sensor"] = 0
                     try:
                         filters.add(afwImage.Filter(butler.get("calexp_md", **did)).getName())
@@ -221,7 +231,7 @@ def makeMapperInfo(mapper):
                         for c in dataId["sensor"]:
                             sensors.add(c)
 
-                if dataId["raft"] == None:
+                if dataId.get("raft") == None:
                     did = dataId.copy(); did["raft"] = 0
                     try:
                         filters.add(afwImage.Filter(butler.get("calexp_md", **did)).getName())
@@ -307,7 +317,6 @@ def makeMapperInfo(mapper):
             from lsst.meas.photocal.colorterms import Colorterm
             from lsst.obs.suprimecam.colorterms import colortermsData
             SubaruMapperInfo._Colorterm = Colorterm
-            SubaruMapperInfo.getColorterm = lambda x, y : Colorterm.getColorterm(y)
             SubaruMapperInfo._Colorterm.setColorterms(colortermsData, "Hamamatsu")
 
         @staticmethod
@@ -907,7 +916,10 @@ ccd may be a list"""
         matches = butler.get('icMatch', **dataId)
 
         astrom = measAstrom.Astrometry(measAstrom.MeasAstromConfig())
-        matched = astrom.joinMatchListWithCatalog(matches, sources, allFluxes=True) # array of ReferenceMatch
+        try:
+            matched = astrom.joinMatchListWithCatalog(matches, sources, allFluxes=True) # list(ReferenceMatch)
+        except TypeError:
+            matched = astrom.joinMatchListWithCatalog(matches, sources)
 
         calexp_md = butler.get('calexp_md', **dataId)
         wcs = afwImage.makeWcs(calexp_md)
@@ -1419,7 +1431,7 @@ def getRefmag(mstars, desiredBand):
     return refMag
 
 def plotCalibration(data, plotBand=0.05, magType='psf', maglim=20, cursor=False,
-                    markersize=2, alpha=1.0, title="+", showMedians=False,
+                    markersize=1, title="+", showMedians=False,
                     frame=None, ctype=None, ds9Size=None, fig=None):
     """Plot (instrumental - reference) v. reference magnitudes given a Data object.
 
@@ -1482,7 +1494,7 @@ If title is provided it's used as a plot title; if it starts + the usual title i
     stats = afwMath.makeStatistics(delta[refmag < maglim], afwMath.STDEVCLIP | afwMath.MEANCLIP)
     mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
 
-    axes.plot(refmag, delta, "m.", markeredgewidth=0, markersize=markersize, alpha=alpha)
+    axes.plot(refmag, delta, "m.", markersize=markersize)
 
     minRef = min(refmag)
     axes.plot((minRef, maglim, maglim, minRef, minRef), 100*np.array([-1, -1, 1, 1, -1]), "g:")
