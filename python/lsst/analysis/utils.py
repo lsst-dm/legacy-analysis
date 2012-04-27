@@ -995,7 +995,7 @@ ccd may be a list"""
                             else:
                                 refmag = -2.5*math.log10(ref.get(fluxKey_r))
 
-                            delta = refmag - (zp - 2.5*math.log10(src.get(fluxKey))) + 0.021
+                            delta = refmag - (zp - 2.5*math.log10(src.get(fluxKey)))
 
                         size = min([100, max([deltaScale*delta, -100])])
                         ds9.dot("o", src.getX(), src.getY(), size=abs(size),
