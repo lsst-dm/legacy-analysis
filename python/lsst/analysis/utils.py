@@ -345,13 +345,13 @@ def makeMapperInfo(mapper):
             ccds = set()
             visits = set()
             for dataId in dataIds:
-                if dataId["ccd"] == None:
+                if dataId.get("ccd") == None:
                     did = dataId.copy(); did["ccd"] = 0
                     try:
                         filters.add(afwImage.Filter(butler.get("calexp_md", **did)).getName())
                     except:
-                        filters.add("?")
-                    ccds.add("all")
+                        filters.add(dataId.get("filter", "?"))
+                    ccds.add("(all)")
                 else:
                     try:
                         filters.add(afwImage.Filter(butler.get("calexp_md", **dataId)).getName())
@@ -703,7 +703,7 @@ raft or sensor may be None (meaning get all)
 
         dataSets = dataSets.get(visit)
         if not dataSets:
-            raise RuntimeError("I cannot find your data for visit %d" % visit if visit else "")
+            raise RuntimeError("I cannot find your data for %s" % dataId if visit else "")
 
         data = []
         for dataId in dataSets:
@@ -1746,7 +1746,8 @@ If showPsfs is true, include a reconstructed psf mosaic in the lower left corner
 
                     psf = data.getDataset("psf", visit=visit, raft=raft, sensor=ccd, **kwargs)[0]
                     nx = 15
-                    psfMosaic = maUtils.showPsfMosaic(ims[visit], psf, nx=nx, frame=None).makeMosaic(mode=nx)
+                    psfMosaic = maUtils.showPsfMosaic(ims[visit], psf, nx=nx,
+                                                      showFWHM=True, frame=None).makeMosaic(mode=nx)
                     sim = im.Factory(im, afwImage.BBox(afwImage.PointI(0, 0), psfMosaic.getWidth(), psfMosaic.getHeight()))
                     sim <<= psfMosaic
                     sim *= 1000
