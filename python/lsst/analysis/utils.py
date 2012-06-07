@@ -16,6 +16,7 @@ import lsst.afw.detection as afwDetect
 import lsst.afw.geom as afwGeom
 import lsst.afw.image as afwImage
 import lsst.afw.math as afwMath
+import lsst.afw.table as afwTable
 import lsst.afw.display.ds9 as ds9
 import lsst.afw.display.utils as ds9Utils
 import lsst.afw.cameraGeom as cameraGeom
@@ -774,7 +775,6 @@ class Data(object):
         dataSets = {}
         for v in visits:
             dataId[_visit_] = v
-            #import pdb; pdb.set_trace() 
             for vals in butler.queryMetadata(_raw_, _visit_, fields, **dataId):
                 _dataId = dict(zip(fields, vals))
 
@@ -1185,19 +1185,6 @@ def _setFlagsFromSource(ssc=None):
 def getMagsFromSS(ss, dataId, extraApFlux=0.0):
     """Return numpy arrays constructed from SourceSet ss"""
 
-    ssc = ss.getColumnView()
-
-    ids = ssc.get("id")
-    flags = _setFlagsFromSource(ssc)
-    stellar = ssc.get("classification.extendedness") < 0.5
-    apMags = ssc.getApFlux() + extraApFlux # XXX Why is ssc.get("flux.sinc") different?
-    instMags = np.array(ssc.getInstFlux())
-    modelMags = np.array(ssc.getModelFlux())
-    psfMags = np.array(ssc.getPsfFlux())
-    x = ssc.getX()
-    y = ssc.getY()
-    shape = [ssc.getIxx(), ssc.getIxy(), ssc.getIyy()]
-
     calexp_md = butler.get('calexp_md', **dataId)
     calib = afwImage.Calib(calexp_md)
     fluxMag0, fluxMag0Err = calib.getFluxMag0()
@@ -1206,28 +1193,103 @@ def getMagsFromSS(ss, dataId, extraApFlux=0.0):
         print >> sys.stderr, "Setting fluxMag0 to %g" % fluxMag0
         calib.setFluxMag0(fluxMag0, fluxMag0Err)
 
-    for i in range(len(ss)):
+    #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+    tab = ss.getTable()
+    sch = tab.getSchema()
+    scm = afwTable.SchemaMapper(sch)
+    for f in ["id", "coord", "parent",  # must be first and in this order --- #2154
+              "classification.extendedness",
+              "flags.pixel.edge",
+              "flags.pixel.interpolated.any",
+              "flags.pixel.interpolated.center",
+              "flags.pixel.saturated.any",
+              "flags.pixel.saturated.center",
+              ]:
+        scm.addMapping(sch.find(f).getKey())
+    for key in [tab.getCentroidKey(), tab.getCentroidErrKey(), tab.getCentroidFlagKey(),
+                tab.getShapeKey(),
+                ]:
+        scm.addMapping(key)
+
+    definePhotoSlots = False            # add standard photometric slots?
+    if definePhotoSlots:
+        for key in [tab.getInstFluxKey(),  tab.getInstFluxErrKey(),  tab.getInstFluxFlagKey(),
+                    tab.getModelFluxKey(), tab.getModelFluxErrKey(), tab.getModelFluxFlagKey(),
+                    tab.getPsfFluxKey(),   tab.getPsfFluxErrKey(),   tab.getPsfFluxFlagKey(),
+                    tab.getApFluxKey(),   tab.getApFluxErrKey(),     tab.getApFluxFlagKey(),
+                    ]:
+            scm.addMapping(key)
+
+    stellarKey = scm.addOutputField(afwTable.Field_Flag("stellar", "Is the source stellar?"))
+    apMagKey = scm.addOutputField(afwTable.Field_F("apMag", "The magnitude corresponding to apFlux"))
+    instMagKey = scm.addOutputField(afwTable.Field_F("instMag", "The magnitude corresponding to instFlux"))
+    modelMagKey = scm.addOutputField(afwTable.Field_F("modelMag", "The magnitude corresponding to modelFlux"))
+    psfMagKey = scm.addOutputField(afwTable.Field_F("psfMag", "The magnitude corresponding to psfFlux"))
+
+    cat = afwTable.SourceCatalog(scm.getOutputSchema())
+    table = cat.table
+
+    table.preallocate(len(ss))
+
+    table.defineCentroid(tab.getCentroidDefinition())
+
+    if definePhotoSlots:
+        #
+        # Define the slots we were using before
+        #
+        table.defineApFlux(tab.getApFluxDefinition())    
+        table.defineInstFlux(tab.getInstFluxDefinition())    
+        table.defineModelFlux(tab.getModelFluxDefinition())    
+        table.definePsfFlux(tab.getPsfFluxDefinition())    
+
+    for s in ss:
+        cat.append(cat.copyRecord(s, scm))
+
+        cat[-1].setFlag(stellarKey, s.get("classification.extendedness") < 0.5)
+        
         try:
-            apMags[i]  = calib.getMagnitude(apMags[i])
-        except:
-            apMags[i]  = np.nan
+            mag = calib.getMagnitude(s.getApFlux() + extraApFlux)
+        except :
+            mag  = np.nan
+        cat[-1].setF(apMagKey, mag)
 
         try:
-            psfMags[i]  = calib.getMagnitude(psfMags[i])
-        except:
-            psfMags[i]  = np.nan
+            mag = calib.getMagnitude(s.getInstFlux())
+        except :
+            mag  = np.nan
+        cat[-1].setF(instMagKey, mag)
 
         try:
-            instMags[i]  = calib.getMagnitude(instMags[i])
-        except:
-            instMags[i]  = np.nan
+            mag = calib.getMagnitude(s.getModelFlux())
+        except :
+            mag  = np.nan
+        cat[-1].setF(modelMagKey, mag)
 
         try:
-            modelMags[i]  = calib.getMagnitude(modelMags[i])
-        except:
-            modelMags[i]  = np.nan
+            mag = calib.getMagnitude(s.getPsfFlux())
+        except :
+            mag  = np.nan
+        cat[-1].setF(psfMagKey, mag)
 
-    good = np.logical_and(np.isfinite(apMags), np.isfinite(psfMags))
+    del ss
+
+    ids = cat.get("id")
+    flags = _setFlagsFromSource(cat)
+    stellar = cat.get("classification.extendedness") < 0.5
+    apMags = cat.get(apMagKey)
+    instMags = cat.get(instMagKey)
+    modelMags = cat.get(modelMagKey)
+    psfMags = cat.get(psfMagKey)
+    x = cat.getX()
+    y = cat.getY()
+    if False:
+        shape = [cat.getIxx(), cat.getIxy(), cat.getIyy()]
+    else:
+        shape = [np.zeros(len(ids)), np.zeros(len(ids)), np.zeros(len(ids))]
+
+    good = reduce(np.logical_and, (np.isfinite(apMags), np.isfinite(psfMags),
+                                   np.isfinite(instMags), np.isfinite(modelMags),))
 
     ids = ids[good]
     for k, v in flags.items():
@@ -1349,7 +1411,7 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
 
     mag1 = data.getMagsByType(magType1, good)
     mag2 = data.getMagsByType(magType2, good)
-    delta = mag1 - mag2
+    delta = np.array(mag1 - mag2, dtype='float64') # float64 is needed by makeStatistics --- why?
 
     locus = np.logical_and(np.logical_and(mag1 > magmin, mag1 < maglim), np.abs(delta - meanDelta) < sgVal)
 
