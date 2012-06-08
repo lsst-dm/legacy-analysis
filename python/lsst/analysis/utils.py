@@ -34,6 +34,7 @@ try:
     from lsst.obs.lsstSim import LsstSimMapper
     _raw_ = "raw"
     _visit_ = "visit"
+    _raft_ = "raft"
     _filter_ = "filter"
 except ImportError:
     class LsstSimMapper(object): pass
@@ -42,6 +43,7 @@ try:
     from lsst.obs.suprimecam.suprimecamMapper import SuprimecamMapper
     _raw_ = "raw"
     _visit_ = "visit"
+    _raft_ = "raft"
     _filter_ = "filter"
 except ImportError:
     class SuprimecamMapper(object): pass
@@ -50,6 +52,7 @@ try:
     from lsst.obs.sdss.sdssMapper import SdssMapper
     _raw_ = "fpC"
     _visit_ = "run"
+    _raft_ = "field"
     _filter_ = "filter"
 except ImportError:
     class SdssMapper(object): pass
@@ -658,6 +661,10 @@ class DataId(dict):
 
 class Data(object):
     def __init__(self, *args, **kwargs):
+        if kwargs.has_key("cat"):
+            self.cat = kwargs["cat"]
+            return
+
         self.setButler(*args, **kwargs)
 
         self.dataId = {}
@@ -772,18 +779,26 @@ class Data(object):
             dataId[_visit_] = [dataId[_visit_]]
         visits = dataId[_visit_]; dataId[_visit_] = None
 
+        try:
+            dataId[_raft_][0]
+        except TypeError:
+            dataId[_raft_] = [dataId[_raft_]]
+        rafts = dataId[_raft_]; dataId[_raft_] = None
+
         dataSets = {}
         for v in visits:
             dataId[_visit_] = v
-            for vals in butler.queryMetadata(_raw_, _visit_, fields, **dataId):
-                _dataId = dict(zip(fields, vals))
+            for r in rafts:
+                dataId[_raft_] = r
+                for vals in butler.queryMetadata(_raw_, _visit_, fields, **dataId):
+                    _dataId = dict(zip(fields, vals))
 
-                if butler.datasetExists(dataType, **_dataId):
-                    if not dataSets.has_key(v):
-                        dataSets[v] = []
-                    dataSets[v].append(_dataId)
+                    if butler.datasetExists(dataType, **_dataId):
+                        if not dataSets.has_key(v):
+                            dataSets[v] = []
+                        dataSets[v].append(_dataId)
 
-            self.dataSets = dataSets
+                self.dataSets = dataSets
 
         return self.dataSets
 
@@ -876,8 +891,8 @@ raft or sensor may be None (meaning get all)
                 s.setId(s.getId() | dataIdMask)
                 if setXYfromRaDec:
                     x, y = wcs.skyToPixel(s.getCoord())
-                    s.set("centroid.sdss.x", x)
-                    s.set("centroid.sdss.y", y)
+                    s.setF("centroid.sdss.x", x)
+                    s.setF("centroid.sdss.y", y)
 
             sources.append(ss)
 
@@ -886,18 +901,22 @@ raft or sensor may be None (meaning get all)
 
         return sources
 
-    def getMagsByType(self, magType, good=None, magDict=None):
+    def getMagsByType(self, magType, good=None, suffix="", magDict=None):
         if magDict:
             mags = magDict[magType]
         else:
+            try:
+                cat = self.cat
+            except:
+                cat = self
             if magType == "ap":
-                mags = self.apMags
+                mags = cat.get("apMag" + suffix)
             elif magType == "inst":
-                mags = self.instMags
+                mags = cat.get("instMag" + suffix)
             elif magType == "model":
-                mags = self.modelMags
+                mags = cat.get("modelMag" + suffix)
             elif magType == "psf":
-                mags = self.psfMags
+                mags = cat.get("psfMag" + suffix)
             else:
                 raise RuntimeError("Unknown magnitude type %s" % magType)
 
@@ -974,35 +993,22 @@ ccd may be a list"""
         dataIds = sum([self.expandDataId(did, nSensor) for did in dataId], [])
         dataIds = [d for d in dataIds if d]
 
-        ids, flags, stellar, x, y, shape, apMags, instMags, modelMags, psfMags = \
-             None, None, None, None, None, None, None, None, None, None
-
+        catInfo = None
         for did in dataIds:
-            ss = self.getSources(did)[0]
-            ids, flags, stellar, x, y, shape, apMags, instMags, modelMags, psfMags = \
-                _getMagsFromSS(ss, did, ids=ids, flags=flags, stellar=stellar, extraApFlux=extraApFlux,
-                               x=x, y=y, shape=shape,
-                               apMags=apMags, instMags=instMags, modelMags=modelMags, psfMags=psfMags)
+            catInfo = _appendToCatalog(self, did, catInfo, extraApFlux=extraApFlux)
 
-        if ids is None:
+        cat = catInfo[0]
+            
+        if cat is None:
             raise RuntimeError("Failed to read any data for %s" % " ".join([str(d) for d in dataId]))
 
+        try:
+            cat.getColumnView()
+        except:
+            cat = cat.copy(True)        # make backing storage contiguous, allowing column access
+        self.cat = cat
+        
         self.name = butler.mapperInfo.dataIdToTitle(dataIds)
-
-        self.ids       = ids
-        self.flags     = {}
-        for k, v in flags.items():
-            self.flags[k] = flags[k]
-        self.stellar   = stellar
-        self.x   = x
-        self.y   = y
-        self.shape = []
-        for i in range(len(shape)):
-            self.shape.append(shape[i])
-        self.apMags    = apMags
-        self.instMags  = instMags
-        self.modelMags = modelMags
-        self.psfMags   = psfMags
 
     #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
@@ -1182,9 +1188,20 @@ def _setFlagsFromSource(ssc=None):
             flags[k] = ssc.get(n)
         return flags
 
-def getMagsFromSS(ss, dataId, extraApFlux=0.0):
-    """Return numpy arrays constructed from SourceSet ss"""
+def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extraApFlux=0.0):
+    """Append interesting columns from data's "src" object (a SourceSet) to a catalogue cat, passed
+    in through catInfo == (cat, scm) where scm is the SchemaMapper used to generate cat.
 
+    if data is None, sourceSet must be provided and is assumed to be the sourceSet
+
+    If catInfo is None, a new catalogue (and SchemaMapper) are generated
+    """
+
+    if data is None:
+        assert sourceSet
+    else:
+        sourceSet = data.getDataset("src", dataId)[0]
+    
     calexp_md = butler.get('calexp_md', **dataId)
     calib = afwImage.Calib(calexp_md)
     fluxMag0, fluxMag0Err = calib.getFluxMag0()
@@ -1195,84 +1212,147 @@ def getMagsFromSS(ss, dataId, extraApFlux=0.0):
 
     #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-    tab = ss.getTable()
-    sch = tab.getSchema()
-    scm = afwTable.SchemaMapper(sch)
-    for f in ["id", "coord", "parent",  # must be first and in this order --- #2154
-              "classification.extendedness",
-              "flags.pixel.edge",
-              "flags.pixel.interpolated.any",
-              "flags.pixel.interpolated.center",
-              "flags.pixel.saturated.any",
-              "flags.pixel.saturated.center",
-              ]:
-        scm.addMapping(sch.find(f).getKey())
-    for key in [tab.getCentroidKey(), tab.getCentroidErrKey(), tab.getCentroidFlagKey(),
-                tab.getShapeKey(),
-                ]:
-        scm.addMapping(key)
-
-    definePhotoSlots = False            # add standard photometric slots?
-    if definePhotoSlots:
-        for key in [tab.getInstFluxKey(),  tab.getInstFluxErrKey(),  tab.getInstFluxFlagKey(),
-                    tab.getModelFluxKey(), tab.getModelFluxErrKey(), tab.getModelFluxFlagKey(),
-                    tab.getPsfFluxKey(),   tab.getPsfFluxErrKey(),   tab.getPsfFluxFlagKey(),
-                    tab.getApFluxKey(),   tab.getApFluxErrKey(),     tab.getApFluxFlagKey(),
+    if catInfo is not None:
+        cat, scm = catInfo
+        assert scm
+        
+        table = cat.table
+    else:
+        tab = sourceSet.getTable()
+        sch = tab.getSchema()
+        scm = afwTable.SchemaMapper(sch)
+        for f in ["id", "coord", "parent",  # must be first and in this order --- #2154
+                  "classification.extendedness",
+                  "flags.pixel.edge",
+                  "flags.pixel.interpolated.any",
+                  "flags.pixel.interpolated.center",
+                  "flags.pixel.saturated.any",
+                  "flags.pixel.saturated.center",
+                  ]:
+            scm.addMapping(sch.find(f).getKey())
+        for key in [tab.getCentroidKey(), tab.getCentroidErrKey(), tab.getCentroidFlagKey(),
+                    tab.getShapeKey(),
                     ]:
             scm.addMapping(key)
 
-    stellarKey = scm.addOutputField(afwTable.Field_Flag("stellar", "Is the source stellar?"))
-    apMagKey = scm.addOutputField(afwTable.Field_F("apMag", "The magnitude corresponding to apFlux"))
-    instMagKey = scm.addOutputField(afwTable.Field_F("instMag", "The magnitude corresponding to instFlux"))
-    modelMagKey = scm.addOutputField(afwTable.Field_F("modelMag", "The magnitude corresponding to modelFlux"))
-    psfMagKey = scm.addOutputField(afwTable.Field_F("psfMag", "The magnitude corresponding to psfFlux"))
+        definePhotoSlots = False            # add standard photometric slots?
+        if definePhotoSlots:
+            for key in [tab.getInstFluxKey(),  tab.getInstFluxErrKey(),  tab.getInstFluxFlagKey(),
+                        tab.getModelFluxKey(), tab.getModelFluxErrKey(), tab.getModelFluxFlagKey(),
+                        tab.getPsfFluxKey(),   tab.getPsfFluxErrKey(),   tab.getPsfFluxFlagKey(),
+                        tab.getApFluxKey(),   tab.getApFluxErrKey(),     tab.getApFluxFlagKey(),
+                        ]:
+                scm.addMapping(key)
 
-    cat = afwTable.SourceCatalog(scm.getOutputSchema())
-    table = cat.table
+        scm.addOutputField(afwTable.Field_Flag("stellar", "Is the source stellar?"))
+        scm.addOutputField(afwTable.Field_F("apMag", "The magnitude corresponding to apFlux"))
+        scm.addOutputField(afwTable.Field_F("instMag", "The magnitude corresponding to instFlux"))
+        scm.addOutputField(afwTable.Field_F("modelMag", "The magnitude corresponding to modelFlux"))
+        scm.addOutputField(afwTable.Field_F("psfMag", "The magnitude corresponding to psfFlux"))
+        scm.addOutputField(afwTable.Field_Flag("good", "The object is good"))
 
-    table.preallocate(len(ss))
+        cat = afwTable.SourceCatalog(scm.getOutputSchema())
+        table = cat.table
 
-    table.defineCentroid(tab.getCentroidDefinition())
+        table.defineCentroid(tab.getCentroidDefinition())
 
-    if definePhotoSlots:
-        #
-        # Define the slots we were using before
-        #
-        table.defineApFlux(tab.getApFluxDefinition())    
-        table.defineInstFlux(tab.getInstFluxDefinition())    
-        table.defineModelFlux(tab.getModelFluxDefinition())    
-        table.definePsfFlux(tab.getPsfFluxDefinition())    
+        if definePhotoSlots:
+            #
+            # Define the slots we were using before
+            #
+            table.defineApFlux(tab.getApFluxDefinition())    
+            table.defineInstFlux(tab.getInstFluxDefinition())    
+            table.defineModelFlux(tab.getModelFluxDefinition())    
+            table.definePsfFlux(tab.getPsfFluxDefinition())    
+    #
+    # OK, we have the schema sorted out;  time to read and process
+    #
+    table.preallocate(len(cat) + len(sourceSet))
 
-    for s in ss:
-        cat.append(cat.copyRecord(s, scm))
+    stellarKey = cat.getSchema().find("stellar").getKey()
+    apMagKey = cat.getSchema().find("apMag").getKey()
+    instMagKey = cat.getSchema().find("instMag").getKey()
+    modelMagKey = cat.getSchema().find("modelMag").getKey()
+    psfMagKey = cat.getSchema().find("psfMag").getKey()
+    goodKey = cat.getSchema().find("good").getKey()
 
-        cat[-1].setFlag(stellarKey, s.get("classification.extendedness") < 0.5)
+    throwOnNegative = afwImage.Calib.getThrowOnNegativeFlux()
+    afwImage.Calib.setThrowOnNegativeFlux(False)
+    try:
+        for s in sourceSet:
+            cat.append(cat.copyRecord(s, scm))
+
+            cat[-1].setFlag(stellarKey, s.get("classification.extendedness") < 0.5)
+
+            cat[-1].setF(apMagKey,    calib.getMagnitude(s.getApFlux() + extraApFlux))
+            cat[-1].setF(instMagKey,  calib.getMagnitude(s.getInstFlux()))
+            cat[-1].setF(modelMagKey, calib.getMagnitude(s.getModelFlux()))
+            cat[-1].setF(psfMagKey,   calib.getMagnitude(s.getPsfFlux()))
+            cat[-1].setFlag(goodKey, True)  # for now
+    except:
+        raise
+    finally:
+        afwImage.Calib.setThrowOnNegativeFlux(throwOnNegative)
+
+    return cat, scm
+
+def zipMatchList(matchList):
+    """zip a matchList into a single catalogue
+
+    @param matchList MatchList, as returned by e.g. afwTable.matchRaDec
+    """
+
+    records = [matchList[0][i] for i in range(2)]
+
+    requiredFields = ["id", "coord", "parent"] # keys that must be first and in this order --- #2154
+
+    scm = None                          # the SchemaMapper
+    keys_2 = []                         # keys from second list that need to be copied over
+    for i, rec in enumerate(records):
+        suffix = "_%d" % (i + 1)
         
-        try:
-            mag = calib.getMagnitude(s.getApFlux() + extraApFlux)
-        except :
-            mag  = np.nan
-        cat[-1].setF(apMagKey, mag)
+        sch = rec.getSchema()
+        if not scm:
+            scm = afwTable.SchemaMapper(sch)
 
-        try:
-            mag = calib.getMagnitude(s.getInstFlux())
-        except :
-            mag  = np.nan
-        cat[-1].setF(instMagKey, mag)
+            for f in requiredFields: # must be first and in this order --- #2154
+                scm.addMapping(sch.find(f).getKey())
 
-        try:
-            mag = calib.getMagnitude(s.getModelFlux())
-        except :
-            mag  = np.nan
-        cat[-1].setF(modelMagKey, mag)
+        for schEl in sch:
+            inField = schEl.getField()
+            if inField.getName() not in requiredFields:
+                key = schEl.getKey()
+                outputField = type(inField)(inField.getName() + suffix, inField.getDoc())
+                if i == 0:
+                    scm.addMapping(key, outputField)
+                else:
+                    keys_2.append((key, scm.addOutputField(outputField),
+                                   outputField.getTypeString()))
+    #
+    # OK, we have the schema sorted out;  time to read and process
+    #
+    cat = afwTable.SourceCatalog(scm.getOutputSchema())
+    cat.table.preallocate(len(matchList))
 
-        try:
-            mag = calib.getMagnitude(s.getPsfFlux())
-        except :
-            mag  = np.nan
-        cat[-1].setF(psfMagKey, mag)
+    for m1, m2, d in matchList:
+        cat.append(cat.copyRecord(m1, scm))
+        rec = cat[-1]
+        for key, okey, typeString in keys_2:
+            if typeString == "D":
+                rec.setD(okey, m2.getD(key))
+            elif typeString == "F":
+                rec.setF(okey, m2.getF(key))
+            elif typeString == "Flag":
+                rec.setFlag(okey, m2.getFlag(key))
+            else:
+                rec.set(okey, m2.get(key))
 
-    del ss
+    return cat
+
+def getMagsFromSS(ss, dataId, extraApFlux=0.0):
+    """Return numpy arrays constructed from SourceSet ss"""
+
+    cat = _appendToCatalog(None, dataId, sourceSet=None, extraApFlux=extraApFlux)
 
     ids = cat.get("id")
     flags = _setFlagsFromSource(cat)
@@ -1288,63 +1368,8 @@ def getMagsFromSS(ss, dataId, extraApFlux=0.0):
     else:
         shape = [np.zeros(len(ids)), np.zeros(len(ids)), np.zeros(len(ids))]
 
-    good = reduce(np.logical_and, (np.isfinite(apMags), np.isfinite(psfMags),
-                                   np.isfinite(instMags), np.isfinite(modelMags),))
-
-    ids = ids[good]
-    for k, v in flags.items():
-        flags[k] = v[good]
-    stellar = stellar[good]
-    apMags = apMags[good]
-    instMags = instMags[good]
-    modelMags = modelMags[good]
-    psfMags = psfMags[good]
-    x = x[good]
-    y = y[good]
-    for i in range(len(shape)):
-        shape[i] = shape[i][good]
-
     return ids, flags, stellar, x, y, shape, \
         dict(ap=apMags, inst=instMags, model=modelMags, psf=psfMags)
-
-def _getMagsFromSS(ss, dataId, ids=None, flags=None, stellar=None, extraApFlux=0, x=None, y=None,
-                   shape=None,
-                   apMags=None, instMags=None, modelMags=None, psfMags=None):
-    """Return python arrays constructed from SourceSet ss, and possibly extending {ap,model,psf}Mags"""
-
-    _ids, _flags, _stellar, _x, _y, _shape, _mags = getMagsFromSS(ss, dataId, extraApFlux)
-    _apMags, _instMags, _modelMags, _psfMags = _mags["ap"], _mags["inst"], _mags["model"], _mags["psf"]
-
-    if ids is None:
-        ids = _ids
-        flags = {}
-        for k in _flags.keys():
-            flags[k] = _flags[k]
-        stellar = _stellar
-        x = _x
-        y = _y
-        shape = []
-        for i in range(len(_shape)):
-            shape.append(_shape[i])
-        apMags = _apMags
-        instMags = _instMags
-        modelMags = _modelMags
-        psfMags = _psfMags
-    else:
-        ids = np.append(ids, _ids)
-        for k in flags.keys():
-            flags[k] = np.append(flags[k], _flags[k])
-        stellar = np.append(stellar, _stellar)
-        x = np.append(x, _x)
-        y = np.append(y, _y)
-        for i in range(len(shape)):
-            shape[i] = np.append(shape[i], _shape[i])
-        apMags = np.append(apMags, _apMags)
-        instMags = np.append(instMags, _instMags)
-        modelMags = np.append(modelMags, _modelMags)
-        psfMags = np.append(psfMags, _psfMags)
-
-    return ids, flags, stellar, x, y, shape, apMags, instMags, modelMags, psfMags
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
@@ -1402,11 +1427,13 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
 
     try:
-        data.flags
+        data.cat
     except AttributeError:
         raise RuntimeError("Please call da.getMagsByVisit, then try again")
 
-    bad = data.flags["EDGE"] | data.flags["INTERP_CENTER"] | data.flags["SATUR_CENTER"]
+    bad = reduce(lambda x, y: np.logical_or(x, data.cat.get(y)),
+                 ["flags.pixel.edge", "flags.pixel.interpolated.center", "flags.pixel.saturated.center",],
+                 False)
     good = np.logical_not(bad)
 
     mag1 = data.getMagsByType(magType1, good)
@@ -1415,7 +1442,7 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
 
     locus = np.logical_and(np.logical_and(mag1 > magmin, mag1 < maglim), np.abs(delta - meanDelta) < sgVal)
 
-    stellar = data.stellar[good]
+    stellar = data.cat.get("stellar")[good]
     nonStellar = np.logical_not(stellar)
 
     try:
@@ -1488,11 +1515,12 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     #
     global eventHandlers
     flags = {}
-    for k, v in data.flags.items():
-        flags[k] = data.flags[k][good]
-    x = data.x[good]
-    y = data.y[good]
-    ids = data.ids[good]
+    if False:
+        for k, v in data.flags.items():
+            flags[k] = data.flags[k][good] # needs to be converted to use data.cat
+    x = data.cat.getX()[good]
+    y = data.cat.getY()[good]
+    ids = data.cat.get("id")[good]
     eventHandlers[fig] = EventHandler(axes, mag1, delta, ids, x, y, flags, frames=frames)
 
     fig.show()
@@ -1501,11 +1529,11 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-def plotCM(data1, data2, magType1="psf", magType2="psf", maglim=20, magmin=14,
+def plotCM(data1, data2, magType="psf", maglim=20, magmin=14,
            showMedians=False, sgVal=0.05, meanDelta=0.0, adjustMean=False,
            xmin=None, xmax=None, ymin=None, ymax=None,
            title="+", markersize=1, color="red", frames=[0], fig=None):
-    """Plot (data1.magType1 - data2.magType2) v. data1.magType1 mags (e.g. "model" and "psf")
+    """Plot (data1.magType - data2.magType) v. data1.magType mags (e.g. "psf")
 
 The magnitude limit for the "locus" box used to calculate statistics is maglim, and only objects within
 +- sgLim of meanDelta are included in the locus (the axes are also adjusted to include meanDelta in the
@@ -1523,100 +1551,61 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     data = {1 : data1, 2 : data2}
     for i, d in data.items():
         try:
-            d.flags
+            d.cat
         except AttributeError:
             raise RuntimeError("Please call data%d.getMagsByVisit, then try again" % i)
 
-    bad, good = {}, {}
-    for i, d in data.items():
-        bad[i] = d.flags["EDGE"] | d.flags["INTERP_CENTER"] | d.flags["SATUR_CENTER"]
-        good[i] = np.logical_not(bad[i])
+    matchRadius = 2                     # arcsec
+    mat = afwTable.matchRaDec(data[1].cat, data[2].cat, matchRadius*afwGeom.arcseconds)
+    matched = Data(cat=zipMatchList(mat))
 
-    mag1 = data[1].getMagsByType(magType1, good[1])
-    mag2 = data[2].getMagsByType(magType2, good[2])
+    bad = None
+    for i in range(2):
+        suffix = "_%d" % (i + 1)
+        for name in ["flags.pixel.edge", "flags.pixel.interpolated.center",
+                     "flags.pixel.saturated.center",]:
+            _flg = matched.cat.get(name + suffix)
+            if bad is None:
+                bad = _flg
+            else:
+                bad = np.logical_or(bad, _flg)
+
+    good = np.logical_not(bad)
+
+    mag1 = matched.getMagsByType(magType, good, suffix="_1")
+    mag2 = matched.getMagsByType(magType, good, suffix="_2")
     delta = mag1 - mag2
 
     locus = np.logical_and(np.logical_and(mag1 > magmin, mag1 < maglim), np.abs(delta - meanDelta) < sgVal)
 
-    stellar = data[1].stellar[good[1]]
+    stellar = matched.cat.get("stellar_1")[good]
     nonStellar = np.logical_not(stellar)
-
-    try:
-        stats = afwMath.makeStatistics(delta[locus], afwMath.STDEVCLIP | afwMath.MEANCLIP)
-        mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
-    except:
-        mean, stdev = np.nan, np.nan
-
-    if adjustMean:
-        ids = data.ids[good]
-        ccds = set([x["ccd"] for x in sum(data.dataSets.values(), [])])
-        ccdIds = [butler.mapperInfo.splitId(i)[1] for i in ids]
-        for ccd in ccds:
-            l = np.logical_and(np.equal(ccdIds, ccd), locus)
-            try:
-                delta[np.equal(ccdIds, ccd)] += \
-                    mean - afwMath.makeStatistics(delta[l], afwMath.MEANCLIP).getValue()
-            except Exception, e:
-                print "Adjusting mean for CCD %d: %s" % (ccd, e)
-
-    if False:
-        axes.plot(mag1[locus], delta[locus], "o", markersize=2*markersize, color="blue")
-
-    axes.plot((magmin, maglim, maglim, magmin, magmin), meanDelta + sgVal*np.array([-1, -1, 1, 1, -1]), "b:")
-    axes.plot((0, 30), meanDelta + np.array([0, 0]), "b-")
-
+    
     color2 = "green"
-    axes.plot(mag1[nonStellar], delta[nonStellar], "o", markersize=markersize, markeredgewidth=0, color=color)
-    axes.plot(mag1[stellar], delta[stellar], "o", markersize=markersize, markeredgewidth=0, color=color2)
+    axes.plot(delta[nonStellar], mag1[nonStellar], "o", markersize=markersize, markeredgewidth=0, color=color)
+    axes.plot(delta[stellar], mag1[stellar], "o", markersize=markersize, markeredgewidth=0, color=color2)
     #axes.plot((0, 30), (0, 0), "b-")
 
-    if showMedians:
-        binwidth = 1.0
-        bins = np.arange(int(magmin), int(max(mag1[stellar])), binwidth)
-        vals = np.empty_like(bins)
-        for i in range(len(bins) - 1):
-            inBin = np.logical_and(mag1 > bins[i], mag1 <= bins[i] + binwidth)
-            vals[i] = np.median(delta[np.where(np.logical_and(stellar, inBin))])
+    filter1, filter2 = data[1].dataId["filter"], data[2].dataId["filter"]
 
-        axes.plot(bins + 0.5*binwidth, vals, linestyle="-", marker="o", color="cyan")
+    axes.set_xlim(-1 if xmin is None else xmin, 2 if xmax is None else xmax)
+    axes.set_ylim(24 if ymax is None else ymax, 14 if ymin is None else ymin)
+    axes.set_xlabel("(%s - %s)$_{%s}$" % (filter1, filter2, magType))
+    axes.set_ylabel("%s$_{%s}$" % (filter1, magType))
+    #axes.set_title(re.sub(r"^\+\s*", data.name + " ", title))
 
     if False:
-        if False:                           # clump
-            magmin, magmax = 20.03, 20.13
-            if magType == "model":
-                dmin, dmax = -0.72, -0.67
-            else:
-                dmin, dmax = -0.576, -0.512
-        else:                               # "saturated"
-            magmin, magmax = 14, 14.9
-            dmin, dmax = -0.2, 0.2
-            dmin, dmax = -0.2, -0.1
-
-        axes.plot([magmax, magmin, magmin, magmax, magmax], [dmin, dmin, dmax, dmax, dmin], "r-")
-        objs = np.logical_and(np.logical_and(mag1 > magmin, mag1 < magmax),
-                              np.logical_and(delta > dmin, delta < dmax))
+        #
+        # Make "i" print the object's ID, p pan ds9, etc.
+        #
+        global eventHandlers
+        flags = {}
+        for k, v in data.flags.items():
+            flags[k] = data.flags[k][good]
+        x = data.x[good]
+        y = data.y[good]
         ids = data.ids[good]
-        for i in sorted(ids[objs]):
-            print i, butler.mapperInfo.splitId(i)
-
-    axes.set_xlim(14 if xmin is None else xmin, 26 if xmax is None else xmax)
-    axes.set_ylim(meanDelta + (0.2 if ymin is None else ymin), meanDelta + (- 0.8 if ymax is None else ymax))
-    axes.set_xlabel(magType1)
-    axes.set_ylabel("%s - %s" % (magType1, magType2))
-    axes.set_title(re.sub(r"^\+\s*", data.name + " ", title))
-
-    fig.text(0.20, 0.85, r"$%.3f \pm %.3f$" % (mean, stdev), fontsize="larger")
-    #
-    # Make "i" print the object's ID, p pan ds9, etc.
-    #
-    global eventHandlers
-    flags = {}
-    for k, v in data.flags.items():
-        flags[k] = data.flags[k][good]
-    x = data.x[good]
-    y = data.y[good]
-    ids = data.ids[good]
-    eventHandlers[fig] = EventHandler(axes, mag1, delta, ids, x, y, flags, frames=frames)
+        eventHandlers[fig] = EventHandler(axes, mag1, delta, ids, x, y, flags, frames=frames)
 
     fig.show()
 
@@ -2434,7 +2423,7 @@ def plotCounts(data, matched, refOnly, spurious, blended, ss=None, calexp=None,
             else:
                 bad = np.logical_or(bad, isStar)
                  
-        mags = data.getMagsByType(magType, np.logical_not(bad), mags)
+        mags = data.getMagsByType(magType, np.logical_not(bad), magDict=mags)
 
         xyPos.append(zip(mags, x[np.logical_not(bad)], yAstrom[np.logical_not(bad)]))
         arrays.append(np.histogram(mags, bins)[0])
