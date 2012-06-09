@@ -777,19 +777,35 @@ class Data(object):
             dataId[_visit_][0]
         except TypeError:
             dataId[_visit_] = [dataId[_visit_]]
-        visits = dataId[_visit_]; dataId[_visit_] = None
+        except KeyError:
+            dataId[_visit_] = [None]
+        visits = dataId[_visit_]
+
+        if visits[0] is None:
+            del dataId[_visit_]
+        else:
+            dataId[_visit_] = None
 
         try:
             dataId[_raft_][0]
         except TypeError:
             dataId[_raft_] = [dataId[_raft_]]
-        rafts = dataId[_raft_]; dataId[_raft_] = None
+        except KeyError:
+            dataId[_raft_] = [None]
+        rafts = dataId[_raft_];
+
+        if rafts[0] is None:
+            del dataId[_raft_]
+        else:
+            dataId[_raft_] = None
 
         dataSets = {}
         for v in visits:
-            dataId[_visit_] = v
+            if v is not None:
+                dataId[_visit_] = v
             for r in rafts:
-                dataId[_raft_] = r
+                if r is not None:
+                    dataId[_raft_] = r
                 for vals in butler.queryMetadata(_raw_, _visit_, fields, **dataId):
                     _dataId = dict(zip(fields, vals))
 
@@ -983,7 +999,7 @@ ccd may be a list"""
         return dids
 
     def getMagsByVisit(self, dataId, nSensor=0, extraApFlux=0.0):
-        """Set the "self.magnitudes" for a visit"""
+        """Read the magnitudes for a set of data"""
 
         try:
             dataId.count
@@ -997,7 +1013,7 @@ ccd may be a list"""
         for did in dataIds:
             catInfo = _appendToCatalog(self, did, catInfo, extraApFlux=extraApFlux)
 
-        cat = catInfo[0]
+        cat = catInfo[0] if catInfo else None
             
         if cat is None:
             raise RuntimeError("Failed to read any data for %s" % " ".join([str(d) for d in dataId]))
@@ -1163,6 +1179,18 @@ ccd may be a list"""
             print "Kept %d out of %d reference sources for %s" % (len(keepMatched), len(matched), dataId)
 
         return keepMatched, zp
+
+#-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+def readBands(dataRoot, dataId, filters):
+    """Read the data for a number of filters"""
+
+    data = {}
+    for f in filters:
+        data[f] = Data(dataRoot=dataRoot)
+        data[f].getMagsByVisit(dataId.copy(filter=f))
+
+    return data
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 #
@@ -1576,8 +1604,6 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     mag2 = matched.getMagsByType(magType, good, suffix="_2")
     delta = mag1 - mag2
 
-    locus = np.logical_and(np.logical_and(mag1 > magmin, mag1 < maglim), np.abs(delta - meanDelta) < sgVal)
-
     stellar = matched.cat.get("stellar_1")[good]
     nonStellar = np.logical_not(stellar)
     
@@ -1592,20 +1618,114 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     axes.set_ylim(24 if ymax is None else ymax, 14 if ymin is None else ymin)
     axes.set_xlabel("(%s - %s)$_{%s}$" % (filter1, filter2, magType))
     axes.set_ylabel("%s$_{%s}$" % (filter1, magType))
-    #axes.set_title(re.sub(r"^\+\s*", data.name + " ", title))
+    axes.set_title(re.sub(r"^\+\s*", data1.name + " ", title))
 
-    if False:
-        #
-        # Make "i" print the object's ID, p pan ds9, etc.
-        #
-        global eventHandlers
-        flags = {}
-        for k, v in data.flags.items():
-            flags[k] = data.flags[k][good]
-        x = data.x[good]
-        y = data.y[good]
-        ids = data.ids[good]
-        eventHandlers[fig] = EventHandler(axes, mag1, delta, ids, x, y, flags, frames=frames)
+    fig.show()
+
+    return fig
+
+#-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+def plotCC(data1, data2, data3, magType="psf", magmax=None, magmin=None,
+           SG=None,
+           xmin=None, xmax=None, ymin=None, ymax=None,
+           title="+", markersize=1, color="red", frames=[0], fig=None):
+    """Plot (data1.magType - data2.magType) v. (data2.magType - data3.magType) mags (e.g. "psf")
+
+If title is provided it's used as a plot title; if it starts + the usual title is prepended
+
+If non-None, [xy]{min,max} are used to set the plot limits
+    """
+    fig = getMpFigure(fig)
+
+    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
+
+    data = {1 : data1, 2 : data2, 3 : data3}
+    for i, d in data.items():
+        try:
+            d.cat
+        except AttributeError:
+            raise RuntimeError("Please call data%d.getMagsByVisit, then try again" % i)
+
+    matchRadius = 2                     # arcsec
+    mat = afwTable.matchRaDec(data[1].cat, data[2].cat, matchRadius*afwGeom.arcseconds)
+    mat = afwTable.matchRaDec(zipMatchList(mat), data[3].cat, matchRadius*afwGeom.arcseconds)
+    matched = Data(cat=zipMatchList(mat))
+
+    good = None
+    for i in range(len(data)):
+        suffix = ["_1_1", "_2_1", "_2"][i]
+        for name in ["flags.pixel.edge", "flags.pixel.interpolated.center",
+                     "flags.pixel.saturated.center",]:
+            _flg = np.logical_not(matched.cat.get(name + suffix))
+            if good is None:
+                good = _flg
+            else:
+                good = np.logical_and(good, _flg)
+
+    mag1 = matched.getMagsByType(magType, good, suffix="_1_1")
+    mag2 = matched.getMagsByType(magType, good, suffix="_2_1")
+    mag3 = matched.getMagsByType(magType, good, suffix="_2")
+    good = good[good]
+
+    if magmin is not None:
+        good = np.logical_and(good, mag1 > magmin)
+    if magmax is not None:
+        good = np.logical_and(good, mag1 < magmax)
+    
+    col12 = mag1 - mag2; col12 = col12[good]
+    col23 = mag2 - mag3; col23 = col23[good]
+
+    stellar = matched.cat.get("stellar_1_1")[good]
+    nonStellar = np.logical_not(stellar)
+    
+    color2 = "green"
+    nobj = 0
+    if SG.lower() in ("galaxy", "g"):
+        nobj += np.sum(nonStellar)
+        axes.plot(col12[nonStellar], col23[nonStellar], "o",
+                  markersize=markersize, markeredgewidth=0, color=color) # 
+    if SG in ("star", "S"):
+        nobj += np.sum(stellar)
+        axes.plot(col12[stellar], col23[stellar], "o", markersize=markersize, markeredgewidth=0, color=color2)
+    #axes.plot((0, 30), (0, 0), "b-")
+
+    xy0 = 0.391, 0.163
+    xy1 = 1.005, 0.396
+    theta = math.atan2(xy1[1] - xy0[1], xy1[0] - xy0[0])
+    x, y = col12[stellar], col23[stellar]
+    c, s= math.cos(theta), math.sin(theta)
+    xp =   x*c + y*s
+    yp = - x*s + y*c
+
+    #axes.plot([xy0[0], xy1[0]], [xy0[1], xy1[1]])
+    if True:
+        delta = np.array(yp, dtype="float64")
+        blue = np.logical_and(x > xy0[0], x < xy1[0])
+        stats = afwMath.makeStatistics(delta[blue], afwMath.STDEVCLIP | afwMath.MEANCLIP)
+        mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
+        fig.text(0.75, 0.85, r"$\pm %.3f$" % (stdev), fontsize="larger")
+    else:
+        fig.clf()
+        axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
+        axes.plot(xp, yp, ".")
+        
+    filterNames = [None] + [data[i + 1].dataId["filter"] for i in range(len(data.keys()))]
+
+    axes.set_xlim(-1 if xmin is None else xmin, 2 if xmax is None else xmax)
+    axes.set_ylim(-1 if ymin is None else ymin, 2 if ymax is None else ymax)
+
+    axes.set_xlabel("(%s - %s)$_{%s}$" % (filterNames[1], filterNames[2], magType))
+    axes.set_ylabel("(%s - %s)$_{%s}$" % (filterNames[2], filterNames[3], magType))
+    if magmax is not None:
+        if magmin is not None:
+            title += " [%g < %s < %g]" % (magmin, filterNames[1], magmax)
+        else:
+            title += " [%s < %g]" % (filterNames[1], magmax)
+
+    title += " %d objects" % nobj
+    
+    axes.set_title(re.sub(r"^\+\s*", data1.name + " ", title))
 
     fig.show()
 
