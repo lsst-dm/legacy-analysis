@@ -667,7 +667,7 @@ class Data(object):
 
         self.setButler(*args, **kwargs)
 
-        self.dataId = {}
+        self.dataId = []
 
         self.matches = None             # remove me when conversion to self.matched is complete
         self.matched = None
@@ -676,14 +676,6 @@ class Data(object):
 
         self.name = "??"
         self.astrom = None
-
-    def setVRS(self, reset=False, **dataId):
-        """Save the values of visit, raft, sensor; if None use the pre-set values (which are cleared if reset is True)"""
-
-        if reset:
-            self.dataId = {}
-
-        self.dataId.update(dataId)
             
     def setButler(self, rerun=None, dataRoot=None, registryRoot=None):
         global butlerDataRoot, butlerRerun, butler, inButler, rerunName
@@ -773,48 +765,15 @@ class Data(object):
         dataId = dict([(k, v) for k, v in dataId.items() if v is not None])
         fields = butler.mapperInfo.getFields(dataType)
 
-        try:
-            dataId[_visit_][0]
-        except TypeError:
-            dataId[_visit_] = [dataId[_visit_]]
-        except KeyError:
-            dataId[_visit_] = [None]
-        visits = dataId[_visit_]
+        dataSets = []
+        for did in _dataIdDictOuterProduct(dataId, []):
+            for vals in butler.queryMetadata(_raw_, _visit_, fields, **did):
+                _dataId = dict(zip(fields, vals))
+            
+                if butler.datasetExists(dataType, **_dataId):
+                    dataSets.append(_dataId)
 
-        if visits[0] is None:
-            del dataId[_visit_]
-        else:
-            dataId[_visit_] = None
-
-        try:
-            dataId[_raft_][0]
-        except TypeError:
-            dataId[_raft_] = [dataId[_raft_]]
-        except KeyError:
-            dataId[_raft_] = [None]
-        rafts = dataId[_raft_];
-
-        if rafts[0] is None:
-            del dataId[_raft_]
-        else:
-            dataId[_raft_] = None
-
-        dataSets = {}
-        for v in visits:
-            if v is not None:
-                dataId[_visit_] = v
-            for r in rafts:
-                if r is not None:
-                    dataId[_raft_] = r
-                for vals in butler.queryMetadata(_raw_, _visit_, fields, **dataId):
-                    _dataId = dict(zip(fields, vals))
-
-                    if butler.datasetExists(dataType, **_dataId):
-                        if not dataSets.has_key(v):
-                            dataSets[v] = []
-                        dataSets[v].append(_dataId)
-
-                self.dataSets = dataSets
+        self.dataSets = dataSets
 
         return self.dataSets
 
@@ -861,28 +820,20 @@ raft or sensor may be None (meaning get all)
 
             return [afwImage.makeExposure(afwImage.makeMaskedImage(eimage, mask), eimageExposure.getWcs())]
 
-        self.setVRS(reset=True, **dataId)
-
         dataSets = self.lookupDataByVisit(dataType, dataId)
-        visit = dataId.get(_visit_)
-        if not visit and len(dataSets) == 1:
-            visit = dataSets.keys()[0]
-
-        dataSets = dataSets.get(visit)
-        if not dataSets:
-            raise RuntimeError("I cannot find your data for %s" % dataId if visit else "")
+        self.dataId += dataSets
 
         data = []
-        for dataId in dataSets:
-            dataElem = butler.get(dataType, **dataId)
+        for did in dataSets:
+            dataElem = butler.get(dataType, **did)
 
             if dataType == "calexp":
-                psf = butler.get("psf", **dataId)
+                psf = butler.get("psf", **did)
 		psf.setDetector(dataElem.getDetector())
                 dataElem.setPsf(psf)
                 del psf
             elif dataType == "psf":
-                calexp = butler.get("calexp", **dataId)
+                calexp = butler.get("calexp", **did)
                 dataElem.setDetector(calexp.getDetector())
 		del calexp
                 
@@ -941,77 +892,27 @@ raft or sensor may be None (meaning get all)
 
         return mags
 
-    def expandDataId(self, dataId, nSensor=0):
+    def expandDataId(self, dataId):
         """Return a list of fully qualified dataIds, given a possibly-ambiguous one
 
 ccd may be a list"""
 
-        dataId = dataId.copy()
-        ccds = None
-        for detName in ("ccd", "sensor"):
-            if dataId.has_key(detName):
-                ccds = dataId[detName]
-                if ccds is not None:
-                    try:
-                        ccds[0]
-                    except TypeError:
-                        ccds = [ccds]
-                dataId[detName] = None      # all
-                break
+        return self.lookupDataByVisit("src", dataId)
 
-        dataId = dict([(k, v) for k, v in dataId.items() if v is not None])
-
-        d = self.lookupDataByVisit("src", dataId)
-        if not d:
-            return []
-
-        self.setVRS(False, **dataId)
-
-        if not dataId[_visit_] and len(d) > 0:
-            dataId[_visit_] = [d.keys()[0]]
-
-        try:
-            dataId.get(_visit_)[0]
-        except TypeError:
-            dataId[_visit_] = [dataId.get(_visit_)]
-
-        dids = []
-        for visit in dataId[_visit_]:
-            if not visit and len(d) > 0:
-                visit = d.keys()[0]
-
-            if not visit:
-                raise RuntimeError("Please specify a visit")
-
-            if nSensor > 0:
-                d[visit] = d[visit][0:nSensor]
-
-            try:
-                dids += [DataId(did) for did in d[visit]]
-            except KeyError:
-                pass
-
-        if ccds:
-            dids = [d for d in dids if d[detName] in ccds]
-            for v, ds in self.dataSets.items():
-                self.dataSets[v] = [d for d in ds if d[detName] in ccds]
-
-        return dids
-
-    def getMagsByVisit(self, dataId, nSensor=0, extraApFlux=0.0):
+    def getMagsByVisit(self, dataId, extraApFlux=0.0, verbose=False):
         """Read the magnitudes for a set of data"""
 
-        try:
-            dataId.count
-        except:
-            dataId = [dataId]
-
-        dataIds = sum([self.expandDataId(did, nSensor) for did in dataId], [])
-        dataIds = [d for d in dataIds if d]
-
+        dataIds = self.lookupDataByVisit("src", dataId)
+        
         catInfo = None
         for did in dataIds:
+            if verbose:
+                print "Reading %s         \r" % did,
+                sys.stdout.flush()
+
             catInfo = _appendToCatalog(self, did, catInfo, extraApFlux=extraApFlux)
+        if verbose:
+            print
 
         cat = catInfo[0] if catInfo else None
             
@@ -1028,18 +929,16 @@ ccd may be a list"""
 
     #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-    def getCalibObjects(self, dataId, nSensor=0, allSources=True,
+    def getCalibObjects(self, dataId, allSources=True,
                         displayType="psf", frame=None, mtv=False, verbose=False):
         """If frame is not None then information about displayType will be plotted on ds9; if
         mtv is true the calexp will be displayed first
 
         If allSources is True, read the src table and match it to the catalogue
         """
-        dataIds = self.expandDataId(dataId, nSensor)
+        dataIds = self.expandDataId(dataId)
         if not dataIds:
             raise RuntimeError("%s doesn't expand to any valid dataIds" % dataId)
-
-        self.setVRS(True, **dataIds[0])
 
         self.name = butler.mapperInfo.dataIdToTitle(dataIds)
 
@@ -1180,15 +1079,32 @@ ccd may be a list"""
 
         return keepMatched, zp
 
+def _dataIdDictOuterProduct(dataId, expandedDataId=[]):
+    """Given a dataId which may contain lists, return a list of dataIds with all lists expanded"""
+
+    for k, v in dataId.items():
+        try:
+            if not isinstance(v[0], str): # checking indexing and not a string (damn Guido)
+                for x in v:
+                    _dataId = dataId.copy(); _dataId[k] = x
+                    _dataIdDictOuterProduct(_dataId, expandedDataId)
+                return expandedDataId
+        except TypeError:
+            pass
+
+    expandedDataId.append(dataId)
+
+    return expandedDataId
+        
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-def readBands(dataRoot, dataId, filters):
+def getFilters(dataRoot, dataId, filters, verbose=False):
     """Read the data for a number of filters"""
 
     data = {}
     for f in filters:
         data[f] = Data(dataRoot=dataRoot)
-        data[f].getMagsByVisit(dataId.copy(filter=f))
+        data[f].getMagsByVisit(dataId.copy(filter=f), verbose=verbose)
 
     return data
 
@@ -1313,8 +1229,15 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
             cat[-1].setFlag(stellarKey, s.get("classification.extendedness") < 0.5)
 
             cat[-1].setF(apMagKey,    calib.getMagnitude(s.getApFlux() + extraApFlux))
-            cat[-1].setF(instMagKey,  calib.getMagnitude(s.getInstFlux()))
-            cat[-1].setF(modelMagKey, calib.getMagnitude(s.getModelFlux()))
+            try:
+                cat[-1].setF(instMagKey,  calib.getMagnitude(s.getInstFlux()))
+            except Exception, e:
+                cat[-1].setF(instMagKey,  calib.getMagnitude(float("NaN")))
+            try:
+                cat[-1].setF(modelMagKey, calib.getMagnitude(s.getModelFlux()))
+            except Exception, e:
+                print "RHL", s.getModelFlux()
+                cat[-1].setF(modelMagKey,  calib.getMagnitude(float("NaN")))
             cat[-1].setF(psfMagKey,   calib.getMagnitude(s.getPsfFlux()))
             cat[-1].setFlag(goodKey, True)  # for now
     except:
@@ -1627,9 +1550,9 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 def plotCC(data1, data2, data3, magType="psf", magmax=None, magmin=None,
-           SG=None,
+           SG=None, matchRadius=2,
            xmin=None, xmax=None, ymin=None, ymax=None,
-           title="+", markersize=1, color="red", frames=[0], fig=None):
+           title="+", markersize=1, alpha=1.0, color="red", frames=[0], fig=None):
     """Plot (data1.magType - data2.magType) v. (data2.magType - data3.magType) mags (e.g. "psf")
 
 If title is provided it's used as a plot title; if it starts + the usual title is prepended
@@ -1647,7 +1570,6 @@ If non-None, [xy]{min,max} are used to set the plot limits
         except AttributeError:
             raise RuntimeError("Please call data%d.getMagsByVisit, then try again" % i)
 
-    matchRadius = 2                     # arcsec
     mat = afwTable.matchRaDec(data[1].cat, data[2].cat, matchRadius*afwGeom.arcseconds)
     mat = afwTable.matchRaDec(zipMatchList(mat), data[3].cat, matchRadius*afwGeom.arcseconds)
     matched = Data(cat=zipMatchList(mat))
@@ -1666,6 +1588,7 @@ If non-None, [xy]{min,max} are used to set the plot limits
     mag1 = matched.getMagsByType(magType, good, suffix="_1_1")
     mag2 = matched.getMagsByType(magType, good, suffix="_2_1")
     mag3 = matched.getMagsByType(magType, good, suffix="_2")
+    stellar = matched.cat.get("stellar_1_1")[good]
     good = good[good]
 
     if magmin is not None:
@@ -1676,20 +1599,23 @@ If non-None, [xy]{min,max} are used to set the plot limits
     col12 = mag1 - mag2; col12 = col12[good]
     col23 = mag2 - mag3; col23 = col23[good]
 
-    stellar = matched.cat.get("stellar_1_1")[good]
+    stellar = stellar[good]
     nonStellar = np.logical_not(stellar)
     
     color2 = "green"
     nobj = 0
-    if SG.lower() in ("galaxy", "g"):
+    if "g" in SG.lower():
         nobj += np.sum(nonStellar)
         axes.plot(col12[nonStellar], col23[nonStellar], "o",
-                  markersize=markersize, markeredgewidth=0, color=color) # 
-    if SG in ("star", "S"):
+                  alpha=alpha, markersize=markersize, markeredgewidth=0, color=color) # 
+    if "s" in SG.lower():
         nobj += np.sum(stellar)
-        axes.plot(col12[stellar], col23[stellar], "o", markersize=markersize, markeredgewidth=0, color=color2)
+        axes.plot(col12[stellar], col23[stellar], "o",
+                  alpha=alpha, markersize=markersize, markeredgewidth=0, color=color2)
     #axes.plot((0, 30), (0, 0), "b-")
-
+    #
+    # Calculate width of blue end of stellar locus
+    #
     xy0 = 0.391, 0.163
     xy1 = 1.005, 0.396
     theta = math.atan2(xy1[1] - xy0[1], xy1[0] - xy0[0])
@@ -1699,18 +1625,20 @@ If non-None, [xy]{min,max} are used to set the plot limits
     yp = - x*s + y*c
 
     #axes.plot([xy0[0], xy1[0]], [xy0[1], xy1[1]])
-    if True:
-        delta = np.array(yp, dtype="float64")
-        blue = np.logical_and(x > xy0[0], x < xy1[0])
-        stats = afwMath.makeStatistics(delta[blue], afwMath.STDEVCLIP | afwMath.MEANCLIP)
-        mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
-        fig.text(0.75, 0.85, r"$\pm %.3f$" % (stdev), fontsize="larger")
-    else:
-        fig.clf()
-        axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
-        axes.plot(xp, yp, ".")
+    if "s" in SG.lower():
+        if True:
+            delta = np.array(yp, dtype="float64")
+            blue = np.logical_and(x > xy0[0], x < xy1[0])
+            stats = afwMath.makeStatistics(delta[blue], afwMath.STDEVCLIP | afwMath.MEANCLIP)
+            mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
+            #print "%g +- %g" % (mean, stdev)
+            fig.text(0.75, 0.85, r"$\pm %.3f$" % (stdev), fontsize="larger")
+        else:
+            fig.clf()
+            axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
+            axes.plot(xp, yp, ".")
         
-    filterNames = [None] + [data[i + 1].dataId["filter"] for i in range(len(data.keys()))]
+    filterNames = [None] + [data[i + 1].dataId[0]["filter"] for i in range(len(data.keys()))]
 
     axes.set_xlim(-1 if xmin is None else xmin, 2 if xmax is None else xmax)
     axes.set_ylim(-1 if ymin is None else ymin, 2 if ymax is None else ymax)
@@ -1922,7 +1850,7 @@ If title is provided it's used as a plot title; if it starts + the usual title i
 
     axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
     
-    refmag = getRefmag(mstars, getCanonicalFilterName(data.dataId["filter"]))
+    refmag = getRefmag(mstars, getCanonicalFilterName(data.dataId[0]["filter"]))
 
     ids = np.array([s[1].getId() for s in mstars])
     flux = [getFlux(s[1], magType) for s in mstars]
@@ -2327,7 +2255,6 @@ where
 
     return _getSourceSetFromQuery(data, dataId, query)
     
-
 def getMissed(data, dataId):
     """Return a SourceSet of all the catalogue objects that we failed to detect for dataId (a single CCD)"""
 
