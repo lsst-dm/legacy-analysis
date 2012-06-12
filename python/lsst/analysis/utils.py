@@ -669,7 +669,6 @@ class Data(object):
 
         self.dataId = []
 
-        self.matches = None             # remove me when conversion to self.matched is complete
         self.matched = None
         self.ZP0 = 31
         self.zp = None
@@ -1928,12 +1927,12 @@ Use the matplotlib Figure object fig; if none is provided it'll be created and s
     
 If plotBand is provided, draw lines at +- plotBand
     """
-    fig = getMpFigure(fig)
-
-    raise RuntimeError("Please convert this routine to use data.matched")
-
-    if not data.matches:
+    if not data.matched:
         raise RuntimeError("You need to call the Data.getCalibObjects method before calling this routine")
+
+    raise RuntimeError("Convert me")
+
+    fig = getMpFigure(fig)
 
     mstars = [m for m in data.matches if
               m.second and getFlagForDetection(m.second, "STAR")] # data
