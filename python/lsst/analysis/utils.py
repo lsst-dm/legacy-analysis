@@ -1944,7 +1944,7 @@ def getMissed(data, dataId):
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 def showSourceSet(sourceSet, exp=None, wcs=None, raDec=None, magmin=None, magmax=None, magType="psf",
-                  nSource=-1,
+                  nSource=-1, SG=False,
                   mask=None, symb="+", **kwargs):
     """Show a SourceSet on ds9.
 
@@ -1981,6 +1981,8 @@ def showSourceSet(sourceSet, exp=None, wcs=None, raDec=None, magmin=None, magmax
     else:
         doNotShow = np.zeros(len(sourceSet))
 
+    isStar = np.logical_or(sourceSet.get("classification.extendedness") < 0.5,
+                           sourceSet.get("flags.pixel.saturated.center"))
     with ds9.Buffering():
         for i, s in enumerate(sourceSet):
             if doNotShow[i]:
@@ -2005,6 +2007,10 @@ def showSourceSet(sourceSet, exp=None, wcs=None, raDec=None, magmin=None, magmax
                 x, y = s.getX(), s.getY()
 
             _symb = symb
+            if SG:
+                kwargs["ctype"] = ds9.GREEN if isStar[i] else ds9.RED
+                _symb = "+" if isStar[i] else "o"
+
             if symb == "id":
                 _symb = "%d" % s.getId()
             elif symb == "@":
