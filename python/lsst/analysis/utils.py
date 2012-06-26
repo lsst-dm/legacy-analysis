@@ -94,7 +94,7 @@ except NameError:
 
 def dtName(dType, md=False):
     """Get the name of a given data type (e.g. dtName("src"))"""
-    if dType in ("coaddTempExp",):
+    if not _prefix_ or dType in ("coaddTempExp", "goodSeeingCoadd",):
         return dType
 
     dType = "%s_%s" % (_prefix_, dType)
