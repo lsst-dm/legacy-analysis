@@ -28,6 +28,7 @@ except ImportError:
 
 import lsst.meas.astrom as measAstrom
 import lsst.meas.algorithms as measAlg
+from lsst.meas.algorithms.detection import SourceDetectionTask
 import lsst.meas.algorithms.utils as maUtils
 
 try:
@@ -2870,7 +2871,8 @@ def getFlux(s, magType="psf"):
     else:
         raise RuntimeError("Uknown magnitude type %s" % magType)
 
-def writeRgb(images, rgbFile, min=0, max=50, Q=8, bin=1, scales=[1.0, 1.0, 1.0]):
+def writeRgb(images, rgbFile, min=0, max=50, Q=8, bin=1, scales=[1.0, 1.0, 1.0],
+             subtractBkgd=False, boxSize=1024):
     """Convert the list of images to a true-colour image, and write it to rgbFile (currently .png or .tiff)
 
 Scale the images by scales, if provided
@@ -2897,6 +2899,7 @@ If bin is specified, it should be an integer > 1;  the output file will be binne
         raise RuntimeError("Please specify one or three images, not %d" % len(images)) 
 
     for i, image in enumerate(images):
+        copied = False                    # have we made a copy?
         #
         # Handle Exposures and MaskedImages
         #
@@ -2912,11 +2915,37 @@ If bin is specified, it should be an integer > 1;  the output file will be binne
 
         if bin > 1:
             image = afwMath.binImage(image, bin)
+            copied = True
 
         if scales[i] != 1.0:
-            if bin == 1:                           # we'll need a copy
+            if not copied:
                 image = image.Factory(image, True)
+                copied = True
+
             image *= scales[i]
+
+        if subtractBkgd:
+            if not copied:
+                image = image.Factory(image, True)
+                copied = True
+ 
+            sdConfig = SourceDetectionTask.ConfigClass(None)
+            sdConfig.reEstimateBackground = True
+            sdConfig.thresholdPolarity = "both"
+            sdConfig.thresholdType = 'value'
+            stats = afwMath.makeStatistics(image, afwMath.MEANCLIP | afwMath.STDEVCLIP)
+            image -= stats.getValue(afwMath.MEANCLIP)
+            sdConfig.thresholdValue = 2*stats.getValue(afwMath.STDEVCLIP)
+
+            sdConfig.background.binSize = boxSize
+            sdConfig.background.isNanSafe = True
+            sdConfig.background.undersampleStyle = "REDUCE_INTERP_ORDER"
+
+            sdTask = SourceDetectionTask(None, config=sdConfig)
+
+            exp = afwImage.makeExposure(afwImage.makeMaskedImage(image))
+            sdTask.detectFootprints(exp)
+            del exp
 
         images[i] = image
 
