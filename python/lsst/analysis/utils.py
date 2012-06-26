@@ -1429,7 +1429,9 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
         raise RuntimeError("Please call da.getMagsByVisit, then try again")
 
     bad = reduce(lambda x, y: np.logical_or(x, data.cat.get(y)),
-                 ["flags.pixel.edge", "flags.pixel.interpolated.center", "flags.pixel.saturated.center",],
+                 ["flags.pixel.edge",
+                  #"flags.pixel.interpolated.center",
+                  "flags.pixel.saturated.center",],
                  False)
     good = np.logical_not(bad)
 
