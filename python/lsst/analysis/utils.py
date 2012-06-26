@@ -2340,7 +2340,7 @@ def getMissed(data, dataId):
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 def showSourceSet(sourceSet, exp=None, wcs=None, xy0=None, raDec=None, magmin=None, magmax=None, magType="psf",
-                  nSource=-1,
+                  nSource=-1, obeyXY0=True,
                   mask=None, symb="+", **kwargs):
     """Show a SourceSet on ds9.
 
@@ -2352,6 +2352,9 @@ def showSourceSet(sourceSet, exp=None, wcs=None, xy0=None, raDec=None, magmin=No
         for name in mask:
             bmask |= flagsDict[name]
         mask = bmask
+
+    if exp and not wcs:
+        wcs = exp.getWcs()
 
     if raDec is None and wcs is not None:
         raDec = True
@@ -2381,7 +2384,7 @@ def showSourceSet(sourceSet, exp=None, wcs=None, xy0=None, raDec=None, magmin=No
         x0, y0 = exp.getXY0() if exp else [0.0, 0.0]
     else:
         x0, y0 = xy0
-        
+
     with ds9.Buffering():
         for i, s in enumerate(sourceSet):
             if doNotShow[i]:
@@ -2403,7 +2406,10 @@ def showSourceSet(sourceSet, exp=None, wcs=None, xy0=None, raDec=None, magmin=No
 
                 x, y = wcs.skyToPixel(ra, dec)
             else:
-                x, y = s.getX() - x0, s.getY() - y0
+                x, y = s.getX(), s.getY()
+
+            if obeyXY0:
+                x -= x0; y -= y0
 
             _symb = symb
             if symb == "id":
