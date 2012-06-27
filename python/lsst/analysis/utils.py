@@ -1271,23 +1271,31 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
 
     throwOnNegative = afwImage.Calib.getThrowOnNegativeFlux()
     afwImage.Calib.setThrowOnNegativeFlux(False)
+
+    try:
+        afwTable.SourceRecord.setMag
+    except AttributeError:
+        print >> sys.stderr, "Checking type of magnitude keys"
+        afwTable.SourceRecord.setMag = \
+            afwTable.SourceRecord.setD if apMagKey.getTypeString() == "D" else afwTable.SourceRecord.setF
+
     try:
         for s in sourceSet:
             cat.append(cat.copyRecord(s, scm))
 
-            cat[-1].setFlag(stellarKey, s.get("classification.extendedness") < 0.5)
+            cat[-1].setFlag(stellarKey, s.get("classification.extendedness") < 0.5)    
 
-            cat[-1].setF(apMagKey,    calib.getMagnitude(s.getApFlux() + extraApFlux))
+            cat[-1].setMag(apMagKey,    calib.getMagnitude(s.getApFlux() + extraApFlux))
             try:
-                cat[-1].setF(instMagKey,  calib.getMagnitude(s.getInstFlux()))
+                cat[-1].setMag(instMagKey,  calib.getMagnitude(s.getInstFlux()))
             except Exception, e:
-                cat[-1].setF(instMagKey,  calib.getMagnitude(float("NaN")))
+                cat[-1].setMag(instMagKey,  calib.getMagnitude(float("NaN")))
             try:
-                cat[-1].setF(modelMagKey, calib.getMagnitude(s.getModelFlux()))
+                cat[-1].setMag(modelMagKey, calib.getMagnitude(s.getModelFlux()))
             except Exception, e:
                 print "RHL", s.getModelFlux()
-                cat[-1].setF(modelMagKey,  calib.getMagnitude(float("NaN")))
-            cat[-1].setF(psfMagKey,   calib.getMagnitude(s.getPsfFlux()))
+                cat[-1].setMag(modelMagKey,  calib.getMagnitude(float("NaN")))
+            cat[-1].setMag(psfMagKey,   calib.getMagnitude(s.getPsfFlux()))
             cat[-1].setFlag(goodKey, True)  # for now
     except:
         raise
