@@ -1463,6 +1463,7 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
         mean, stdev = np.nan, np.nan
 
     if adjustMean:
+        raise RuntimeError("Fix me")
         ids = data.ids[good]
         ccds = set([x["ccd"] for x in sum(data.dataSets.values(), [])])
         ccdIds = [butler.mapperInfo.splitId(i)[1] for i in ids]
