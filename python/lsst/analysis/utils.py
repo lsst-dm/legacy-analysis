@@ -1540,9 +1540,9 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 def plotCM(data1, data2, magType="psf", maglim=20, magmin=14,
-           showMedians=False, sgVal=0.05, meanDelta=0.0, adjustMean=False,
+           SG="sg", showMedians=False, sgVal=0.05, meanDelta=0.0, adjustMean=False,
            xmin=None, xmax=None, ymin=None, ymax=None,
-           title="+", markersize=1, color="red", frames=[0], fig=None):
+           title="+", markersize=1, color="red", alpha=1.0, frames=[0], fig=None):
     """Plot (data1.magType - data2.magType) v. data1.magType mags (e.g. "psf")
 
 The magnitude limit for the "locus" box used to calculate statistics is maglim, and only objects within
@@ -1589,17 +1589,33 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     stellar = matched.cat.get("stellar_1")[good]
     nonStellar = np.logical_not(stellar)
     
+    try:
+        alpha.keys()
+    except AttributeError:
+        alpha = dict(g=alpha, s=alpha)
+
     color2 = "green"
-    axes.plot(delta[nonStellar], mag1[nonStellar], "o", markersize=markersize, markeredgewidth=0, color=color)
-    axes.plot(delta[stellar], mag1[stellar], "o", markersize=markersize, markeredgewidth=0, color=color2)
+    nobj = 0
+    if "g" in SG.lower():
+        nobj += np.sum(nonStellar)
+        axes.plot(delta[nonStellar], mag1[nonStellar], "o",
+                  alpha=alpha["g"], markersize=markersize, markeredgewidth=0, color=color)
+    if "s" in SG.lower():
+        nobj += np.sum(stellar)
+        axes.plot(delta[stellar], mag1[stellar], "o",
+                  alpha=alpha["s"], markersize=markersize, markeredgewidth=0, color=color2)
+
     #axes.plot((0, 30), (0, 0), "b-")
 
-    filter1, filter2 = data[1].dataId["filter"], data[2].dataId["filter"]
+    filterNames = [None] + [data[i + 1].dataId[0]["filter"] for i in range(len(data.keys()))]
+    filter1, filter2 = filterNames[1], filterNames[2]
 
     axes.set_xlim(-1 if xmin is None else xmin, 2 if xmax is None else xmax)
     axes.set_ylim(24 if ymax is None else ymax, 14 if ymin is None else ymin)
     axes.set_xlabel("(%s - %s)$_{%s}$" % (filter1, filter2, magType))
     axes.set_ylabel("%s$_{%s}$" % (filter1, magType))
+
+    title += " %d objects" % nobj
     axes.set_title(re.sub(r"^\+\s*", data1.name + " ", title))
 
     fig.show()
@@ -1609,7 +1625,7 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 def plotCC(data1, data2, data3, magType="psf", magmax=None, magmin=None,
-           SG=None, matchRadius=2,
+           SG="sg", matchRadius=2,
            xmin=None, xmax=None, ymin=None, ymax=None,
            title="+", markersize=1, alpha=1.0, color="red", frames=[0], fig=None):
     """Plot (data1.magType - data2.magType) v. (data2.magType - data3.magType) mags (e.g. "psf")
@@ -1634,8 +1650,7 @@ If non-None, [xy]{min,max} are used to set the plot limits
     matched = Data(cat=zipMatchList(mat))
 
     good = None
-    for i in range(len(data)):
-        suffix = ["_1_1", "_2_1", "_2"][i]
+    for suffix in ["_1_1", "_2_1", "_2"]:
         for name in ["flags.pixel.edge", "flags.pixel.interpolated.center",
                      "flags.pixel.saturated.center",]:
             _flg = np.logical_not(matched.cat.get(name + suffix))
@@ -1661,16 +1676,21 @@ If non-None, [xy]{min,max} are used to set the plot limits
     stellar = stellar[good]
     nonStellar = np.logical_not(stellar)
     
+    try:
+        alpha.keys()
+    except AttributeError:
+        alpha = dict(g=alpha, s=alpha)
+
     color2 = "green"
     nobj = 0
     if "g" in SG.lower():
         nobj += np.sum(nonStellar)
         axes.plot(col12[nonStellar], col23[nonStellar], "o",
-                  alpha=alpha, markersize=markersize, markeredgewidth=0, color=color) # 
+                  alpha=alpha["g"], markersize=markersize, markeredgewidth=0, color=color) # 
     if "s" in SG.lower():
         nobj += np.sum(stellar)
         axes.plot(col12[stellar], col23[stellar], "o",
-                  alpha=alpha, markersize=markersize, markeredgewidth=0, color=color2)
+                  alpha=alpha["s"], markersize=markersize, markeredgewidth=0, color=color2)
     #axes.plot((0, 30), (0, 0), "b-")
     #
     # Calculate width of blue end of stellar locus
