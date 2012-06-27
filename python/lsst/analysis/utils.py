@@ -1275,15 +1275,16 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
     try:
         afwTable.SourceRecord.setMag
     except AttributeError:
-        print >> sys.stderr, "Checking type of magnitude keys"
+        typeString = apMagKey.getTypeString()
+        print >> sys.stderr, "Checking type of magnitude keys... %s" % typeString
         afwTable.SourceRecord.setMag = \
-            afwTable.SourceRecord.setD if apMagKey.getTypeString() == "D" else afwTable.SourceRecord.setF
+            afwTable.SourceRecord.setD if typeString == "D" else afwTable.SourceRecord.setF
 
     try:
         for s in sourceSet:
             cat.append(cat.copyRecord(s, scm))
 
-            cat[-1].setFlag(stellarKey, s.get("classification.extendedness") < 0.5)    
+            cat[-1].setFlag(stellarKey, s.get("classification.extendedness") < 0.5)
 
             cat[-1].setMag(apMagKey,    calib.getMagnitude(s.getApFlux() + extraApFlux))
             try:
