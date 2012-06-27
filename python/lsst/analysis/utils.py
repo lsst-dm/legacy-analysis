@@ -1696,19 +1696,29 @@ If non-None, [xy]{min,max} are used to set the plot limits
     #
     # Calculate width of blue end of stellar locus
     #
-    xy0 = 0.391, 0.163
-    xy1 = 1.005, 0.396
-    theta = math.atan2(xy1[1] - xy0[1], xy1[0] - xy0[0])
+    xy = []
+    if False:
+        xy.append((0.391, 0.163))
+        xy.append((1.005, 0.396))
+    else:
+        xend = (0.40, 1.00,)
+        xend = (0.50, 1.50,)
+        for x in xend:
+            delta = col23[stellar][abs(col12[stellar] - x) < 0.1]
+            y = afwMath.makeStatistics(np.array(delta, dtype="float64"), afwMath.MEANCLIP).getValue()
+            xy.append((x, y))
+
+    theta = math.atan2(xy[1][1] - xy[0][1], xy[1][0] - xy[0][0])
     x, y = col12[stellar], col23[stellar]
     c, s= math.cos(theta), math.sin(theta)
     xp =   x*c + y*s
     yp = - x*s + y*c
+    axes.plot([xy[0][0], xy[1][0]], [xy[0][1], xy[1][1]])
 
-    #axes.plot([xy0[0], xy1[0]], [xy0[1], xy1[1]])
     if "s" in SG.lower():
         if True:
             delta = np.array(yp, dtype="float64")
-            blue = np.logical_and(x > xy0[0], x < xy1[0])
+            blue = np.logical_and(x > xy[0][0], x < xy[1][0])
             stats = afwMath.makeStatistics(delta[blue], afwMath.STDEVCLIP | afwMath.MEANCLIP)
             mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
             #print "%g +- %g" % (mean, stdev)
