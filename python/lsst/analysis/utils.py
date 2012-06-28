@@ -1284,20 +1284,26 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
         for s in sourceSet:
             cat.append(cat.copyRecord(s, scm))
 
-            cat[-1].setFlag(stellarKey, s.get("classification.extendedness") < 0.5)
-
             cat[-1].setMag(apMagKey,    calib.getMagnitude(s.getApFlux() + extraApFlux))
             try:
                 cat[-1].setMag(instMagKey,  calib.getMagnitude(s.getInstFlux()))
             except Exception, e:
                 cat[-1].setMag(instMagKey,  calib.getMagnitude(float("NaN")))
             try:
-                cat[-1].setMag(modelMagKey, calib.getMagnitude(s.getModelFlux()))
+                modelMag = calib.getMagnitude(s.getModelFlux())
             except Exception, e:
                 print "RHL", s.getModelFlux()
-                cat[-1].setMag(modelMagKey,  calib.getMagnitude(float("NaN")))
-            cat[-1].setMag(psfMagKey,   calib.getMagnitude(s.getPsfFlux()))
+                modelMag = calib.getMagnitude(float("NaN"))
+                
+            cat[-1].setMag(modelMagKey, modelMag)
+            
+            psfMag = calib.getMagnitude(s.getPsfFlux())
+            cat[-1].setMag(psfMagKey, psfMag)
             cat[-1].setFlag(goodKey, True)  # for now
+
+            isStar = (s.get("classification.extendedness") < 0.5) if False else \
+                abs(psfMag - modelMag) - 0.022 < 0.025
+            cat[-1].setFlag(stellarKey, isStar)
     except:
         raise
     finally:
@@ -1376,6 +1382,8 @@ def getMagsFromSS(ss, dataId, extraApFlux=0.0):
         shape = [cat.getIxx(), cat.getIxy(), cat.getIyy()]
     else:
         shape = [np.zeros(len(ids)), np.zeros(len(ids)), np.zeros(len(ids))]
+
+    stellar = abs(psfMags - modelMags) < 0.05
 
     return ids, flags, stellar, x, y, shape, \
         dict(ap=apMags, inst=instMags, model=modelMags, psf=psfMags)
@@ -1463,6 +1471,7 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
         mean, stdev = np.nan, np.nan
 
     if adjustMean:
+        raise RuntimeError("Fix me")
         ids = data.ids[good]
         ccds = set([x["ccd"] for x in sum(data.dataSets.values(), [])])
         ccdIds = [butler.mapperInfo.splitId(i)[1] for i in ids]
@@ -2424,8 +2433,10 @@ def showSourceSet(sourceSet, exp=None, wcs=None, xy0=None, raDec=None, magmin=No
     else:
         doNotShow = np.zeros(len(sourceSet))
 
-    isStar = np.logical_or(sourceSet.get("classification.extendedness") < 0.5,
-                           sourceSet.get("flags.pixel.saturated.center"))
+    isStar = (sourceSet.get("classification.extendedness") < 0.5) if False else \
+        abs(psfMags - modelMags) < 0.05
+
+    isStar = np.logical_or(isStar, sourceSet.get("flags.pixel.saturated.center"))
 
     if xy0 is None:
         x0, y0 = exp.getXY0() if exp else [0.0, 0.0]
