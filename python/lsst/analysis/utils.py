@@ -181,7 +181,7 @@ def getNameOfSet(vals):
     valName = []
     val0 = vals[0]; val1 = val0
     for val in vals[1:]:
-        if val == val1 + 1:
+        if isinstance(val, int) and val == val1 + 1:
             val1 = val
         else:
             addPairToName(valName, val0, val1)
@@ -1133,7 +1133,7 @@ def _dataIdDictOuterProduct(dataId, expandedDataId=[]):
 
     for k, v in dataId.items():
         try:
-            if not isinstance(v[0], str): # checking indexing and not a string (damn Guido)
+            if v[0] and not isinstance(v, str): # checking indexing and not a string (damn Guido)
                 for x in v:
                     _dataId = dataId.copy(); _dataId[k] = x
                     _dataIdDictOuterProduct(_dataId, expandedDataId)
@@ -2920,7 +2920,7 @@ def getFlux(s, magType="psf"):
         raise RuntimeError("Uknown magnitude type %s" % magType)
 
 def writeRgb(images, rgbFile, min=0, max=50, Q=8, bin=1, scales=[1.0, 1.0, 1.0],
-             subtractBkgd=False, boxSize=1024):
+             subtractBkgd=False, boxSize=1024, nsigma=5):
     """Convert the list of images to a true-colour image, and write it to rgbFile (currently .png or .tiff)
 
 Scale the images by scales, if provided
@@ -2983,10 +2983,13 @@ If bin is specified, it should be an integer > 1;  the output file will be binne
             sdConfig.thresholdType = 'value'
             stats = afwMath.makeStatistics(image, afwMath.MEANCLIP | afwMath.STDEVCLIP)
             image -= stats.getValue(afwMath.MEANCLIP)
-            sdConfig.thresholdValue = 2*stats.getValue(afwMath.STDEVCLIP)
+            sdConfig.thresholdValue = nsigma*stats.getValue(afwMath.STDEVCLIP)
 
             sdConfig.background.binSize = boxSize
-            sdConfig.background.isNanSafe = True
+            try:
+                sdConfig.background.isNanSafe = True
+            except AttributeError:
+                pass
             sdConfig.background.undersampleStyle = "REDUCE_INTERP_ORDER"
 
             sdTask = SourceDetectionTask(None, config=sdConfig)
