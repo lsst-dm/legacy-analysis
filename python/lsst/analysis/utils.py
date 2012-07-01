@@ -2434,8 +2434,9 @@ def showSourceSet(sourceSet, exp=None, wcs=None, xy0=None, raDec=None, magmin=No
     else:
         doNotShow = np.zeros(len(sourceSet))
 
-    isStar = (sourceSet.get("classification.extendedness") < 0.5) if False else \
-        abs(psfMags - modelMags) < 0.05
+    # modelMags not available?  Use sourceSet.get("multishapelet.combo.flux") ??
+    isStar = (sourceSet.get("classification.extendedness") < 0.5) if True else \
+        abs(modelMags - psfMags - 0.022) < 0.025
 
     isStar = np.logical_or(isStar, sourceSet.get("flags.pixel.saturated.center"))
 
