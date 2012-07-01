@@ -1303,7 +1303,7 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
             cat[-1].setFlag(goodKey, True)  # for now
 
             isStar = (s.get("classification.extendedness") < 0.5) if False else \
-                abs(psfMag - modelMag) - 0.022 < 0.025
+                abs(modelMag - psfMag - 0.022) < 0.025
             cat[-1].setFlag(stellarKey, isStar)
     except:
         raise
@@ -1384,7 +1384,7 @@ def getMagsFromSS(ss, dataId, extraApFlux=0.0):
     else:
         shape = [np.zeros(len(ids)), np.zeros(len(ids)), np.zeros(len(ids))]
 
-    stellar = abs(psfMags - modelMags) < 0.05
+    stellar = abs(modelMags - psfMags - 0.022) < 0.025
 
     return ids, flags, stellar, x, y, shape, \
         dict(ap=apMags, inst=instMags, model=modelMags, psf=psfMags)
