@@ -1636,7 +1636,7 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 def plotCC(data1, data2, data3, magType="psf", magmax=None, magmin=None,
-           SG="sg", matchRadius=2,
+           SG="sg", matchRadius=2, stellarLocusEnds=[],
            xmin=None, xmax=None, ymin=None, ymax=None,
            title="+", markersize=1, alpha=1.0, color="red", frames=[0], fig=None):
     """Plot (data1.magType - data2.magType) v. (data2.magType - data3.magType) mags (e.g. "psf")
@@ -1706,37 +1706,28 @@ If non-None, [xy]{min,max} are used to set the plot limits
     #
     # Calculate width of blue end of stellar locus
     #
-    xy = []
-    if False:
-        xy.append((0.391, 0.163))
-        xy.append((1.005, 0.396))
-    else:
-        xend = (0.40, 1.00,)
-        xend = (0.50, 1.50,)
-        for x in xend:
+    #stellarLocusEnds = (0.40, 1.00,)    # the blue and red colour defining the straight part of the locus
+    #stellarLocusEnds = (0.50, 1.50,)
+    if stellarLocusEnds and "s" in SG.lower():
+        xy = []
+        for x in stellarLocusEnds:
             delta = col23[stellar][abs(col12[stellar] - x) < 0.1]
             y = afwMath.makeStatistics(np.array(delta, dtype="float64"), afwMath.MEANCLIP).getValue()
             xy.append((x, y))
 
-    theta = math.atan2(xy[1][1] - xy[0][1], xy[1][0] - xy[0][0])
-    x, y = col12[stellar], col23[stellar]
-    c, s= math.cos(theta), math.sin(theta)
-    xp =   x*c + y*s
-    yp = - x*s + y*c
-    axes.plot([xy[0][0], xy[1][0]], [xy[0][1], xy[1][1]])
+        theta = math.atan2(xy[1][1] - xy[0][1], xy[1][0] - xy[0][0])
+        x, y = col12[stellar], col23[stellar]
+        c, s= math.cos(theta), math.sin(theta)
+        xp =   x*c + y*s
+        yp = - x*s + y*c
+        axes.plot([xy[0][0], xy[1][0]], [xy[0][1], xy[1][1]])
 
-    if "s" in SG.lower():
-        if True:
-            delta = np.array(yp, dtype="float64")
-            blue = np.logical_and(x > xy[0][0], x < xy[1][0])
-            stats = afwMath.makeStatistics(delta[blue], afwMath.STDEVCLIP | afwMath.MEANCLIP)
-            mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
-            #print "%g +- %g" % (mean, stdev)
-            fig.text(0.75, 0.85, r"$\pm %.3f$" % (stdev), fontsize="larger")
-        else:
-            fig.clf()
-            axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
-            axes.plot(xp, yp, ".")
+        delta = np.array(yp, dtype="float64")
+        blue = np.logical_and(x > xy[0][0], x < xy[1][0])
+        stats = afwMath.makeStatistics(delta[blue], afwMath.STDEVCLIP | afwMath.MEANCLIP)
+        mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
+        #print "%g +- %g" % (mean, stdev)
+        fig.text(0.75, 0.85, r"$\pm %.3f$" % (stdev), fontsize="larger")
         
     filterNames = [None] + [data[i + 1].dataId[0]["filter"] for i in range(len(data.keys()))]
 
