@@ -95,7 +95,8 @@ except NameError:
 
 def dtName(dType, md=False):
     """Get the name of a given data type (e.g. dtName("src"))"""
-    if not _prefix_ or dType in ("coaddTempExp", "goodSeeingCoadd",):
+    dType_base = re.sub(r"_(filename|md)$", "", dType)
+    if not _prefix_ or dType_base in ("coaddTempExp", "goodSeeingCoadd",):
         if md:
             dType += "_md"
         return dType
