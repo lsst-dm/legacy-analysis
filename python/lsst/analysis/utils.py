@@ -1583,7 +1583,8 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     bad = None
     for i in range(2):
         suffix = "_%d" % (i + 1)
-        for name in ["flags.pixel.edge", "flags.pixel.interpolated.center",
+        for name in ["flags.pixel.edge",
+                     #"flags.pixel.interpolated.center",
                      "flags.pixel.saturated.center",]:
             _flg = matched.cat.get(name + suffix)
             if bad is None:
@@ -1662,7 +1663,8 @@ If non-None, [xy]{min,max} are used to set the plot limits
 
     good = None
     for suffix in ["_1_1", "_2_1", "_2"]:
-        for name in ["flags.pixel.edge", "flags.pixel.interpolated.center",
+        for name in ["flags.pixel.edge",
+                     #"flags.pixel.interpolated.center",
                      "flags.pixel.saturated.center",]:
             _flg = np.logical_not(matched.cat.get(name + suffix))
             if good is None:
