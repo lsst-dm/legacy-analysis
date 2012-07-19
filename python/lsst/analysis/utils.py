@@ -333,7 +333,7 @@ def makeMapperInfo(mapper):
                                                                             registry=registry)).create()
 
         @staticmethod
-        def splitId(oid):
+        def splitId(oid, asDict=False):
             """Split an ObjectId into visit, raft, sensor, and objId"""
             objId = int((oid & 0xffff) - 1)     # Should be the same value as was set by apps code
             oid >>= 16
@@ -345,7 +345,10 @@ def makeMapperInfo(mapper):
             raft = "%d,%d" % (raftId//5, raftId%5)
             sensor = "%d,%d" % (sensorId//3, sensorId%3)
 
-            return visit, raft, sensor, objId
+            if asDict:
+                return dict(visit=visit, raft=raft, sensor=sensor, objId=objId)
+            else:
+                return visit, raft, sensor, objId
 
         @staticmethod
         def getDataIdMask(dataId):
@@ -353,6 +356,85 @@ def makeMapperInfo(mapper):
             return 0x0                  # no bits to add
 
     #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+    def splitSdssCcdExposureId(oid, hasFilter=True, asDict=False):
+        """Split an ObjectId into run, camcol, [filter], objId
+
+    If hasFilter is True, the ObjectId encodes a filtername
+        """
+        nbits = 26                      # number of bits reserved for objId
+        oid = long(oid)
+
+        omask = 0xffffffffffffffff << nbits
+        objId = int(oid & ~omask)     # Should be the same value as was set by apps code
+        oid >>= nbits
+
+        field = int(oid % 10000);  oid //= 10000
+        camcol = int(oid % 10);    oid //= 10
+        filter = int(oid % 10);    oid //= 10
+        run = int(oid)
+
+        if hasFilter:
+            filterNames = [k for k, v in butler.mapper.filterIdMap.items() if v == filter]
+            try:
+                filter = filterNames[0]
+                assert len(filterNames) == 1
+            except IndexError:
+                raise RuntimeError("Invalid filter index %d" % filter)
+
+            if asDict:
+                return dict(run=run, camcol=camcol, filter=filter, field=field, objId=objId)
+            else:
+                return run, camcol, filter, field, objId
+        else:
+            if asDict:
+                return dict(run=run, camcol=camcol, field=field, objId=objId)
+            else:
+                return run, camcol, field, objId
+
+    def splitSdssCoaddId(oid, hasFilter=True, asDict=False):
+        """Split an ObjectId into tract, patch, [filter], objId
+
+    If hasFilter is True, the ObjectId encodes a filtername
+        """
+        nbits = 34                  # number of bits used by patch etc. part of ID
+        if hasFilter:
+            nbits += 3                  # add 3 bits for filters
+        nbits = 64 - nbits          # length
+        oid = long(oid)
+
+        omask = 0xffffffffffffffff << nbits
+        objId = int(oid & ~omask)     # Should be the same value as was set by apps code
+        oid >>= nbits
+        if hasFilter:
+            filter = int(oid & 0x7)
+            oid >>= 3
+        patchY = int(oid & 0x1fff)
+        oid >>= 13
+        patchX = int(oid & 0x1fff)
+        oid >>= 13
+        tract = int(oid)
+
+        patch = "%d,%d" % (patchX, patchY)
+
+        if hasFilter:
+            filterNames = [k for k, v in butler.mapper.filterIdMap.items() if v == filter]
+            try:
+                filter = filterNames[0]
+                assert len(filterNames) == 1
+            except IndexError:
+                raise RuntimeError("Invalid filter index %d" % filter)
+
+            if asDict:
+                return dict(tract=tract, patch=patch, filter=filter, objId=objId)
+            else:
+                return tract, patch, filter, objId
+        else:
+            if asDict:
+                return dict(tract=tract, patch=patch, objId=objId)
+            else:
+                return tract, patch, objId
+
 
     class SdssMapperInfo(MapperInfo):
         def __init__(self, Mapper):
@@ -463,21 +545,16 @@ def makeMapperInfo(mapper):
             return butler
 
         @staticmethod
-        def splitId(oid):
-            """Split an ObjectId into visit, ccd, and objId"""
-            oid = long(oid)
-            objId = int(oid & 0xffff)     # Should be the same value as was set by apps code
-            oid >>= 16
-            ccd = int(oid & 0xff)
-            oid >>= 8
-            visit = int(oid)
+        def splitId(oid, hasFilter=True, asDict=False):
+            """Split an ObjectId into run, camcol, [filter], field, objId or tract, patch, [filter], objId
 
-            return visit, ccd, objId
+        If hasFilter is True, the ObjectId encodes a filtername
+            """
 
-        @staticmethod
-        def getDataIdMask(dataId):
-            """Return a mask to | with a Source.id to uniquely identify the object"""
-            return ((dataId["run"] << 8) | dataId["camcol"]) << 16        
+            if _prefix_ in ("goodSeeingCoadd",):
+                return splitSdssCoaddId(oid, hasFilter=hasFilter, asDict=asDict)
+            else:
+                return splitSdssCcdExposureId(oid, hasFilter=hasFilter, asDict=asDict)
 
     #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
@@ -573,7 +650,7 @@ def makeMapperInfo(mapper):
             return butler
 
         @staticmethod
-        def splitId(oid):
+        def splitId(oid, asDict=False):
             """Split an ObjectId into visit, ccd, and objId"""
             oid = long(oid)
             objId = int(oid & 0xffff)     # Should be the same value as was set by apps code
@@ -582,7 +659,10 @@ def makeMapperInfo(mapper):
             oid >>= 8
             visit = int(oid)
 
-            return visit, ccd, objId
+            if asDict:
+                return dict(visit=visit, ccd=ccd, objId=objId)
+            else:
+                return visit, ccd, objId
 
         @staticmethod
         def getDataIdMask(dataId):
