@@ -1546,8 +1546,9 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
 
     locus = np.logical_and(np.logical_and(mag1 > magmin, mag1 < maglim), np.abs(delta - meanDelta) < sgVal)
 
-    stellar = data.cat.get("stellar")[good]
+    stellar = data.cat.get("stellar")
     nonStellar = np.logical_not(stellar)
+    stellar = stellar[good]; nonStellar = nonStellar[good]
 
     try:
         stats = afwMath.makeStatistics(delta[locus], afwMath.STDEVCLIP | afwMath.MEANCLIP)
@@ -1618,13 +1619,16 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     #
     # Make "i" print the object's ID, p pan ds9, etc.
     #
+    did = butler.mapperInfo.splitId(ids[0], asDict=True); del did["objId"]
+    md = data[1].getDataset("calexp_md", did)[0]
+
     global eventHandlers
     flags = {}
     if False:
         for k, v in data.flags.items():
             flags[k] = data.flags[k][good] # needs to be converted to use data.cat
-    x = data.cat.getX()[good]
-    y = data.cat.getY()[good]
+    x = data.cat.getX()[good] + md.get("LTV1")
+    y = data.cat.getY()[good] + md.get("LTV2")
     ids = data.cat.get("id")[good]
     eventHandlers[fig] = EventHandler(axes, mag1, delta, ids, x, y, flags, frames=frames)
 
@@ -1678,11 +1682,17 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
 
     good = np.logical_not(bad)
 
+    ids = matched.cat.get("id")[good]
+    xc = matched.cat.get("centroid.sdss_1.x")[good]
+    yc = matched.cat.get("centroid.sdss_1.y")[good]
+    stellar = matched.cat.get("stellar_1")[good]
+
     mag1 = matched.getMagsByType(magType, good, suffix="_1")
     mag2 = matched.getMagsByType(magType, good, suffix="_2")
     delta = mag1 - mag2
 
-    stellar = matched.cat.get("stellar_1")[good]
+    good = good[good]
+
     nonStellar = np.logical_not(stellar)
     
     try:
@@ -1713,6 +1723,27 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
 
     title += " %d objects" % nobj
     axes.set_title(re.sub(r"^\+\s*", data1.name + " ", title))
+    #
+    # Make "i" print the object's ID, p pan ds9, etc.
+    #
+    global eventHandlers
+    flags = {}
+    if False:
+        for k, v in data.flags.items():
+            flags[k] = data.flags[k][good] # needs to be converted to use data.cat
+
+    did = butler.mapperInfo.splitId(ids[0], asDict=True); del did["objId"]
+    md = data[1].getDataset("calexp_md", did)[0]
+    xc = xc[good] + md.get("LTV1")
+    yc = yc[good] + md.get("LTV2")
+    ids = ids[good]
+
+    if "g" not in SG.lower():
+        delta[nonStellar] = -1000
+    if "s" not in SG.lower():
+        delta[stellar] = -1000
+
+    eventHandlers[fig] = EventHandler(axes, delta, mag1, ids, xc, yc, flags, frames=frames)
 
     fig.show()
 
@@ -1756,10 +1787,21 @@ If non-None, [xy]{min,max} are used to set the plot limits
             else:
                 good = np.logical_and(good, _flg)
 
+    ids = matched.cat.get("id")
+    if selectObjId:
+        for i, _id in enumerate(ids):
+            if not selectObjId(_id):
+                good[i] = False
+
+    ids = ids[good]
+    xc = matched.cat.get("centroid.sdss_1_1.x")[good]
+    yc = matched.cat.get("centroid.sdss_1_1.y")[good]
+    stellar = matched.cat.get("stellar_1_1")[good]
+
     mag1 = matched.getMagsByType(magType, good, suffix="_1_1")
     mag2 = matched.getMagsByType(magType, good, suffix="_2_1")
     mag3 = matched.getMagsByType(magType, good, suffix="_2")
-    stellar = matched.cat.get("stellar_1_1")[good]
+
     good = good[good]
 
     if magmin is not None:
@@ -1831,6 +1873,27 @@ If non-None, [xy]{min,max} are used to set the plot limits
     title += " %d objects" % nobj
     
     axes.set_title(re.sub(r"^\+\s*", data1.name + " ", title))
+    #
+    # Make "i" print the object's ID, p pan ds9, etc.
+    #
+    global eventHandlers
+    flags = {}
+    if False:
+        for k, v in data.flags.items():
+            flags[k] = data.flags[k][good] # needs to be converted to use data.cat
+
+    did = butler.mapperInfo.splitId(ids[0], asDict=True); del did["objId"]
+    md = data[1].getDataset("calexp_md", did)[0]
+    xc = xc[good] + md.get("LTV1")
+    yc = yc[good] + md.get("LTV2")
+    ids = ids[good]
+
+    if "g" not in SG.lower():
+        col12[nonStellar] = -1000
+    if "s" not in SG.lower():
+        col12[stellar] = -1000
+    
+    eventHandlers[fig] = EventHandler(axes, col12, col23, ids, xc, yc, flags, frames=frames)
 
     fig.show()
 
@@ -3215,10 +3278,11 @@ class EventHandler(object):
         
         if ev.key in ("i", "I", "p", "P"):
             dist = np.hypot(self.xs - ev.xdata, self.ys - ev.ydata)
+            dist[np.where(np.isnan(dist))] = 1e30
             dmin = min(dist)
 
-            dist = np.hypot(self.xs - ev.xdata, self.ys - ev.ydata)
-            objId = self.ids[dist == min(dist)][0]
+            which = np.where(dist == min(dist))
+            objId = self.ids[which][0]
 
             flagsInfo = []
             for k in sorted(self.flags.keys()):
@@ -3228,14 +3292,14 @@ class EventHandler(object):
 
             print "\r>>>",
             print "%.3f %.3f %s %s%20s\r" % \
-                (ev.xdata, ev.ydata, butler.mapperInfo.splitId(objId), flagsInfo, ""),
+                (self.xs[which][0], self.ys[which][0], butler.mapperInfo.splitId(objId), flagsInfo, ""),
             sys.stdout.flush()
 
             if ev.key == "I":
                 print ""
             elif ev.key in ("p", "P"):
-                x = self.x[objId == self.ids][0]
-                y = self.y[objId == self.ids][0]
+                x = self.x[which][0]
+                y = self.y[which][0]
                 for frame in self.frames:
                     ds9.pan(x, y, frame=frame)
                 ds9.cmdBuffer.flush()
