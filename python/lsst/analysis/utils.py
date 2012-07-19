@@ -478,7 +478,8 @@ def makeMapperInfo(mapper):
                         filters.add(afwImage.Filter(butler.get(dtName("calexp", True), **did)).getName())
                     except:
                         filters.add(dataId.get("filter", "?"))
-                    camcols.add("(all)")
+                    if _prefix_ in ("", "forced"):
+                        camcols.add("(all)")
                 else:
                     try:
                         filters.add(afwImage.Filter(butler.get(dtName("calexp", True), **dataId)).getName())
