@@ -96,10 +96,16 @@ except NameError:
 def dtName(dType, md=False):
     """Get the name of a given data type (e.g. dtName("src"))"""
     dType_base = re.sub(r"_(filename|md)$", "", dType)
-    if not _prefix_ or dType_base in ("coaddTempExp", "goodSeeingCoadd",):
+    if _prefix_ in ("", "forced",) or dType_base in ("camera", "coaddTempExp", "goodSeeingCoadd",):
         if md:
             dType += "_md"
         return dType
+
+    if _prefix_ == "forced":
+        if dType == "src":
+            return "forcedsources"
+        else:
+            return dType
 
     dType = "%s_%s" % (_prefix_, dType)
     if md:
@@ -354,7 +360,7 @@ def makeMapperInfo(mapper):
 
         @staticmethod
         def getFields(dataType):
-            if _prefix_ == "" or dataType in ("coaddTempExp",):
+            if _prefix_ in ("", "forced",) or dataType in ("coaddTempExp",):
                 fields = ["run", "filter", "camcol"]
 
                 if dataType not in ("flat",):
@@ -792,7 +798,7 @@ class Data(object):
 
         dataSets = []
         for did in _dataIdDictOuterProduct(dataId, []):
-            if _prefix_ == "goodSeeingCoadd": # XXXXXXX
+            if _prefix_ in ("forced", "goodSeeingCoadd",): # XXXXXXX
                 if butler.datasetExists(dtName(dataType), **did):
                     dataSets.append(did)
             else:
