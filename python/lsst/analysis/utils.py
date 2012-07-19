@@ -1389,8 +1389,7 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
             cat[-1].setMag(psfMagKey, psfMag)
             cat[-1].setFlag(goodKey, True)  # for now
 
-            isStar = (s.get("classification.extendedness") < 0.5) if False else \
-                abs(modelMag - psfMag - 0.022) < 0.025
+            isStar = (s.get("classification.extendedness") < 0.5)
             cat[-1].setFlag(stellarKey, isStar)
     except:
         raise
@@ -1470,8 +1469,6 @@ def getMagsFromSS(ss, dataId, extraApFlux=0.0):
         shape = [cat.getIxx(), cat.getIxy(), cat.getIyy()]
     else:
         shape = [np.zeros(len(ids)), np.zeros(len(ids)), np.zeros(len(ids))]
-
-    stellar = abs(modelMags - psfMags - 0.022) < 0.025
 
     return ids, flags, stellar, x, y, shape, \
         dict(ap=apMags, inst=instMags, model=modelMags, psf=psfMags)
@@ -2515,8 +2512,7 @@ def showSourceSet(sourceSet, exp=None, wcs=None, xy0=None, raDec=None, magmin=No
         doNotShow = np.zeros(len(sourceSet))
 
     # modelMags not available?  Use sourceSet.get("multishapelet.combo.flux") ??
-    isStar = (sourceSet.get("classification.extendedness") < 0.5) if True else \
-        abs(modelMags - psfMags - 0.022) < 0.025
+    isStar = (sourceSet.get("classification.extendedness") < 0.5)
 
     isStar = np.logical_or(isStar, sourceSet.get("flags.pixel.saturated.center"))
 
@@ -2860,7 +2856,7 @@ If fitAmplitude, fit the object's amplitudes rather than using the measured flux
 
         flux = np.nan if fitAmplitude else getFlux(s, magType)
         try:
-            if s.getApDia() > 0.5:
+            if s.get("classification.extendedness") < 0.5:
                 measAlg.subtractPsf(psf, subtracted.getMaskedImage(), s.getX(), s.getY(), flux)
         except pexExcept.LsstCppException, e:
             pass
