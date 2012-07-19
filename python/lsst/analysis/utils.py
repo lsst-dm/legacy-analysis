@@ -1549,6 +1549,7 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     stellar = data.cat.get("stellar")
     nonStellar = np.logical_not(stellar)
     stellar = stellar[good]; nonStellar = nonStellar[good]
+    ids = data.cat.get("id")[good]
 
     try:
         stats = afwMath.makeStatistics(delta[locus], afwMath.STDEVCLIP | afwMath.MEANCLIP)
@@ -1620,7 +1621,7 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     # Make "i" print the object's ID, p pan ds9, etc.
     #
     did = butler.mapperInfo.splitId(ids[0], asDict=True); del did["objId"]
-    md = data[1].getDataset("calexp_md", did)[0]
+    md = data.getDataset("calexp_md", did)[0]
 
     global eventHandlers
     flags = {}
@@ -1752,7 +1753,7 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 def plotCC(data1, data2, data3, magType="psf", magmax=None, magmin=None,
-           SG="sg", matchRadius=2, stellarLocusEnds=[],
+           SG="sg", selectObjId=None, matchRadius=2, stellarLocusEnds=[], locusLtype="b:",
            xmin=None, xmax=None, ymin=None, ymax=None,
            title="+", markersize=1, alpha=1.0, color="red", frames=[0], fig=None):
     """Plot (data1.magType - data2.magType) v. (data2.magType - data3.magType) mags (e.g. "psf")
@@ -1820,6 +1821,8 @@ If non-None, [xy]{min,max} are used to set the plot limits
     except AttributeError:
         alpha = dict(g=alpha, s=alpha)
 
+    filterNames = [None] + [data[i + 1].dataId[0]["filter"] for i in range(len(data.keys()))]
+
     color2 = "green"
     nobj = 0
     if "g" in SG.lower():
@@ -1837,28 +1840,38 @@ If non-None, [xy]{min,max} are used to set the plot limits
     #stellarLocusEnds = (0.40, 1.00,)    # the blue and red colour defining the straight part of the locus
     #stellarLocusEnds = (0.50, 1.50,)
     if stellarLocusEnds and "s" in SG.lower():
-        xy = []
-        for x in stellarLocusEnds:
-            delta = col23[stellar][abs(col12[stellar] - x) < 0.1]
-            y = afwMath.makeStatistics(np.array(delta, dtype="float64"), afwMath.MEANCLIP).getValue()
-            xy.append((x, y))
-
-        theta = math.atan2(xy[1][1] - xy[0][1], xy[1][0] - xy[0][0])
         x, y = col12[stellar], col23[stellar]
-        c, s= math.cos(theta), math.sin(theta)
-        xp =   x*c + y*s
-        yp = - x*s + y*c
-        axes.plot([xy[0][0], xy[1][0]], [xy[0][1], xy[1][1]])
+        blue = np.logical_and(x > stellarLocusEnds[0], x < stellarLocusEnds[1])
+        
+        isW = False
+        if filterNames[1] == 'g' and filterNames[2] == 'r' and filterNames[3] == 'i':
+            w = -0.227*mag1 + 0.792*mag2 - 0.567*mag3 + 0.050
+            isW = True
+            delta = w[good][stellar]
+        else:
+            xy = []
+            for xx in stellarLocusEnds:
+                delta = col23[stellar][abs(col12[stellar] - xx) < 0.1]
+                yy = afwMath.makeStatistics(np.array(delta, dtype="float64"), afwMath.MEDIAN).getValue()
+                xy.append((xx, yy))
 
-        delta = np.array(yp, dtype="float64")
-        blue = np.logical_and(x > xy[0][0], x < xy[1][0])
+            theta = math.atan2(xy[1][1] - xy[0][1], xy[1][0] - xy[0][0])
+            c, s= math.cos(theta), math.sin(theta)
+            xp =   x*c + y*s
+            yp = - x*s + y*c
+
+            if locusLtype:
+                axes.plot([xy[0][0], xy[1][0]], [xy[0][1], xy[1][1]], locusLtype)
+
+            delta = yp
+
+        delta = np.array(delta, dtype="float64")
         stats = afwMath.makeStatistics(delta[blue], afwMath.STDEVCLIP | afwMath.MEANCLIP)
+
         mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
         #print "%g +- %g" % (mean, stdev)
-        fig.text(0.75, 0.85, r"$\pm %.3f$" % (stdev), fontsize="larger")
+        fig.text(0.75, 0.85, r"$%s \pm %.3f$" % ("w = " if isW else "", stdev), fontsize="larger")
         
-    filterNames = [None] + [data[i + 1].dataId[0]["filter"] for i in range(len(data.keys()))]
-
     axes.set_xlim(-1 if xmin is None else xmin, 2 if xmax is None else xmax)
     axes.set_ylim(-1 if ymin is None else ymin, 2 if ymax is None else ymax)
 
