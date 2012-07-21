@@ -494,7 +494,7 @@ def makeMapperInfo(mapper):
 
                 for k in ["run", "patch", "tract"]:
                     try:
-                        fields.add(dataId[k])
+                        runs.add(dataId[k])
                     except KeyError:
                         pass
                     except TypeError:
@@ -508,7 +508,7 @@ def makeMapperInfo(mapper):
                         pass
                     except TypeError:
                         for f in dataId["field"]:
-                            runs.add(f)
+                            fields.add(f)
 
             runs = sorted(list(runs))
             fields = sorted(list(fields))
@@ -1398,7 +1398,7 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
 
     return cat, scm
 
-def zipMatchList(matchList):
+def zipMatchList(matchList, verbose=True):
     """zip a matchList into a single catalogue
 
     @param matchList MatchList, as returned by e.g. afwTable.matchRaDec
@@ -1424,12 +1424,20 @@ def zipMatchList(matchList):
             inField = schEl.getField()
             if inField.getName() not in requiredFields:
                 key = schEl.getKey()
-                outputField = type(inField)(inField.getName() + suffix, inField.getDoc())
+
+                outputName, outputDoc = inField.getName() + suffix, inField.getDoc()
+                try:
+                    outputField = type(inField)(outputName, outputDoc)
+                except Exception, e:
+                    if verbose:
+                        print >> sys.stderr, "Unable to copy %s: %s" % (inField.getName(), e)
+
+                    continue
+
                 if i == 0:
                     scm.addMapping(key, outputField)
                 else:
-                    keys_2.append((key, scm.addOutputField(outputField),
-                                   outputField.getTypeString()))
+                    keys_2.append((key, scm.addOutputField(outputField), outputField.getTypeString()))
     #
     # OK, we have the schema sorted out;  time to read and process
     #
@@ -2629,7 +2637,7 @@ def showSourceSet(sourceSet, exp=None, wcs=None, xy0=None, raDec=None, magmin=No
                 _symb = "+" if isStar[i] else "o"
 
             if symb == "id":
-                _symb = "%d" % s.getId()
+                _symb = "%s" % " ".join([str(s) for s in butler.mapperInfo.splitId(s.getId())])
             elif symb == "@":
                 _symb = "@:%g,%g,%g" % (s.getIxx(), s.getIxy(), s.getIyy())
 
@@ -3664,3 +3672,175 @@ def plotImageHistogram(calexp, minDN=None, maxDN=None, binwidth=None,
     fig.show()
 
     return fig
+
+#-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+def analyzeForced(dataId, sourceSet_forced, sourceSet_sfm, magType="psf",
+                  showAstrometricResiduals=False, matchRadius=1,
+                  SG="sg", maglim=None, xmin=None, xmax=None, ymin=None, ymax=None,
+                  frames=[0], markersize=3, title="+", fig=None):
+
+    sourceSet_forced = _appendToCatalog(None, dataId, sourceSet=sourceSet_forced)[0]
+    sourceSet_sfm    = _appendToCatalog(None, dataId, sourceSet=sourceSet_sfm)[0]
+    
+    matched = afwTable.matchRaDec(sourceSet_forced, sourceSet_sfm, matchRadius*afwGeom.arcseconds)
+
+    if showAstrometricResiduals:
+        calexp_md = butler.get("calexp_md", **dataId)
+        wcs = afwImage.makeWcs(calexp_md)
+        
+        #wcs = improveWcs(wcs, matched, sipOrder=5)
+
+    matched = zipMatchList(matched, verbose=False)
+    
+    mag_f = matched.get("%sMag_1" % magType)
+    mag_s = matched.get("%sMag_2" % magType)
+
+    stellar = matched.get("stellar_1")
+    x = matched.get("centroid.sdss_2.x")
+    y = matched.get("centroid.sdss_2.y")
+    ids = matched.get("id")
+
+    if not showAstrometricResiduals:
+        xvec = mag_f
+        if xmin is None: xmin = 14
+        if xmax is None: xmax = 23
+        xlab = magType
+    else:
+        x2 = np.empty_like(x)
+        y2 = np.empty_like(y)
+        for i, m in enumerate(matched):
+            x2[i], y2[i] = wcs.skyToPixel(m.getCoord())
+
+        xvec = np.hypot(x - x2, y - y2)
+        if xmin is None: xmin = -0.002
+        if xmax is None: xmax = 1
+        xlab = "position error (pixels)"
+
+    yvec = mag_f - mag_s
+    if ymin is None: ymin = -0.01
+    if ymax is None: ymax =  0.10
+        
+    if maglim is not None:
+        good = mag_f < maglim
+
+        xvec = xvec[good]
+        yvec = yvec[good]
+
+        x = x[good]
+        y = y[good]
+        ids = ids[good]
+        stellar = stellar[good]
+
+    nonStellar = np.logical_not(stellar)
+    #
+    # Time to plot
+    #
+    fig = getMpFigure(fig)    
+    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
+
+    if "s" in SG.lower():
+        axes.plot(xvec[stellar], yvec[stellar], "g.", markersize=markersize, markeredgewidth=0)
+    if "g" in SG.lower():
+        axes.plot(xvec[nonStellar], yvec[nonStellar], "r.", markersize=markersize, markeredgewidth=0)
+
+    if True:
+        axes.set_xlim(xmin, xmax)
+        axes.set_ylim(ymin, ymax)
+    axes.set_xlabel(xlab)
+    axes.set_ylabel("(forced - sfm) %s" % (magType))
+
+    if maglim is not None:
+        title += "%s < %g" % (magType, maglim)
+        
+    axes.set_title(re.sub(r"^\+\s*", str(dataId) + " ", title))    
+    #
+    # Make plot live
+    #
+    global eventHandlers
+    flags = {}
+
+    if "g" not in SG.lower():
+        xvec[nonStellar] = -1000
+    if "s" not in SG.lower():
+        xvec[stellar] = -1000
+    
+    eventHandlers[fig] = EventHandler(axes, xvec, yvec, ids, x, y, flags, frames=frames)
+
+    fig.show()
+
+    return matched
+
+#-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+from lsst.pipe.tasks.astrometry import AstrometryTask
+import lsst.meas.astrom.sip as astromSip
+
+def improveWcs(wcs, matched, sipOrder=3):
+    rmv = afwTable.ReferenceMatchVector()
+    rmv.reserve(len(matched))
+    for m in matched:
+        rm = afwTable.ReferenceMatch(m.first, m.second, m.distance)
+        rmv.push_back(rm)
+    matched = rmv
+
+    medToOneDRms = 1/(math.sqrt(2*math.log(2))) # convert median(hypot(dx, dy)) to a 1-D rms for a Gaussian
+
+    sipOrderMax = sipOrder
+    sipOrder = 1
+    iter = 0
+    bestWcs, bestRms = wcs, np.nan
+    while sipOrder <= sipOrderMax:
+        try:
+            sipObject = astromSip.CreateWcsWithSip(matched, wcs, sipOrder)
+            wcs = sipObject.getNewWcs()
+
+            sipRms = sipObject.getScatterInPixels()*medToOneDRms
+
+        except pexExcept.LsstCppException, e:
+            print >> sys.stderr, ('Failed to calculate distortion terms. Error: %s' % e)
+            sipRms = None
+            #break
+
+        dx = np.empty(len(matched))
+        dy = np.empty_like(dx)
+        for i, m in enumerate(matched):
+            dx[i], dy[i] = wcs.skyToPixel(m.first.getCoord())
+            dx[i] -= m.first.get("centroid.sdss.x")
+            dy[i] -= m.first.get("centroid.sdss.y")
+
+        dz = np.hypot(dx, dy)
+        i = np.arange(len(dz))
+        
+        nsigma = 4
+        rms = np.median(dz)*medToOneDRms
+        good = dz < nsigma*rms
+        bad = np.logical_not(good)
+
+        if sipRms is None:
+            sipRms = rms
+
+        if not np.isfinite(bestRms) or sipRms < bestRms:
+            bestWcs, bestRms = wcs, sipRms
+
+        print 'Sip iteration %i: order %d  %i objects match. rms scatter is %g pixels' % \
+            (iter, sipOrder, len(matched), sipRms)
+
+        if False:
+            fig = getMpFigure(2)
+            axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
+            axes.plot(i[good], dz[good], "g.")
+            axes.plot(i[bad], dz[bad], "r.")
+            fig.show()
+            import pdb; pdb.set_trace() 
+        sipOrder += 1
+        
+        rmv = afwTable.ReferenceMatchVector()
+        rmv.reserve(int(sum(good)))
+        for i, m in enumerate(matched):
+            if good[i]:
+                rmv.push_back(m)
+        matched = rmv
+
+    print "bestRms = %g" % bestRms
+    return bestWcs
