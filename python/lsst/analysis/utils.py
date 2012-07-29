@@ -231,11 +231,14 @@ def makeMapperInfo(mapper):
         def getColorterm(filterName):
             return None
 
-        #@staticmethod
-        def getId(self, src, field="objId"):
+        def getId(self, src, field="objId"): # can't be static as it calls derived function splitId
             idDict = self.splitId(src.getId(), asDict=True)
 
             return idDict[field] if field else idDict
+
+        @staticmethod
+        def canonicalFiltername(filterName):
+            return filterName
 
     class LsstSimMapperInfo(MapperInfo):
         def __init__(self, Mapper):
@@ -667,6 +670,14 @@ def makeMapperInfo(mapper):
                 return dict(visit=visit, ccd=ccd, objId=objId)
             else:
                 return visit, ccd, objId
+
+        @staticmethod
+        def canonicalFiltername(filterName):
+            mat = re.search(r"W-S-(.)\+", filterName)
+            if mat:
+                filterName = mat.group(1).lower()
+
+            return filterName
 
     class SubaruMapperInfoMit(SubaruMapperInfo):
         def __init__(self, Mapper):
@@ -1859,7 +1870,8 @@ If non-None, [xy]{min,max} are used to set the plot limits
     except AttributeError:
         alpha = dict(g=alpha, s=alpha)
 
-    filterNames = [None] + [data[i + 1].dataId[0]["filter"] for i in range(len(data.keys()))]
+    filterNames = [None] + [butler.mapperInfo.canonicalFiltername(data[i + 1].dataId[0]["filter"])
+                            for i in range(len(data.keys()))]
 
     color2 = "green"
 
@@ -2192,10 +2204,14 @@ If title is provided it's used as a plot title; if it starts + the usual title i
             for i in range(len(ids)):
                 print "%d4 %.2f %.2f (%.2f, %.2f)" % (ids[i], refmag[i], delta[i], x[i], y[i])
 
-    stats = afwMath.makeStatistics(delta[np.logical_and(refmag > magmin, refmag < maglim)],
-                                         afwMath.STDEVCLIP | afwMath.MEANCLIP)
-    mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
-
+    try:
+        stats = afwMath.makeStatistics(delta[np.logical_and(refmag > magmin, refmag < maglim)],
+                                       afwMath.STDEVCLIP | afwMath.MEANCLIP)
+        mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
+    except Exception, e:
+        print "Failed to estimate mean: %s" % e
+        mean, stdev = float("NaN"), float("NaN")
+        
     axes.plot(refmag, delta, "k.", markersize=markersize, alpha=alpha, markeredgewidth=0)
 
     axes.plot((magmin, maglim, maglim, magmin, magmin), 100*np.array([-1, -1, 1, 1, -1]), "g:")
