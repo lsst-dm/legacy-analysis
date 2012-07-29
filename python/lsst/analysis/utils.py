@@ -2611,7 +2611,7 @@ def getMissed(data, dataId):
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 def showSourceSet(sourceSet, exp=None, wcs=None, xy0=None, raDec=None, magmin=None, magmax=None, magType="psf",
-                  nSource=-1, SG=False, obeyXY0=True,
+                  nSource=-1, SG=False, deblend=True, obeyXY0=True,
                   mask=None, symb="+", **kwargs):
     """Show a SourceSet on ds9.
 
@@ -2689,13 +2689,25 @@ def showSourceSet(sourceSet, exp=None, wcs=None, xy0=None, raDec=None, magmin=No
 
             _symb = symb
             if SG:
-                kwargs["ctype"] = ds9.GREEN if isStar[i] else ds9.RED
+                kwargs["ctype"] = (ds9.GREEN if isStar[i] else ds9.RED) if s.get("parent") == 0 else \
+                    (ds9.CYAN if isStar[i] else ds9.MAGENTA)                    
                 _symb = "+" if isStar[i] else "o"
 
-            if symb == "id":
-                _symb = "%d" % s.getId()
+            if symb in ("id", "ID"):
+                if symb == "id":
+                    _symb = butler.mapperInfo.splitId(s.getId(), asDict=True)["objId"]
+                else:
+                    _symb = "%d" % s.getId()
             elif symb == "@":
-                _symb = "@:%g,%g,%g" % (s.getIxx(), s.getIxy(), s.getIyy())
+                _symb = "@:%g,%g,%g" % (s.getIxx(), s.getIxy(), s.getIyy())                
+            elif deblend:
+                kwargs["ctype"] = ds9.RED if s.get("parent") == 0 else ds9.MAGENTA                    
+
+                pkwargs = kwargs.copy()
+                pkwargs["ctype"] = ds9.YELLOW
+                pkwargs["size"] = 0.5
+                for p in s.getFootprint().getPeaks():
+                    ds9.dot("*" if s.get("deblend.deblended-as-psf") else "+", *p.getF(), **pkwargs)
 
             try:
                 ds9.dot(_symb, x, y, **kwargs)
