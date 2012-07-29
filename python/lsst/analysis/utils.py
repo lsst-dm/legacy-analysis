@@ -1862,11 +1862,13 @@ If non-None, [xy]{min,max} are used to set the plot limits
     filterNames = [None] + [data[i + 1].dataId[0]["filter"] for i in range(len(data.keys()))]
 
     color2 = "green"
+
     nobj = 0
     if "g" in SG.lower():
         nobj += np.sum(nonStellar)
+
         axes.plot(col12[nonStellar], col23[nonStellar], "o",
-                  alpha=alpha["g"], markersize=markersize, markeredgewidth=0, color=color) # 
+                  alpha=alpha["g"], markersize=markersize, markeredgewidth=0, color=color)
     if "s" in SG.lower():
         nobj += np.sum(stellar)
 
@@ -1897,11 +1899,15 @@ If non-None, [xy]{min,max} are used to set the plot limits
         x, y = col12[stellar], col23[stellar]
         blue = np.logical_and(x > stellarLocusEnds[0], x < stellarLocusEnds[1])
         
-        isW = False
-        if filterNames[1] == 'g' and filterNames[2] == 'r' and filterNames[3] == 'i':
-            w = -0.227*mag1 + 0.792*mag2 - 0.567*mag3 + 0.050
-            isW = True
-            delta = w[good][stellar]
+        principalColor = ""
+        if usePrincipalColor and filterNames[1] == 'g' and filterNames[2] == 'r' and filterNames[3] == 'i':
+            pc = -0.227*mag1 + 0.792*mag2 - 0.567*mag3 + 0.050
+            principalColor = "w"
+            delta = pc[good][stellar]
+        elif usePrincipalColor and filterNames[1] == 'r' and filterNames[2] == 'i' and filterNames[3] == 'z':
+            pc = -0.270*mag1 + 0.800*mag2 - 0.534*mag3 + 0.054
+            principalColor = "y"
+            delta = pc[good][stellar]
         else:
             xy = []
             for xx in stellarLocusEnds:
@@ -1920,11 +1926,15 @@ If non-None, [xy]{min,max} are used to set the plot limits
             delta = yp
 
         delta = np.array(delta, dtype="float64")
-        stats = afwMath.makeStatistics(delta[blue], afwMath.STDEVCLIP | afwMath.MEANCLIP)
+        try:
+            stats = afwMath.makeStatistics(delta[blue], afwMath.STDEVCLIP | afwMath.MEANCLIP)
+            mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
+        except:
+            mean, stdev = float("NaN"), float("NaN")
 
-        mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
         #print "%g +- %g" % (mean, stdev)
-        fig.text(0.75, 0.85, r"$%s \pm %.3f$" % ("w = " if isW else "", stdev), fontsize="larger")
+        fig.text(0.75, 0.85, r"$%s \pm %.3f$" % \
+                     ("%s = " % principalColor if principalColor else "", stdev), fontsize="larger")
         
     axes.set_xlim(-1 if xmin is None else xmin, 2 if xmax is None else xmax)
     axes.set_ylim(-1 if ymin is None else ymin, 2 if ymax is None else ymax)
