@@ -1050,7 +1050,7 @@ ccd may be a list"""
         try:
             cat.getColumnView()
         except:
-            cat = cat.copy(True)        # make backing storage contiguous, allowing column access
+            cat = makeContiguous(cat)
         self.cat = cat
         
         self.name = butler.mapperInfo.dataIdToTitle(dataIds)
@@ -1368,8 +1368,18 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
     psfMagKey = cat.getSchema().find("psfMag").getKey()
     goodKey = cat.getSchema().find("good").getKey()
 
-    throwOnNegative = afwImage.Calib.getThrowOnNegativeFlux()
-    afwImage.Calib.setThrowOnNegativeFlux(False)
+    try:
+        throwOnNegative = afwImage.Calib.getThrowOnNegativeFlux()
+        afwImage.Calib.setThrowOnNegativeFlux(False)
+    except:
+        throwOnNegative = None
+
+    try:
+        afwTable.SourceRecord.setF
+    except AttributeError:
+        afwTable.SourceRecord.setD = afwTable.SourceRecord.setF8
+        afwTable.SourceRecord.setF = afwTable.SourceRecord.setF4
+        afwTable.SourceRecord.setFlag = afwTable.SourceRecord.set_Flag
 
     try:
         afwTable.SourceRecord.setMag
@@ -1383,21 +1393,28 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
         for s in sourceSet:
             cat.append(cat.copyRecord(s, scm))
 
-            cat[-1].setMag(apMagKey,    calib.getMagnitude(s.getApFlux() + extraApFlux))
+            cat[-1].setId(s.getId() | dataIdMask)
+
+            try:
+                cat[-1].setMag(apMagKey,    calib.getMagnitude(s.getApFlux() + extraApFlux))
+            except Exception, e:
+                cat[-1].setMag(apMagKey,  calib.getMagnitude(float("NaN")))
+                
             try:
                 cat[-1].setMag(instMagKey,  calib.getMagnitude(s.getInstFlux()))
             except Exception, e:
                 cat[-1].setMag(instMagKey,  calib.getMagnitude(float("NaN")))
+
             try:
-                modelMag = calib.getMagnitude(s.getModelFlux())
+                cat[-1].setMag(modelMagKey, calib.getMagnitude(s.getModelFlux()))
             except Exception, e:
-                print "RHL", s.getModelFlux()
-                modelMag = calib.getMagnitude(float("NaN"))
-                
-            cat[-1].setMag(modelMagKey, modelMag)
+                cat[-1].setMag(modelMagKey, calib.getMagnitude(float("NaN")))
             
-            psfMag = calib.getMagnitude(s.getPsfFlux())
-            cat[-1].setMag(psfMagKey, psfMag)
+            try:
+                cat[-1].setMag(psfMagKey, calib.getMagnitude(s.getPsfFlux()))
+            except Exception, e:
+                cat[-1].setMag(psfMagKey, calib.getMagnitude(float("NaN")))
+
             cat[-1].setFlag(goodKey, True)  # for now
 
             isStar = (s.get("classification.extendedness") < 0.5)
@@ -1405,7 +1422,8 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
     except:
         raise
     finally:
-        afwImage.Calib.setThrowOnNegativeFlux(throwOnNegative)
+        if throwOnNegative is not None:
+            afwImage.Calib.setThrowOnNegativeFlux(throwOnNegative)
 
     return cat, scm
 
@@ -1431,7 +1449,7 @@ def zipMatchList(matchList):
             for f in requiredFields: # must be first and in this order --- #2154
                 scm.addMapping(sch.find(f).getKey())
 
-        for schEl in sch:
+        for schEl in [sch.find(n) for n in sch.getNames()]: # just "sch" should work, but there's "getBit" bug...
             inField = schEl.getField()
             if inField.getName() not in requiredFields:
                 key = schEl.getKey()
@@ -3675,3 +3693,38 @@ def plotImageHistogram(calexp, minDN=None, maxDN=None, binwidth=None,
     fig.show()
 
     return fig
+def makeContiguous(cat):
+    """Make backing storage contiguous, allowing column access"""
+    cat = cat.copy(True)
+    try:
+        cat.getColumnView()
+        return cat
+    except:
+        pass                            # we'll have to do it by hand
+
+    sch = cat.getSchema()
+    scm = afwTable.SchemaMapper(sch)
+    required = ["id", "coord", "parent",]
+    for f in required:
+        scm.addMapping(sch.find(f).getKey())
+
+    for f in sch.getNames():
+        if f not in required:
+            scm.addMapping(sch.find(f).getKey())
+
+    ncat = afwTable.SourceCatalog(scm.getOutputSchema())
+    ncat.table.preallocate(len(cat))
+
+    table = cat.table
+    ntable = ncat.table
+    ntable.defineCentroid(table.getCentroidDefinition())
+    if False:
+        ntable.defineApFlux(table.getApFluxDefinition())    
+        ntable.defineInstFlux(table.getInstFluxDefinition())    
+        ntable.defineModelFlux(table.getModelFluxDefinition())    
+        ntable.definePsfFlux(table.getPsfFluxDefinition())    
+    
+    for c in cat:
+        ncat.append(ncat.copyRecord(c, scm))
+
+    return ncat
