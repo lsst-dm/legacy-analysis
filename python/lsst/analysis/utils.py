@@ -1790,7 +1790,8 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 def plotCC(data1, data2, data3, magType="psf", magmax=None, magmin=None,
-           SG="sg", selectObjId=None, matchRadius=2, stellarLocusEnds=[], locusLtype="b:",
+           SG="sg", selectObjId=None, matchRadius=2, colorCcds=False,
+           usePrincipalColor=True, stellarLocusEnds=[], adjustLocus=False, locusLtype="b:", 
            xmin=None, xmax=None, ymin=None, ymax=None,
            title="+", markersize=1, alpha=1.0, color="red", frames=[0], fig=None):
     """Plot (data1.magType - data2.magType) v. (data2.magType - data3.magType) mags (e.g. "psf")
@@ -1868,8 +1869,24 @@ If non-None, [xy]{min,max} are used to set the plot limits
                   alpha=alpha["g"], markersize=markersize, markeredgewidth=0, color=color) # 
     if "s" in SG.lower():
         nobj += np.sum(stellar)
-        axes.plot(col12[stellar], col23[stellar], "o",
-                  alpha=alpha["s"], markersize=markersize, markeredgewidth=0, color=color2)
+
+        if colorCcds:
+            colors = "rgbcmyk"
+            
+            xvec = col12[stellar]; yvec = col23[stellar]; 
+
+            for ccd in range(10):
+                print ccd, colors[ccd%len(colors)]
+
+            for i, _id in enumerate(ids[good][stellar]):
+                ccd = butler.mapperInfo.splitId(_id, asDict=True)["ccd"]
+                #if ccd not in (3, 9): continue
+                axes.plot(xvec[i], yvec[i], "o", alpha=alpha["g"], markersize=markersize, markeredgewidth=0,
+                          color=colors[ccd%len(colors)])
+
+        else:
+            axes.plot(col12[stellar], col23[stellar], "o",
+                      alpha=alpha["s"], markersize=markersize, markeredgewidth=0, color=color2)
     #axes.plot((0, 30), (0, 0), "b-")
     #
     # Calculate width of blue end of stellar locus
