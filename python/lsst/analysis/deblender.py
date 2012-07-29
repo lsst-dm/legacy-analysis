@@ -36,22 +36,16 @@ def drawEllipses(plt, src, **kwargs):
         plt.gca().add_artist(el)
     return els
 
-
-def getId(src, field="objId"):
-    idDict = utils.butler.mapperInfo.splitId(src.getId(), asDict=True)
-
-    return idDict[field] if field else idDict
-
 def findFamily(families, objId):
     """Return the object's family (either parent or child)"""
 
-    family = [f for f in families if (f[0].getId() & 0xffff) == objId]
+    family = [f for f in families if utils.butler.mapperInfo.getId(f[0]) == objId]
     if family:
         return family[0]
 
     for family in families:
         for child in family[1]:
-            if (child.getId() & 0xffff) == objId:
+            if utils.butler.mapperInfo.getId(child) == objId:
                 return family
 
     return None
@@ -94,7 +88,7 @@ def plotDeblendFamily(mi, parent, kids, dkids=[],
     xys = []
 
     mos = displayUtils.Mosaic(background=background)
-    mos.append(parent_im, '%dP' % getId(parent))
+    mos.append(parent_im, '%dP' % utils.butler.mapperInfo.getId(parent))
 
     for i, kid in enumerate(kids):
         kim = footprintToImage(kid.getFootprint(), mi, **aa)
@@ -110,9 +104,10 @@ def plotDeblendFamily(mi, parent, kids, dkids=[],
         
         sim = kim.Factory(_kim, bbox)
         sim <<= kim
-        mos.append(_kim, '%dC' % getId(kid)); del _kim
+        mos.append(_kim, '%dC' % utils.butler.mapperInfo.getId(kid)); del _kim
 
-    title = re.sub(r"[{}']", "", str(getId(parent, None))) # ds9 doesn't handle those chars well
+    title = re.sub(r"[{}']", "",
+                   str(utils.butler.mapperInfo.getId(parent, None))) # ds9 doesn't handle those chars well
     mosaicImage = mos.makeMosaic(frame=frame, title=title)
     ds9.dot("%s  (%.1f, %1.f)" % (title, parent.getX(), parent.getY()),
             0.5*mosaicImage.getWidth(), 5 + 1.05*mosaicImage.getHeight(), frame=frame,
