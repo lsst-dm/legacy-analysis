@@ -1664,8 +1664,14 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
+def makeSelectCcd(ccd):
+    def selectCcd(id):
+        return utils.butler.mapperInfo.splitId(id, asDict=True)["ccd"] == ccd
+
+    return lambda id: butler.mapperInfo.splitId(id, asDict=True)["ccd"] == ccd
+
 def plotCM(data1, data2, magType="psf", maglim=20, magmin=14,
-           SG="sg", showMedians=False, sgVal=0.05, meanDelta=0.0, adjustMean=False,
+           SG="sg", selectObjId=None, showMedians=False, sgVal=0.05, meanDelta=0.0, adjustMean=False,
            xmin=None, xmax=None, ymin=None, ymax=None,
            title="+", markersize=1, color="red", alpha=1.0, frames=[0], fig=None):
     """Plot (data1.magType - data2.magType) v. data1.magType mags (e.g. "psf")
@@ -1708,7 +1714,13 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
 
     good = np.logical_not(bad)
 
-    ids = matched.cat.get("id")[good]
+    ids = matched.cat.get("id")
+    if selectObjId:
+        for i, _id in enumerate(ids):
+            if not selectObjId(_id):
+                good[i] = False
+
+    ids = ids[good]
     xc = matched.cat.get("centroid.sdss_1.x")[good]
     yc = matched.cat.get("centroid.sdss_1.y")[good]
     stellar = matched.cat.get("stellar_1")[good]
