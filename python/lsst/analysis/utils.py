@@ -564,7 +564,7 @@ def makeMapperInfo(mapper):
     from lsst.meas.photocal.colorterms import Colorterm
     from lsst.obs.suprimecam.colorterms import colortermsData
 
-    class SubaruMapperInfo(object):
+    class SubaruMapperInfo(MapperInfo):
         def __init__(self, Mapper):
             SubaruMapperInfo.Mapper = Mapper
 
