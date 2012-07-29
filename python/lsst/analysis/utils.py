@@ -40,6 +40,7 @@ except ImportError:
 
 try:
     from lsst.obs.suprimecam.suprimecamMapper import SuprimecamMapper
+    from lsst.obs.suprimecam.suprimecamMapper import SuprimecamMapperMit
     _raw_ = "raw"
     _visit_ = "visit"
 except ImportError:
@@ -230,6 +231,11 @@ def makeMapperInfo(mapper):
         def getColorterm(filterName):
             return None
 
+        @staticmethod
+        def getDataIdMask(dataId):
+            """Return a mask to | with a Source.id to uniquely identify the object"""
+            return 0x0                  # no bits to add
+
     class LsstSimMapperInfo(MapperInfo):
         def __init__(self, Mapper):
             LsstSimMapperInfo.Mapper = Mapper
@@ -349,11 +355,6 @@ def makeMapperInfo(mapper):
                 return dict(visit=visit, raft=raft, sensor=sensor, objId=objId)
             else:
                 return visit, raft, sensor, objId
-
-        @staticmethod
-        def getDataIdMask(dataId):
-            """Return a mask to | with a Source.id to uniquely identify the object"""
-            return 0x0                  # no bits to add
 
     #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
@@ -559,12 +560,13 @@ def makeMapperInfo(mapper):
 
     #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
+    from lsst.meas.photocal.colorterms import Colorterm
+    from lsst.obs.suprimecam.colorterms import colortermsData
+
     class SubaruMapperInfo(object):
         def __init__(self, Mapper):
             SubaruMapperInfo.Mapper = Mapper
 
-            from lsst.meas.photocal.colorterms import Colorterm
-            from lsst.obs.suprimecam.colorterms import colortermsData
             SubaruMapperInfo._Colorterm = Colorterm
             SubaruMapperInfo.getColorterm = lambda x, y : Colorterm.getColorterm(y)
             SubaruMapperInfo._Colorterm.setColorterms(colortermsData, "Hamamatsu")
@@ -655,9 +657,9 @@ def makeMapperInfo(mapper):
             """Split an ObjectId into visit, ccd, and objId"""
             oid = long(oid)
             objId = int(oid & 0xffff)     # Should be the same value as was set by apps code
-            oid >>= 16
-            ccd = int(oid & 0xff)
-            oid >>= 8
+            oid >>= 32
+            ccd = int(oid % 10)
+            oid //= 10
             visit = int(oid)
 
             if asDict:
@@ -668,7 +670,13 @@ def makeMapperInfo(mapper):
         @staticmethod
         def getDataIdMask(dataId):
             """Return a mask to | with a Source.id to uniquely identify the object"""
-            return ((dataId["visit"] << 8) | dataId["ccd"]) << 16        
+            return 0x0 # (10*dataId["visit"] + dataId["ccd"]) << 32
+
+    class SubaruMapperInfoMit(SubaruMapperInfo):
+        def __init__(self, Mapper):
+            SubaruMapperInfo.__init__(self, None)
+            SubaruMapperInfoMit.Mapper = Mapper
+            SubaruMapperInfo._Colorterm.setColorterms(colortermsData, "MIT")
 
     #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
@@ -678,6 +686,8 @@ def makeMapperInfo(mapper):
         return SdssMapperInfo(SdssMapper)
     elif isinstance(butler.mapper, SuprimecamMapper):
         return SubaruMapperInfo(SuprimecamMapper)
+    elif isinstance(butler.mapper, SuprimecamMapperMit):
+        return SubaruMapperInfoMit(SuprimecamMapperMit)
     else:
         raise RuntimeError("Impossible mapper")
 
@@ -789,7 +799,7 @@ class Data(object):
         self.name = "??"
         self.astrom = None
             
-    def setButler(self, rerun=None, dataRoot=None, registryRoot=None):
+    def setButler(self, rerun=None, dataRoot=None, registryRoot=None, Mapper=None):
         global butlerDataRoot, butlerRerun, butler, inButler, rerunName
 
         if \
@@ -829,7 +839,8 @@ class Data(object):
             if not registry:
                 print >> sys.stderr, "I'm unable to find your registry in %s" % registryRoot
 
-        Mapper = getMapper(registryRoot, defaultMapper=LsstSimMapper if False else SdssMapper)
+        if not Mapper:
+            Mapper = getMapper(registryRoot, defaultMapper=LsstSimMapper if False else SdssMapper)
         
         try:
             butler = dafPersist.ButlerFactory(mapper=Mapper(outRoot=dataRoot, rerun=rerun,
