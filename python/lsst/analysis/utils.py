@@ -1232,7 +1232,8 @@ def _dataIdDictOuterProduct(dataId, expandedDataId=[]):
 
     for k, v in dataId.items():
         try:
-            if v[0] and not isinstance(v, str): # checking indexing and not a string (damn Guido)
+            v[0]                        # can we index it?
+            if not isinstance(v, str):  # and it's not a string (damn Guido)
                 for x in v:
                     _dataId = dataId.copy(); _dataId[k] = x
                     _dataIdDictOuterProduct(_dataId, expandedDataId)
