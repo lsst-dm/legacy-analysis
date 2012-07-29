@@ -1336,12 +1336,12 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
                         ]:
                 scm.addMapping(key)
 
-        scm.addOutputField(afwTable.Field_Flag("stellar", "Is the source stellar?"))
-        scm.addOutputField(afwTable.Field_F("apMag", "The magnitude corresponding to apFlux"))
-        scm.addOutputField(afwTable.Field_F("instMag", "The magnitude corresponding to instFlux"))
-        scm.addOutputField(afwTable.Field_F("modelMag", "The magnitude corresponding to modelFlux"))
-        scm.addOutputField(afwTable.Field_F("psfMag", "The magnitude corresponding to psfFlux"))
-        scm.addOutputField(afwTable.Field_Flag("good", "The object is good"))
+        scm.addOutputField(afwTable.Field["Flag"]("stellar", "Is the source stellar?"))
+        scm.addOutputField(afwTable.Field["F"]("apMag", "The magnitude corresponding to apFlux"))
+        scm.addOutputField(afwTable.Field["F"]("instMag", "The magnitude corresponding to instFlux"))
+        scm.addOutputField(afwTable.Field["F"]("modelMag", "The magnitude corresponding to modelFlux"))
+        scm.addOutputField(afwTable.Field["F"]("psfMag", "The magnitude corresponding to psfFlux"))
+        scm.addOutputField(afwTable.Field["Flag"]("good", "The object is good"))
 
         cat = afwTable.SourceCatalog(scm.getOutputSchema())
         table = cat.table
