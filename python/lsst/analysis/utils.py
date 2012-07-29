@@ -231,10 +231,11 @@ def makeMapperInfo(mapper):
         def getColorterm(filterName):
             return None
 
-        @staticmethod
-        def getDataIdMask(dataId):
-            """Return a mask to | with a Source.id to uniquely identify the object"""
-            return 0x0                  # no bits to add
+        #@staticmethod
+        def getId(self, src, field="objId"):
+            idDict = self.splitId(src.getId(), asDict=True)
+
+            return idDict[field] if field else idDict
 
     class LsstSimMapperInfo(MapperInfo):
         def __init__(self, Mapper):
@@ -667,11 +668,6 @@ def makeMapperInfo(mapper):
             else:
                 return visit, ccd, objId
 
-        @staticmethod
-        def getDataIdMask(dataId):
-            """Return a mask to | with a Source.id to uniquely identify the object"""
-            return 0x0 # (10*dataId["visit"] + dataId["ccd"]) << 32
-
     class SubaruMapperInfoMit(SubaruMapperInfo):
         def __init__(self, Mapper):
             SubaruMapperInfo.__init__(self, None)
@@ -978,12 +974,11 @@ raft or sensor may be None (meaning get all)
             calexp_md = butler.get(dtName("calexp", True), **dataId)
             wcs = afwImage.makeWcs(calexp_md)
 
-        dataIdMask = butler.mapperInfo.getDataIdMask(dataId)
         sources = []
         dataSets = self.dataSets
         for ss in self.getDataset("src", dataId):
             for s in ss:
-                s.setId(s.getId() | dataIdMask)
+                s.setId(butler.mapperInfo.getId(s))
                 if setXYfromRaDec:
                     x, y = wcs.skyToPixel(s.getCoord())
                     s.setF("centroid.sdss.x", x)
@@ -1394,7 +1389,7 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
         for s in sourceSet:
             cat.append(cat.copyRecord(s, scm))
 
-            cat[-1].setId(s.getId() | dataIdMask)
+            cat[-1].setId(s.getId())
 
             try:
                 cat[-1].setMag(apMagKey,    calib.getMagnitude(s.getApFlux() + extraApFlux))
