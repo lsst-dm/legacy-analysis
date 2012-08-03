@@ -240,6 +240,10 @@ def makeMapperInfo(mapper):
         def canonicalFiltername(filterName):
             return filterName
 
+        @staticmethod
+        def idMask(dataId):
+            return 0x0
+            
     class LsstSimMapperInfo(MapperInfo):
         def __init__(self, Mapper):
             LsstSimMapperInfo.Mapper = Mapper
@@ -596,6 +600,13 @@ def makeMapperInfo(mapper):
 
         @staticmethod
         def dataIdToTitle(dataIds):
+            if _prefix_ == "stack":
+                title = []
+                for did in dataIds:
+                    title.append("stack %(stack)d patch %(patch)d filter %(filter)s" % did)
+
+                return "[%s]" % "], [".join(title)
+
             filters = set()
             ccds = set()
             visits = set()
@@ -657,19 +668,41 @@ def makeMapperInfo(mapper):
             return butler
 
         @staticmethod
+        def idMask(dataId):
+            return dataId["stack"] << 52 # hack hack
+
+        @staticmethod
         def splitId(oid, asDict=False):
             """Split an ObjectId into visit, ccd, and objId"""
             oid = long(oid)
             objId = int(oid & 0xffff)     # Should be the same value as was set by apps code
             oid >>= 32
-            ccd = int(oid % 10)
-            oid //= 10
-            visit = int(oid)
 
-            if asDict:
-                return dict(visit=visit, ccd=ccd, objId=objId)
-            else:
-                return visit, ccd, objId
+            if _prefix_ == "stack":
+                stack = int(oid >> 20)      # XXX see idMask
+                oid &= 0xfffff
+
+                nfilter = len(butler.mapper.filters)
+                ifilter = oid % nfilter
+                oid //= nfilter
+                patch = int(oid)
+
+                filter = [k for k,v  in butler.mapper.filterIdMap.items() if v == ifilter][0]
+
+                if asDict:
+                    return dict(stack=stack, patch=patch, filter=filter, objId=objId)
+                else:
+                    return stack, patch, filter, objId
+                
+            else:                
+                ccd = int(oid % 10)
+                oid //= 10
+                visit = int(oid)
+
+                if asDict:
+                    return dict(visit=visit, ccd=ccd, objId=objId)
+                else:
+                    return visit, ccd, objId
 
         @staticmethod
         def canonicalFiltername(filterName):
@@ -971,6 +1004,13 @@ raft or sensor may be None (meaning get all)
                 calexp = butler.get(dtName("calexp"), **did)
                 dataElem.setDetector(calexp.getDetector())
 		del calexp
+            elif dataType == 'src':
+                idMask = butler.mapperInfo.idMask(did)
+                if idMask:
+                    for s in dataElem:
+                        s.set("id", s.getId() | idMask)
+                        if s.getParent():
+                            s.set("parent", s.getParent() | idMask)
                 
             data.append(dataElem)
 
