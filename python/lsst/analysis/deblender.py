@@ -1,28 +1,50 @@
-"""Utilities to look at deblender outputs"""
+"""Utilities to look at deblender outputs
 
-import math, re
-import numpy as np
+Based on Dustin Lang's code in meas_deblender/examples, but heavily rewritten since then, so don't blame him
+
+E.g.
+import lsst.afw.display.ds9 as ds9
+import lsst.analysis.utils as utils
+
+da = utils.Data(dataRoot=os.path.join(os.environ["SUPRIME_DATA_DIR"], "SUPA"),
+                Mapper=utils.SuprimecamMapperMit, rerun="rhl/mit");
+dataId = utils.DataId(visit=24473, ccd=3);
+calexp = da.getDataset("calexp", dataId)[0]
+ss = da.getDataset('src', dataId)[0]
+families = deblender.Families(ss, nChildMin=0)
+
+frame=1
+ds9.mtv(calexp, title=dataId, frame=frame)
+utils.showSourceSet(ss, frame=frame)
+utils.showSourceSet(ss, frame=frame, symb='id', size=2.5, fontFamily="times", ctype=ds9.GREEN)
+
+"""
+
+import math, re, sys
 
 import utils
 import lsst.pex.logging as pexLog
+import lsst.afw.detection as afwDet
 import lsst.afw.geom as afwGeom
 import lsst.afw.image as afwImage
-import lsst.afw.detection as afwDet
+import lsst.afw.table as afwTable
 import lsst.afw.display.ds9 as ds9
 import lsst.afw.display.utils as displayUtils
 
 def getEllipses(src, nsigs=[1.], **kwargs):
+    from matplotlib.patches import Ellipse
+
     xc = src.getX()
     yc = src.getY()
     x2 = src.getIxx()
     y2 = src.getIyy()
     xy = src.getIxy()
     # SExtractor manual v2.5, pg 29.
-    a2 = (x2 + y2)/2. + np.sqrt(((x2 - y2)/2.)**2 + xy**2)
-    b2 = (x2 + y2)/2. - np.sqrt(((x2 - y2)/2.)**2 + xy**2)
-    theta = np.rad2deg(np.arctan2(2.*xy, (x2 - y2)) / 2.)
-    a = np.sqrt(a2)
-    b = np.sqrt(b2)
+    a2 = (x2 + y2)/2. + math.sqrt(((x2 - y2)/2.)**2 + xy**2)
+    b2 = (x2 + y2)/2. - math.sqrt(((x2 - y2)/2.)**2 + xy**2)
+    theta = math.rad2deg(math.arctan2(2.*xy, (x2 - y2)) / 2.)
+    a = math.sqrt(a2)
+    b = math.sqrt(b2)
     ells = []
     for nsig in nsigs:
         ells.append(Ellipse([xc,yc], 2.*a*nsig, 2.*b*nsig, angle=theta, **kwargs))
@@ -36,27 +58,12 @@ def drawEllipses(plt, src, **kwargs):
         plt.gca().add_artist(el)
     return els
 
-def findFamily(families, objId):
-    """Return the object's family (either parent or child)"""
-
-    family = [f for f in families if utils.butler.mapperInfo.getId(f[0]) == objId]
-    if family:
-        return family[0]
-
-    for family in families:
-        for child in family[1]:
-            if utils.butler.mapperInfo.getId(child) == objId:
-                return family
-
-    return None
-    
-
-# Real thing: make plots given the Sources
 def plotDeblendFamily(mi, parent, kids, dkids=[],
                       background=-10, symbolSize=2,
                       plotb=False, ellipses=True,
                       arcsinh=True, maskbit=False, frame=0):
-
+    """Display a deblend on ds9"""
+    
     try:
         mi = mi.getMaskedImage()        # maybe it's an Exposure?
     except AttributeError:
@@ -110,7 +117,7 @@ def plotDeblendFamily(mi, parent, kids, dkids=[],
                    str(utils.butler.mapperInfo.getId(parent, None))) # ds9 doesn't handle those chars well
     mosaicImage = mos.makeMosaic(frame=frame, title=title)
     ds9.dot("%s  (%.1f, %1.f)" % (title, parent.getX(), parent.getY()),
-            0.5*mosaicImage.getWidth(), 5 + 1.05*mosaicImage.getHeight(), frame=frame,
+            0.5*mosaicImage.getWidth(), 1.03*mosaicImage.getHeight(), frame=frame,
             ctype=ds9.BLACK, fontFamily="times", size=3)
 
     with ds9.Buffering():
@@ -195,43 +202,94 @@ def footprintToImage(fp, mi=None, mask=False):
         im = im.getMask()
     return im
 
-def getFamilies(cat, nChildMin=None):
-    '''
-    Returns [ (parent0, [child0, child1]), (parent1, [child0, ...]), ...]
-    where parents are sorted by ID.  Only objects that are deblended are included (unless nChildMin == 0)
+class Families(list):
+    def __init__(self, cat, nChildMin=None):
+        '''
+        Returns [ (parent0, [child0, child1]), (parent1, [child0, ...]), ...]
+        where parents are sorted by ID.  Only objects that are deblended are included (unless nChildMin == 0)
 
-    if nChildMin is not None, include only deblends with at least than many children.  As a
-    special case, nChildMin == 0 includes all objects, even those that aren't blended
-    '''
-    # parent -> [children] map.
-    children = {}
-    for src in cat:
-        pid = src.getParent()
-        if not pid:
-            continue
-        
-        if pid in children:
-            children[pid].append(src)
-        else:
-            children[pid] = [src]
+        if nChildMin is not None, include only deblends with at least than many children.  As a
+        special case, nChildMin == 0 includes all objects, even those that aren't blended
+        '''
+        self.cat = cat
 
-    parentIds = children.keys()
-    #
-    # Impose nChildMin
-    #
-    if nChildMin == 0:                  # include all objects:
+        # parent -> [children] map.
+        children = {}
         for src in cat:
-            if src.getParent():         # already accounted for
+            pid = src.getParent()
+            if not pid:
                 continue
 
-            sid = src.getId()
-            if sid not in parentIds:
-                children[sid] = []
-    elif nChildMin is not None:
-        for pid in parentIds:
-            if len(children[pid]) < nChildMin:
-                del children[pid]
-            
+            if pid in children:
+                children[pid].append(src)
+            else:
+                children[pid] = [src]
 
-    parentIds = sorted(children.keys())
-    return [(cat.find(pid), children[pid]) for pid in parentIds]
+        parentIds = children.keys()
+        #
+        # Impose nChildMin
+        #
+        if nChildMin == 0:                  # include all objects:
+            for src in cat:
+                if src.getParent():         # already accounted for
+                    continue
+
+                sid = src.getId()
+                if sid not in parentIds:
+                    children[sid] = []
+        elif nChildMin is not None:
+            for pid in parentIds:
+                if len(children[pid]) < nChildMin:
+                    del children[pid]
+
+
+        parentIds = sorted(children.keys())
+
+        for pid in parentIds:
+            self.append((cat.find(pid), children[pid]))
+
+    def find(self, objId, matchRadius=10):
+        """Return the object's family (you may specify either the ID for the parent or a child)"""
+        x, y = None, None
+        try:
+            x, y = objId
+        except TypeError:
+            pass
+
+        if x is not None:
+            oneObjCatalog = afwTable.SourceCatalog(self.cat.getSchema())
+            centroidName = self.cat.table.getCentroidDefinition()
+            oneObjCatalog.table.defineCentroid(centroidName)
+
+            s = oneObjCatalog.addNew()
+            s.set("%s.x" % centroidName, x)
+            s.set("%s.y" % centroidName, y)
+
+            matched = afwTable.matchXy(self.cat, oneObjCatalog, matchRadius)
+
+            if len(matched) == 0:
+                print >> sys.stderr, "Unable to find object at (%.2f, %.2f)" % (x, y)
+                return None
+
+            objId = utils.butler.mapperInfo.splitId(matched[0][0].getId(), asDict=True)["objId"]
+
+        family = [f for f in self if utils.butler.mapperInfo.getId(f[0]) == objId]
+        if family:
+            return family[0]
+
+        for family in self:
+            for child in family[1]:
+                if utils.butler.mapperInfo.getId(child) == objId:
+                    return family
+
+        return None
+
+# backwards compatibility
+    
+def getFamilies(cat, nChildMin=None):
+    return Families(cat, nChildMin)
+
+def findFamily(families, objId):
+    """Return the object's family (you may specify either the ID for the parent or a child)"""
+
+    return families.find(objId)
