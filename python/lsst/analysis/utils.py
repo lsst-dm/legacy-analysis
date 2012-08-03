@@ -673,7 +673,7 @@ def makeMapperInfo(mapper):
 
         @staticmethod
         def idMask(dataId):
-            return dataId["stack"] << 52 # hack hack
+            return dataId.get("stack", 0) << 52 # hack hack
 
         @staticmethod
         def splitId(oid, asDict=False):
