@@ -456,7 +456,7 @@ def makeMapperInfo(mapper):
 
                 if dataType not in ("flat",):
                     fields.append("field")
-            elif _prefix_ == "goodSeeingCoadd":
+            elif _prefix_ in ("goodSeeingCoadd",):
                 fields = ["patch", "tract", "filter"]
             else:
                 raise RuntimeError("I don't know what fields I need to read %s data" % _prefix_)
@@ -581,10 +581,14 @@ def makeMapperInfo(mapper):
 
         @staticmethod
         def getFields(dataType):
-            if dataType in ("flat",):
+            if _prefix_ in ("",):
                 fields = ["visit", "ccd"]
+                if dataType not in ("flat",):
+                    fields.append("filter")
+            elif _prefix_ in ("stack",):
+                fields = ["stack", "patch", "filter"]
             else:
-                fields = ["visit", "filter", "ccd"]
+                raise RuntimeError("I don't know what fields I need to read %s data" % _prefix_)
 
             return fields
 
@@ -930,7 +934,7 @@ class Data(object):
 
         dataSets = []
         for did in _dataIdDictOuterProduct(dataId, []):
-            if _prefix_ in ("forced", "goodSeeingCoadd",): # XXXXXXX
+            if _prefix_ in ("forced", "goodSeeingCoadd", "stack"): # XXXXXXX
                 if butler.datasetExists(dtName(dataType), **did):
                     dataSets.append(did)
             else:
@@ -1190,7 +1194,11 @@ ccd may be a list"""
             matched = self.astrom.joinMatchListWithCatalog(matches, sources,
                                                            allFluxes=True) # list(ReferenceMatch)
 
-        zp = calib.getMagnitude(1.0)
+        try:
+            zp = calib.getMagnitude(1.0)
+        except Exception, e:
+            print >> sys.stderr, "Failed to calculate zp: %s" % e
+            zp = 0.0
 
         showDistortion = False
         if displayType == "distortion":
@@ -1284,7 +1292,7 @@ def _dataIdDictOuterProduct(dataId, expandedDataId=[]):
                     _dataId = dataId.copy(); _dataId[k] = x
                     _dataIdDictOuterProduct(_dataId, expandedDataId)
                 return expandedDataId
-        except TypeError:
+        except (TypeError, IndexError):
             pass
 
     expandedDataId.append(dataId)
@@ -1717,7 +1725,7 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
 
 def makeSelectCcd(ccd):
     def selectCcd(id):
-        return utils.butler.mapperInfo.splitId(id, asDict=True)["ccd"] == ccd
+        return butler.mapperInfo.splitId(id, asDict=True)["ccd"] == ccd
 
     return lambda id: butler.mapperInfo.splitId(id, asDict=True)["ccd"] == ccd
 
@@ -2749,15 +2757,21 @@ def showSourceSet(sourceSet, exp=None, wcs=None, xy0=None, raDec=None, magmin=No
                     (ds9.CYAN if isStar[i] else ds9.MAGENTA)                    
                 _symb = "+" if isStar[i] else "o"
 
+            dx, dy = 0.0, 0.0           # offset of symbol from position
             if symb in ("id", "ID"):
+                dx, dy = 0.0, 0.5
+
                 if symb == "id":
                     _symb = butler.mapperInfo.splitId(s.getId(), asDict=True)["objId"]
                 else:
                     _symb = "%d" % s.getId()
+                if deblend:
+                    kwargs["ctype"] = ds9.RED if s.get("parent") == 0 else ds9.MAGENTA                    
+
             elif symb == "@":
                 _symb = "@:%g,%g,%g" % (s.getIxx(), s.getIxy(), s.getIyy())                
             elif deblend:
-                kwargs["ctype"] = ds9.RED if s.get("parent") == 0 else ds9.MAGENTA                    
+                kwargs["ctype"] = ds9.RED if s.get("parent") == 0 else ds9.MAGENTA
 
                 pkwargs = kwargs.copy()
                 pkwargs["ctype"] = ds9.YELLOW
@@ -2766,7 +2780,7 @@ def showSourceSet(sourceSet, exp=None, wcs=None, xy0=None, raDec=None, magmin=No
                     ds9.dot("*" if s.get("deblend.deblended-as-psf") else "+", *p.getF(), **pkwargs)
 
             try:
-                ds9.dot(_symb, x, y, **kwargs)
+                ds9.dot(_symb, x + dx, y + dy, **kwargs)
             except:
                 pass
 
