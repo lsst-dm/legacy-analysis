@@ -293,3 +293,38 @@ def findFamily(families, objId):
     """Return the object's family (you may specify either the ID for the parent or a child)"""
 
     return families.find(objId)
+
+def makeDisplayFamily(calexp, families, matchRadius=20):
+    """Factory function for callback function implementing showBlend"""
+    def display_family(k, x, y):
+        fam = families.find((x, y), matchRadius=matchRadius)
+        if fam:
+            plotDeblendFamily(calexp, *fam, background=1000)
+            #return True
+
+    return display_family
+
+def showBlend(calexp, families, frame=None, key='d'):
+    if frame is not None:
+        ds9.ds9Cmd(ds9.selectFrame(frame))
+
+    old = {}
+    try:
+        for k in "hdp":
+            old[k] = ds9.setCallback(k)
+
+        ds9.setCallback(key, makeDisplayFamily(calexp, families))
+        def new_h(*args):
+            old['h'](*args)
+            print "   d: show family under the cursor and return to python prompt"
+            print "   p: pan to this point"
+        ds9.setCallback('h', new_h)
+        ds9.setCallback('p', lambda k, x, y: ds9.pan(x, y, frame=frame))
+        
+        ds9.interact()
+    except Exception, e:
+        print "RHL", e
+    finally:
+        print "Cleaning up"
+        for k, func in old.items():
+            ds9.setCallback(k, func)
