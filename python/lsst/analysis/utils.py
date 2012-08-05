@@ -1369,6 +1369,7 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
         sch = tab.getSchema()
         scm = afwTable.SchemaMapper(sch)
         for f in ["id", "coord", "parent",  # must be first and in this order --- #2154
+                  "deblend.nchild",
                   "classification.extendedness",
                   "flags.pixel.edge",
                   "flags.pixel.interpolated.any",
@@ -1594,7 +1595,7 @@ def getFluxMag0DB(visit, raft, sensor, db=None):
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 def plotDmag(data, magType1="model", magType2="psf", maglim=20, magmin=14,
-             showMedians=False, sgVal=0.05, meanDelta=0.0, adjustMean=False,
+             showMedians=False, sgVal=0.05, meanDelta=0.0, adjustMean=False, parents=False,
              xmin=None, xmax=None, ymin=None, ymax=None,
              title="+", markersize=1, color="red", frames=[0], fig=None):
     """Plot (magType1 - magType2) v. magType1 mags (e.g. "model" and "psf")
@@ -1623,6 +1624,11 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
                   "flags.pixel.saturated.center",],
                  False)
     good = np.logical_not(bad)
+
+    if parents:
+        good = np.logical_and(good, data.cat.get("parent") == 0)
+    else:
+        good = np.logical_and(good, data.cat.get("deblend.nchild") == 0)
 
     mag1 = data.getMagsByType(magType1, good)
     mag2 = data.getMagsByType(magType2, good)
