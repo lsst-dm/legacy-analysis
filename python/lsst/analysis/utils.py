@@ -836,6 +836,13 @@ class DataId(dict):
 
         return new
 
+def fixTypesForButler(did):
+    for k, v in did.items():
+        if isinstance(v, np.int64):
+            did[k] = long(v)
+
+    return did
+
 class Data(object):
     def __init__(self, *args, **kwargs):
         if kwargs.has_key("cat"):
@@ -948,7 +955,7 @@ class Data(object):
                 if butler.datasetExists(dtName(dataType), **did):
                     dataSets.append(did)
             else:
-                for vals in butler.queryMetadata(_raw_, _visit_, fields, **did):
+                for vals in butler.queryMetadata(_raw_, _visit_, fields, **fixTypesForButler(did)):
                     _dataId = dict(zip(fields, vals))
             
                     if butler.datasetExists(dtName(dataType), **_dataId):
