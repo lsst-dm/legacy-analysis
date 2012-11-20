@@ -304,8 +304,10 @@ def makeDisplayFamily(calexp, families, matchRadius=20):
 
     return display_family
 
-def showBlend(calexp, families, frame=None, key='d'):
+def showBlend(calexp, families, frame=None, key='d', mtv=False):
     if frame is not None:
+        if mtv:
+            ds9.mtv(calexp, frame=frame)
         ds9.ds9Cmd(ds9.selectFrame(frame))
 
     old = {}
