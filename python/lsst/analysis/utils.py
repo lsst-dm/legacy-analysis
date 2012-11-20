@@ -4024,10 +4024,7 @@ def plotImageHistogram(calexp, minDN=None, maxDN=None, binwidth=None,
 
     if msk is not None:
         try:
-            _bitmask = 0x0
-            for n in bitmask:
-                _bitmask |= msk.getPlaneBitMask(n)
-            bitmask = _bitmask
+            bitmask = msk.getPlaneBitMask(bitmask)
         except TypeError:
             bitmask = _bitmask
 
