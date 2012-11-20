@@ -1850,6 +1850,10 @@ The magnitude limit for the "locus" box used to calculate statistics is maglim, 
 visible area).  If adjustMean is True, adjust all the CCDs being plotted to have the same mean within
 the "locus" area.
 
+If selectObjId is provided, it's a function that returns True or False for each object. E.g.
+    sel = makeSelectCcd(ccd=2)
+    plotCM(..., selectObjId=makeSelectCcd(2), ...)
+
 If title is provided it's used as a plot title; if it starts + the usual title is prepended
 
 If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are interpreted relative to meanDelta
