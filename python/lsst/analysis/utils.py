@@ -2021,8 +2021,10 @@ If non-None, [xy]{min,max} are used to set the plot limits
     mat = afwTable.matchRaDec(zipMatchList(mat), data[3].cat, matchRadius*afwGeom.arcseconds)
     matched = Data(cat=zipMatchList(mat))
 
+    suffixes = [None, "_1_1", "_2_1", "_2"]
+
     good = None
-    for suffix in ["_1_1", "_2_1", "_2"]:
+    for suffix in suffixes[1:]:
         for name in ["flags.pixel.edge",
                      #"flags.pixel.interpolated.center",
                      "flags.pixel.saturated.center",]:
@@ -2032,70 +2034,129 @@ If non-None, [xy]{min,max} are used to set the plot limits
             else:
                 good = np.logical_and(good, _flg)
 
-    ids = matched.cat.get("id")
+    good = np.logical_and(good, matched.cat.get("deblend.nchild_1_1") +
+                                matched.cat.get("deblend.nchild_2_1") +
+                                matched.cat.get("deblend.nchild_2") == 0)
+    if False:
+        good = np.logical_and(good, matched.cat.get("parent_1_1") < 0)
+        good = np.logical_and(good, matched.cat.get("parent_2_1") < 0)
+        good = np.logical_and(good, matched.cat.get("parent_2") < 0)
+    elif True:
+        good = np.logical_and(good, matched.cat.get("parent") == 0)
+        if False:
+            good = np.logical_and(good, matched.cat.get("deblend.nchild_1_1") == 0)
+            good = np.logical_and(good, matched.cat.get("deblend.nchild_2_1") == 0)
+            good = np.logical_and(good, matched.cat.get("deblend.nchild_2") == 0)
+
+    ids = matched.cat.get("id%s" % suffixes[idN])
     if selectObjId:
         for i, _id in enumerate(ids):
             if not selectObjId(_id):
                 good[i] = False
 
-    ids = ids[good]
     xc = matched.cat.get("centroid.sdss_1_1.x")[good]
     yc = matched.cat.get("centroid.sdss_1_1.y")[good]
-    stellar = matched.cat.get("stellar_1_1")[good]
+    stellar = matched.cat.get("stellar_2_1")[good]
 
     mag1 = matched.getMagsByType(magType, good, suffix="_1_1")
     mag2 = matched.getMagsByType(magType, good, suffix="_2_1")
     mag3 = matched.getMagsByType(magType, good, suffix="_2")
 
+    ids_1_1 = matched.cat.get("id_1_1")[good]
+    ids_2_1 = matched.cat.get("id_2_1")[good]
+    ids_2 = matched.cat.get("id_2")[good]
+
+    ids = ids[good]
     good = good[good]
+
+    if False:
+        ccdTriples = [tuple(butler.mapperInfo.splitId(_id, asDict=True)["ccd"] for _id in x)
+                      for x in zip(ids_1_1, ids_2_1, ids_2)]
+        good = np.logical_and(good, np.array([x == (9, 9, 9) for x in ccdTriples]))
 
     if magmin is not None:
         good = np.logical_and(good, mag1 > magmin)
     if magmax is not None:
         good = np.logical_and(good, mag1 < magmax)
     
-    col12 = mag1 - mag2; col12 = col12[good]
-    col23 = mag2 - mag3; col23 = col23[good]
-
+    mag1 = mag1[good]; mag2 = mag2[good]; mag3 = mag3[good]
     stellar = stellar[good]
     nonStellar = np.logical_not(stellar)
-    
+
+    col12 = mag1 - mag2
+    col23 = mag2 - mag3
+
+    if plotRaDec:
+        ra = np.degrees(matched.cat.get("coord.ra"))[good]
+        dec = np.degrees(matched.cat.get("coord.dec"))[good]
+
+        xvec, yvec = ra, dec
+    else:
+        xvec, yvec = col12, col23
+
+    ids = ids[good]
+    ids_1_1 = ids_1_1[good]
+    ids_2_1 = ids_2_1[good]
+    ids_2 = ids_2[good]
+
+    if fixZeroPoints:
+        doFixZeroPoints(col12, col23, stellar, ids_1_1, ids_2_1, ids_2)
+
+    if False:
+        print "RHL", "\n".join([" ".join([str(butler.mapperInfo.splitId(_id, asDict=True)["ccd"])
+                                          for _id in x]) for x in zip(ids_1_1, ids_2_1, ids_2)])
+
     try:
         alpha.keys()
     except AttributeError:
         alpha = dict(g=alpha, s=alpha)
 
+    idsForColor = eval("ids%s" % suffixes[idColorN])
+
+    ccds = np.array([butler.mapperInfo.splitId(_id, asDict=True)["ccd"] for _id in idsForColor])
+    visits = np.array([butler.mapperInfo.splitId(_id, asDict=True)["visit"] for _id in idsForColor])
+
     filterNames = [None] + [butler.mapperInfo.canonicalFiltername(data[i + 1].dataId[0]["filter"])
                             for i in range(len(data.keys()))]
-
-    color2 = "green"
+    visitNames = [None] + [data[i + 1].dataId[0]["visit"] for i in range(len(data.keys()))]
+    #
+    # Are we dealing with multi-band or multi-epoch data?
+    #
+    multiEpoch = True if len(set(filterNames[1:])) == 1 else False
 
     nobj = 0
-    if "g" in SG.lower():
-        nobj += np.sum(nonStellar)
+    for c, l, ptype, markersize, color in [("g", nonStellar, "h", markersize, color),
+                                           ("s", stellar, "*", 2*markersize, "green",)]:
+        if c not in SG.lower():
+            continue
 
-        axes.plot(col12[nonStellar], col23[nonStellar], "o",
-                  alpha=alpha["g"], markersize=markersize, markeredgewidth=0, color=color)
-    if "s" in SG.lower():
-        nobj += np.sum(stellar)
-
-        if colorCcds:
-            colors = "rgbcmyk"
+        if colorCcds or colorVisits:
+            colors = ["red", "green", "blue", "cyan", "magenta", "yellow", "black", "orange", "brown", "gray"]
             
-            xvec = col12[stellar]; yvec = col23[stellar]; 
+            if colorCcds:
+                for i, ccd in enumerate(sorted(set(ccds))):
+                    tmp = (ccd == ccds)
 
-            for ccd in range(10):
-                print ccd, colors[ccd%len(colors)]
+                    axes.plot(xvec[np.logical_and(l, tmp)],
+                              yvec[np.logical_and(l, tmp)],
+                              ptype, alpha=alpha[c], markersize=markersize, markeredgewidth=0,
+                              color=colors[i%len(colors)], label=str(ccd))
+            else:
+                for i, visit in enumerate(sorted(set(visits))):
+                    tmp = (visit == visits)
 
-            for i, _id in enumerate(ids[good][stellar]):
-                ccd = butler.mapperInfo.splitId(_id, asDict=True)["ccd"]
-                #if ccd not in (3, 9): continue
-                axes.plot(xvec[i], yvec[i], "o", alpha=alpha["g"], markersize=markersize, markeredgewidth=0,
-                          color=colors[ccd%len(colors)])
-
+                    axes.plot(xvec[np.logical_and(l, tmp)],
+                              yvec[np.logical_and(l, tmp)],
+                              ptype, alpha=alpha[c], markersize=markersize, markeredgewidth=0,
+                              color=colors[i%len(colors)], label=str(visit))
+            if nobj == 0:
+                axes.legend(loc="upper left")
         else:
-            axes.plot(col12[stellar], col23[stellar], "o",
-                      alpha=alpha["s"], markersize=markersize, markeredgewidth=0, color=color2)
+            axes.plot(xvec[l], yvec[l], ptype,
+                      alpha=alpha[c], markersize=markersize, markeredgewidth=0, color=color)
+
+        nobj += np.sum(l)
+
     #axes.plot((0, 30), (0, 0), "b-")
     #
     # Calculate width of blue end of stellar locus
@@ -2103,9 +2164,6 @@ If non-None, [xy]{min,max} are used to set the plot limits
     #stellarLocusEnds = (0.40, 1.00,)    # the blue and red colour defining the straight part of the locus
     #stellarLocusEnds = (0.50, 1.50,)
     if stellarLocusEnds and "s" in SG.lower():
-        x, y = col12[stellar], col23[stellar]
-        blue = np.logical_and(x > stellarLocusEnds[0], x < stellarLocusEnds[1])
-        
         principalColor = ""
         if usePrincipalColor and filterNames[1] == 'g' and filterNames[2] == 'r' and filterNames[3] == 'i':
             pc = -0.227*mag1 + 0.792*mag2 - 0.567*mag3 + 0.050
@@ -2117,22 +2175,51 @@ If non-None, [xy]{min,max} are used to set the plot limits
             delta = pc[good][stellar]
         else:
             xy = []
-            for xx in stellarLocusEnds:
-                delta = col23[stellar][abs(col12[stellar] - xx) < 0.1]
-                yy = afwMath.makeStatistics(np.array(delta, dtype="float64"), afwMath.MEDIAN).getValue()
-                xy.append((xx, yy))
+            try:
+                stellarLocusEnds[0][0]  # both x and y are provided
+                stellarLocusEnds[0][0]  # both x and y are provided
+                xy = stellarLocusEnds
+                stellarLocusEnds = (xy[0][0], xy[1][0])
+            except TypeError:
+                dxx = 0.1*abs(stellarLocusEnds[1] - stellarLocusEnds[0])
+                for xx in stellarLocusEnds:
+                    delta = col23[stellar][abs(col12[stellar] - xx) < dxx]
+                    try:
+                        yy = afwMath.makeStatistics(np.array(delta, dtype="float64"), afwMath.MEDIAN).getValue()
+                    except pexExcept.LsstCppException:
+                        yy = np.nan
+
+                    if False:
+                        yy = np.median(delta)
+                        sig = robustStd(delta)
+                        yy = np.median(delta[abs(delta - yy) < 2*sig])
+
+                    if not plotRaDec:
+                        if False:
+                            axes.plot([xx - dxx, xx - dxx], [-2, 2], "k:")
+                            axes.plot([xx + dxx, xx + dxx], [-2, 2], "k:")
+                        elif locusLtype:
+                            axes.axvline(xx, color="blue", ls=":")
+
+                    xy.append((xx, yy))
+
+            print "Stellar locus: [(%.3f, %.3f), (%.3f, %.3f)]" % (xy[0][0], xy[0][1], xy[1][0], xy[1][1])
 
             theta = math.atan2(xy[1][1] - xy[0][1], xy[1][0] - xy[0][0])
-            c, s= math.cos(theta), math.sin(theta)
+            c, s = math.cos(theta), math.sin(theta)
+
+            x, y = col12[stellar], col23[stellar]
             xp =   x*c + y*s
             yp = - x*s + y*c
 
-            if locusLtype:
+            if locusLtype and not plotRaDec:
                 axes.plot([xy[0][0], xy[1][0]], [xy[0][1], xy[1][1]], locusLtype)
+                #print xy
 
             delta = yp
 
         delta = np.array(delta, dtype="float64")
+        blue = np.logical_and(x > stellarLocusEnds[0], x < stellarLocusEnds[1])
         try:
             stats = afwMath.makeStatistics(delta[blue], afwMath.STDEVCLIP | afwMath.MEANCLIP)
             mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
@@ -2143,16 +2230,61 @@ If non-None, [xy]{min,max} are used to set the plot limits
         fig.text(0.75, 0.85, r"$%s \pm %.3f$" % \
                      ("%s = " % principalColor if principalColor else "", stdev), fontsize="larger")
         
-    axes.set_xlim(-1 if xmin is None else xmin, 2 if xmax is None else xmax)
-    axes.set_ylim(-1 if ymin is None else ymin, 2 if ymax is None else ymax)
+    if plotRaDec:
+        if xmin is not None and xmax is not None:
+            axes.set_xlim(xmin, xmax)
+        if ymin is not None and ymax is not None:
+            axes.set_ylim(ymin, ymax)
+    else:
+        if multiEpoch:
+            axes.set_xlim(-0.3 if xmin is None else xmin, 0.3 if xmax is None else xmax)
+            axes.set_ylim(-0.3 if ymin is None else ymin, 0.3 if ymax is None else ymax)
+        else:
+            axes.set_xlim(-1 if xmin is None else xmin, 2 if xmax is None else xmax)
+            axes.set_ylim(-1 if ymin is None else ymin, 2 if ymax is None else ymax)
 
-    axes.set_xlabel("(%s - %s)$_{%s}$" % (filterNames[1], filterNames[2], magType))
-    axes.set_ylabel("(%s - %s)$_{%s}$" % (filterNames[2], filterNames[3], magType))
+    if showStatistics:
+        mean, stdev = [], []
+        for v in (xvec, yvec,):
+            if "g" not in SG.lower():
+                v = v[stellar]
+            if "s" not in SG.lower():
+                v = v[nonStellar]
+
+            delta = np.array(v, dtype="float64")
+            try:
+                stats = afwMath.makeStatistics(delta, afwMath.STDEVCLIP | afwMath.MEANCLIP)
+                mean.append(stats.getValue(afwMath.MEANCLIP))
+                stdev.append(stats.getValue(afwMath.STDEVCLIP))
+            except:
+                mean.append(np.nan); stdev.append(np.nan)
+
+        fig.text(0.60, 0.85, r"$(%.3f, %.3f) \pm (%.3f, %.3f)$" % \
+                     (mean[0], mean[1], stdev[0], stdev[1]), fontsize="larger")
+
+        axes.plot(mean[0], mean[1], "k+", markersize=10)
+        axes.axvline(0, color="black", ls=":")
+        axes.axhline(0, color="black", ls=":")
+
+    if plotRaDec:
+        axes.set_xlabel(r"$\alpha$")
+        axes.set_ylabel(r"$\delta$")
+    else:
+        if multiEpoch:
+            axes.set_xlabel("(%s - %s)$_{%s}$" % (visitNames[1], visitNames[2], magType))
+            axes.set_ylabel("(%s - %s)$_{%s}$" % (visitNames[2], visitNames[3], magType))
+        else:
+            axes.set_xlabel("(%s - %s)$_{%s}$" % (filterNames[1], filterNames[2], magType))
+            axes.set_ylabel("(%s - %s)$_{%s}$" % (filterNames[2], filterNames[3], magType))
+
     if magmax is not None:
         if magmin is not None:
             title += " [%g < %s < %g]" % (magmin, filterNames[1], magmax)
         else:
             title += " [%s < %g]" % (filterNames[1], magmax)
+
+    if fixZeroPoints:
+        title += " (fixed zeropoints)"
 
     title += " %d objects" % nobj
     
@@ -2170,14 +2302,14 @@ If non-None, [xy]{min,max} are used to set the plot limits
     md = data[1].getDataset("calexp_md", did)[0]
     xc = xc[good] + md.get("LTV1")
     yc = yc[good] + md.get("LTV2")
-    ids = ids[good]
+    ids = ids
 
     if "g" not in SG.lower():
-        col12[nonStellar] = -1000
+        xvec[nonStellar] = -1000
     if "s" not in SG.lower():
-        col12[stellar] = -1000
+        xvec[stellar] = -1000
     
-    eventHandlers[fig] = EventHandler(axes, col12, col23, ids, xc, yc, flags, frames=frames)
+    eventHandlers[fig] = EventHandler(axes, xvec, col23, ids, xc, yc, flags, frames=frames, calexps=calexps)
 
     fig.show()
 
@@ -3566,7 +3698,7 @@ def assembleCcdSubaru(dataType, butler, dataId, fixAmpLevels=False):
 
 class EventHandler(object):
     """A class to handle key strokes with matplotlib displays"""
-    def __init__(self, axes, xs, ys, ids, x, y, flags, frames=[0]):
+    def __init__(self, axes, xs, ys, ids, x, y, flags, frames=[0], calexps=[]):
         self.axes = axes
         self.xs = xs
         self.ys = ys
@@ -3574,7 +3706,17 @@ class EventHandler(object):
         self.x = x
         self.y = y
         self.flags = flags
+
+        if frames is None:
+            frames = []
+        else:
+            try:
+                frames[0]
+            except TypeError:
+                frames = [frames]
+            
         self.frames = frames
+        self.calexps = calexps
 
         self.cid = self.axes.figure.canvas.mpl_connect('key_press_event', self)
 
@@ -3597,8 +3739,9 @@ class EventHandler(object):
             flagsInfo = ", ".join(flagsInfo)
 
             print "\r>>>",
-            print "%.3f %.3f %s %s%20s\r" % \
-                (self.xs[which][0], self.ys[which][0], butler.mapperInfo.splitId(objId), flagsInfo, ""),
+            print "%.3f %.3f %s %s (%6.1f, %6.1f)%20s\r" % \
+                (self.xs[which][0], self.ys[which][0], butler.mapperInfo.splitId(objId), flagsInfo,
+                 self.x[which][0], self.y[which][0], ""),
             sys.stdout.flush()
 
             if ev.key == "I":
@@ -3606,8 +3749,16 @@ class EventHandler(object):
             elif ev.key in ("p", "P"):
                 x = self.x[which][0]
                 y = self.y[which][0]
-                for frame in self.frames:
-                    ds9.pan(x, y, frame=frame)
+
+                if self.calexps:
+                    wcs0 = self.calexps[0].getWcs()
+
+                for frame, calexp in zip(self.frames, self.calexps):
+                    if calexp:
+                        raDec = wcs0.pixelToSky(x, y)
+                        ds9.pan(*calexp.getWcs().skyToPixel(raDec[0], raDec[1]), frame=frame)
+                    else:
+                        ds9.pan(x, y, frame=frame)
                 ds9.cmdBuffer.flush()
         else:
             pass
@@ -3947,10 +4098,10 @@ def plotImageHistogram(calexp, minDN=None, maxDN=None, binwidth=None,
         ctypes = ["red", "blue", "green", "yellow", "cyan"]
         for i, v in enumerate(vals):
             val = stats.getValue(afwMath.stringToStatisticsProperty(v))
-            axes.plot((val, val), axes.get_ylim(), linestyle="-", color=ctypes[i%len(ctypes)],
+            axes.axvline(val, linestyle="-", color=ctypes[i%len(ctypes)],
                       label="%-9s %.2f" % (v, val))
         i += 1
-        axes.plot((0, 0), axes.get_ylim(), linestyle="--", color=ctypes[i%len(ctypes)])
+        axes.axvline(0, linestyle="--", color=ctypes[i%len(ctypes)])
             
         axes.legend(loc=1)
 
