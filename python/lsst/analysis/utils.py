@@ -1807,11 +1807,37 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-def makeSelectCcd(ccd):
-    def selectCcd(id):
-        return butler.mapperInfo.splitId(id, asDict=True)["ccd"] == ccd
+def makeSelectCcd(ccds, include=True):
+    try:
+        ccds[0]
+    except TypeError:
+        ccds = [ccds]
 
-    return lambda id: butler.mapperInfo.splitId(id, asDict=True)["ccd"] == ccd
+    def selectCcd(id):
+        matches = butler.mapperInfo.splitId(id, asDict=True)["ccd"] in ccds
+        return matches if include else not matches
+
+    return selectCcd
+
+def makeSelectVisit(visits, ccds=None, include=True):
+    try:
+        visits[0]
+    except TypeError:
+        visits = [visits]
+
+    if ccds is None:
+        selectCcd = False
+    else:
+        selectCcd = makeSelectCcd(ccds)
+
+    def selectVisit(id):
+        matches = butler.mapperInfo.splitId(id, asDict=True)["visit"] in visits
+        if selectCcd:
+            matches = matches and selectCcd(id)
+
+        return matches if include else not matches
+
+    return selectVisit
 
 def plotCM(data1, data2, magType="psf", maglim=20, magmin=14,
            SG="sg", selectObjId=None, showMedians=False, sgVal=0.05, meanDelta=0.0, adjustMean=False,
