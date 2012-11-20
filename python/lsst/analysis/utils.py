@@ -716,9 +716,13 @@ def makeMapperInfo(mapper):
 
         @staticmethod
         def canonicalFiltername(filterName):
+            mat = re.search(r"W-J-(.)", filterName)
+            if mat:
+                return mat.group(1)
+
             mat = re.search(r"W-S-(.)\+", filterName)
             if mat:
-                filterName = mat.group(1).lower()
+                return mat.group(1).lower()
 
             return filterName
 
