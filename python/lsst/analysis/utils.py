@@ -1962,12 +1962,45 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
+def robustStd(y):
+    """Return a robust estimate of y's standard deviation based on the IQR"""
+    
+    y = sorted(y)
+    n = len(y)
+    return 0.741*(y[int(0.75*n)] - y[int(0.25*n)])
+
+def doFixZeroPoints(xvec, yvec, stellar, ids_1, ids_2, ids_3):
+    """Fix the zeropoints, so that the median offsets in any patch defined by a unique combination of
+    (ccd1, ccd2, ccd3) is 0
+
+N.b. it might be better to tie ccd1 and ccd2 together, and then solve for ccd3 wrt the combo
+    """
+
+    ccds = zip(butler.mapperInfo.splitId(ids_1, asDict=True)["ccd"],
+               butler.mapperInfo.splitId(ids_2, asDict=True)["ccd"],
+               butler.mapperInfo.splitId(ids_3, asDict=True)["ccd"])
+    ccdSet = set(ccds)
+    ccds = np.array(ccds)            # an array of tuples (ccd1, ccd2, ccd3)
+
+    for ccd in ccdSet:
+        tmp = np.sum(ccd == ccds, axis=1) == 3 # i.e. all 3 datasets match
+        xvec[tmp] -= np.median(xvec[np.logical_and(stellar, tmp)])
+        yvec[tmp] -= np.median(yvec[np.logical_and(stellar, tmp)])
+
 def plotCC(data1, data2, data3, magType="psf", magmax=None, magmin=None,
-           SG="sg", selectObjId=None, matchRadius=2, colorCcds=False,
+           idN=1, idColorN=1, SG="sg", selectObjId=None, matchRadius=2, plotRaDec=False,
+           fixZeroPoints=False, showStatistics=False,
+           colorCcds=False, colorVisits=False,
            usePrincipalColor=True, stellarLocusEnds=[], adjustLocus=False, locusLtype="b:", 
            xmin=None, xmax=None, ymin=None, ymax=None,
-           title="+", markersize=1, alpha=1.0, color="red", frames=[0], fig=None):
+           title="+", markersize=1, alpha=1.0, color="red", frames=[0], calexps=[], fig=None):
     """Plot (data1.magType - data2.magType) v. (data2.magType - data3.magType) mags (e.g. "psf")
+This can be used to plot 3-colour diagrams or to compare 3 epochs.
+
+If selectObjId is provided, it's a function that returns True or False for each object. E.g.
+    sel = makeSelectCcd(ccd=2)
+    plotCM(..., selectObjId=makeSelectCcd(2), ...)
+the ids are taken from the idN'th dataset (e.g. 2 to use data2.id); per ccd/visit labels come from idColorN.
 
 If title is provided it's used as a plot title; if it starts + the usual title is prepended
 
