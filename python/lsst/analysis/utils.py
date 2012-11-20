@@ -897,7 +897,7 @@ class Data(object):
                 if os.path.exists(f):
                     registry = f
                     break
-            if not registry:
+            if False and not registry:
                 print >> sys.stderr, "I'm unable to find your registry in %s" % registryRoot
 
         if not Mapper:
