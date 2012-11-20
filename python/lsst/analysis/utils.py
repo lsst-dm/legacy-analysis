@@ -1504,6 +1504,9 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
 
     try:
         for s in sourceSet:
+            if False and s.get("deblend.nchild") > 0:
+                continue
+
             cat.append(cat.copyRecord(s, scm))
 
             cat[-1].setId(s.getId())
