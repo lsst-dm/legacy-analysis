@@ -1543,20 +1543,22 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
 
     return cat, scm
 
-def zipMatchList(matchList):
+def zipMatchList(matchList, suffixes=None):
     """zip a matchList into a single catalogue
 
     @param matchList MatchList, as returned by e.g. afwTable.matchRaDec
     """
 
     records = [matchList[0][i] for i in range(2)]
+    if suffixes is None:
+        suffixes = ["_1", "_2"]
 
     requiredFields = ["id", "coord", "parent"] # keys that must be first and in this order --- #2154
 
     scm = None                          # the SchemaMapper
     keys_2 = []                         # keys from second list that need to be copied over
     for i, rec in enumerate(records):
-        suffix = "_%d" % (i + 1)
+        suffix = suffixes[i]
         
         sch = rec.getSchema()
         if not scm:
@@ -1567,23 +1569,39 @@ def zipMatchList(matchList):
 
         for schEl in [sch.find(n) for n in sch.getNames()]: # just "sch" should work, but there's "getBit" bug...
             inField = schEl.getField()
-            if inField.getName() not in requiredFields:
+            name = inField.getName()
+            if name == "id" or name not in requiredFields:
                 key = schEl.getKey()
-                outputField = type(inField)(inField.getName() + suffix, inField.getDoc())
-                if i == 0:
-                    scm.addMapping(key, outputField)
+                try:
+                    outputField = type(inField)(name + suffix, inField.getDoc())
+                except pexExcept.LsstCppException, e:
+                    print >> sys.stderr, "Mapping %s: %s" % (inField.getName(), e)
+                    continue
+
+                if name == "id":
+                    scm.addOutputField(outputField)
                 else:
-                    keys_2.append((key, scm.addOutputField(outputField),
-                                   outputField.getTypeString()))
+                    if i == 0:
+                        scm.addMapping(key, outputField)
+                    else:
+                        keys_2.append((key, scm.addOutputField(outputField),
+                                       outputField.getTypeString()))
     #
     # OK, we have the schema sorted out;  time to read and process
     #
     cat = afwTable.SourceCatalog(scm.getOutputSchema())
     cat.table.preallocate(len(matchList))
 
+    id_1Key = scm.getOutputSchema().find("id_1").getKey()
+    id_2Key = scm.getOutputSchema().find("id_2").getKey()
+
     for m1, m2, d in matchList:
         cat.append(cat.copyRecord(m1, scm))
         rec = cat[-1]
+
+        rec.setL(id_1Key, m1.getId())
+        rec.setL(id_2Key, m2.getId())
+        
         for key, okey, typeString in keys_2:
             if typeString == "D":
                 rec.setD(okey, m2.getD(key))
