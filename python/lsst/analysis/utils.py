@@ -59,6 +59,12 @@ except ImportError:
     ipIsr = None
 
 try:
+    warnedHackExtendedness
+except NameError:
+    warnedHackCalib = False
+    warnedHackExtendedness = False      # generate a warning once
+    
+try:
     log
 except:
     log = pexLogging.Log.getDefaultLog()
@@ -1009,13 +1015,29 @@ raft or sensor may be None (meaning get all)
                 dataElem.setDetector(calexp.getDetector())
 		del calexp
             elif dataType == 'src':
+                cat = dataElem
+                sch = cat.getSchema()
+                idKey = sch.find("id").getKey()
+                parentKey = sch.find("parent").getKey()
+                extendednessKey = sch.find("classification.extendedness").getKey()
+
                 idMask = butler.mapperInfo.idMask(did)
                 if idMask:
-                    for s in dataElem:
-                        s.set("id", s.getId() | idMask)
+                    for s in cat:
+                        s.set(idKey, s.getId() | idMask)
                         if s.getParent():
-                            s.set("parent", s.getParent() | idMask)
+                            s.set(parentKey, s.getParent() | idMask)
                 
+                extendedness = np.where(cat.getModelFlux()/cat.getPsfFlux() > 1.015, 1.0, 0.0)
+                extendedness = np.where(np.isfinite(cat.getModelFlux()),
+                                        extendedness, cat.get(extendednessKey))
+                global warnedHackExtendedness
+                if not warnedHackExtendedness:
+                    print >> sys.stderr, "Hacking the extendeness value"
+                    warnedHackExtendedness = True
+                for s, e in zip(cat, extendedness):
+                    s.set(extendednessKey, e)
+                    
             data.append(dataElem)
 
         return data
@@ -1348,9 +1370,33 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
         assert sourceSet
     else:
         sourceSet = data.getDataset("src", dataId)[0]
-    
-    calexp_md = butler.get(dtName("calexp", True), **dataId)
-    calib = afwImage.Calib(calexp_md)
+
+    global warnedHackCalib
+    if True:                            # XXX Use CCD 0 for calibration
+        if True or not warnedHackCalib:
+            print >> sys.stderr, "Hacking Calib to use mean of first 10 ccds"
+            warnedHackCalib = True
+
+        fluxMag0, fluxMag0Err = [], []
+
+        _dataId = dataId.copy()
+        for ccd in range(10):           # average over 10 CCDs
+            _dataId["ccd"] = ccd
+
+            calexp_md = butler.get(dtName("calexp", True), **_dataId)
+            try:
+                calib = afwImage.Calib(calexp_md)
+                mag0, mag0Err = calib.getFluxMag0()
+                fluxMag0.append(mag0); fluxMag0Err.append(mag0Err)
+            except:
+                pass
+
+        fluxMag0, fluxMag0Err = np.array(fluxMag0), np.array(fluxMag0Err)
+        calib.setFluxMag0(fluxMag0.mean(), np.hypot(fluxMag0.std(), fluxMag0Err.mean()))
+    else:
+        calexp_md = butler.get(dtName("calexp", True), **dataId)
+        calib = afwImage.Calib(calexp_md)
+
     fluxMag0, fluxMag0Err = calib.getFluxMag0()
     if fluxMag0 <= 0.0:
         fluxMag0 = 1e13
