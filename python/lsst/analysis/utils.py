@@ -100,10 +100,24 @@ try:
 except NameError:
     _prefix_ = ""
 
+class Prefix(object):
+    """An object to use in a with clause to temporarily change _prefix_"""
+    def __init__(self, prefix):
+        self._saved_prefix_ = _prefix_
+        self.prefix = prefix
+        
+    def __enter__(self):
+        global _prefix_
+        _prefix_ = self.prefix
+
+    def __exit__(self, *args):
+        global _prefix_
+        _prefix_ = self._saved_prefix_
+
 def dtName(dType, md=False):
     """Get the name of a given data type (e.g. dtName("src"))"""
     dType_base = re.sub(r"_(filename|md)$", "", dType)
-    if _prefix_ in ("", "forced",) or dType_base in ("camera", "coaddTempExp", "goodSeeingCoadd",):
+    if _prefix_ in ("", "forced", ) or dType_base in ("camera", "coaddTempExp", "goodSeeingCoadd",):
         if md:
             dType += "_md"
         return dType
@@ -587,7 +601,7 @@ def makeMapperInfo(mapper):
 
         @staticmethod
         def getFields(dataType):
-            if _prefix_ in ("",):
+            if _prefix_ in ("", "forced"):
                 fields = ["visit", "ccd"]
                 if dataType not in ("flat",):
                     fields.append("filter")
@@ -679,23 +693,27 @@ def makeMapperInfo(mapper):
 
         @staticmethod
         def idMask(dataId):
-            return dataId.get("stack", 0) << 52 # hack hack
+            return 0x0
 
         @staticmethod
         def splitId(oid, asDict=False):
-            """Split an ObjectId into visit, ccd, and objId"""
+            """Split an ObjectId into visit, ccd, and objId.
+            See python/lsst/obs/suprimecam/suprimecamMapper.py"""
             oid = long(oid)
             objId = int(oid & 0xffff)     # Should be the same value as was set by apps code
-            oid >>= 32
+            oid >>= 22L
 
             if _prefix_ == "stack":
-                stack = int(oid >> 20)      # XXX see idMask
-                oid &= 0xfffff
-
                 nfilter = len(butler.mapper.filters)
+                nPatches = 1000000L
+
                 ifilter = oid % nfilter
                 oid //= nfilter
-                patch = int(oid)
+
+                patch = oid % nPatches
+                oid //= nPatches
+
+                stack = int(oid)
 
                 filter = [k for k,v  in butler.mapper.filterIdMap.items() if v == ifilter][0]
 
@@ -704,7 +722,8 @@ def makeMapperInfo(mapper):
                 else:
                     return stack, patch, filter, objId
                 
-            else:                
+            else:
+                oid >>= 10L
                 ccd = int(oid % 10)
                 oid //= 10
                 visit = int(oid)
@@ -901,7 +920,7 @@ class Data(object):
                 print >> sys.stderr, "I'm unable to find your registry in %s" % registryRoot
 
         if not Mapper:
-            Mapper = getMapper(registryRoot, defaultMapper=LsstSimMapper if False else SdssMapper)
+            Mapper = getMapper(registryRoot, defaultMapper=LsstSimMapper if False else SuprimecamMapper)
         
         try:
             butler = dafPersist.ButlerFactory(mapper=Mapper(outRoot=dataRoot, rerun=rerun,
@@ -1382,31 +1401,34 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
     else:
         sourceSet = data.getDataset("src", dataId)[0]
 
-    global warnedHackCalib
-    if True:                            # XXX Use CCD 0 for calibration
-        if True or not warnedHackCalib:
-            print >> sys.stderr, "Hacking Calib to use mean of first 10 ccds"
-            warnedHackCalib = True
-
-        fluxMag0, fluxMag0Err = [], []
-
-        _dataId = dataId.copy()
-        for ccd in range(10):           # average over 10 CCDs
-            _dataId["ccd"] = ccd
-
-            calexp_md = butler.get(dtName("calexp", True), **_dataId)
-            try:
-                calib = afwImage.Calib(calexp_md)
-                mag0, mag0Err = calib.getFluxMag0()
-                fluxMag0.append(mag0); fluxMag0Err.append(mag0Err)
-            except:
-                pass
-
-        fluxMag0, fluxMag0Err = np.array(fluxMag0), np.array(fluxMag0Err)
-        calib.setFluxMag0(fluxMag0.mean(), np.hypot(fluxMag0.std(), fluxMag0Err.mean()))
+    if _prefix_ == "forced":            # hack hack --- hscMosaic
+        calib = butler.get("wcs", **dataId).getCalib()
     else:
-        calexp_md = butler.get(dtName("calexp", True), **dataId)
-        calib = afwImage.Calib(calexp_md)
+        global warnedHackCalib
+        if True:                            # XXX Use CCD 0 for calibration
+            if True or not warnedHackCalib:
+                print >> sys.stderr, "Hacking Calib to use mean of first 10 ccds"
+                warnedHackCalib = True
+
+            fluxMag0, fluxMag0Err = [], []
+
+            _dataId = dataId.copy()
+            for ccd in range(10):           # average over 10 CCDs
+                _dataId["ccd"] = ccd
+
+                calexp_md = butler.get(dtName("calexp", True), **_dataId)
+                try:
+                    calib = afwImage.Calib(calexp_md)
+                    mag0, mag0Err = calib.getFluxMag0()
+                    fluxMag0.append(mag0); fluxMag0Err.append(mag0Err)
+                except:
+                    pass
+
+            fluxMag0, fluxMag0Err = np.array(fluxMag0), np.array(fluxMag0Err)
+            calib.setFluxMag0(fluxMag0.mean(), np.hypot(fluxMag0.std(), fluxMag0Err.mean()))
+        else:
+            calexp_md = butler.get(dtName("calexp", True), **dataId)
+            calib = afwImage.Calib(calexp_md)
 
     fluxMag0, fluxMag0Err = calib.getFluxMag0()
     if fluxMag0 <= 0.0:
@@ -2279,7 +2301,8 @@ If non-None, [xy]{min,max} are used to set the plot limits
 
     if magmax is not None:
         if magmin is not None:
-            title += " [%g < %s < %g]" % (magmin, filterNames[1], magmax)
+            title += " [%g < %s < %g]" % (magmin,
+                                          butler.mapperInfo.canonicalFiltername(filterNames[1]), magmax)
         else:
             title += " [%s < %g]" % (filterNames[1], magmax)
 
