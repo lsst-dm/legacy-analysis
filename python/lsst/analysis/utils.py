@@ -2015,7 +2015,7 @@ def plotCC(data1, data2, data3, magType="psf", magmax=None, magmin=None,
            colorCcds=False, colorVisits=False,
            usePrincipalColor=True, stellarLocusEnds=[], adjustLocus=False, locusLtype="b:", 
            xmin=None, xmax=None, ymin=None, ymax=None,
-           title="+", markersize=1, alpha=1.0, color="red", frames=[0], calexps=[], fig=None):
+           title="+", markersize=1, alpha=1.0, color="red", frames=[0], wcss=[], fig=None):
     """Plot (data1.magType - data2.magType) v. (data2.magType - data3.magType) mags (e.g. "psf")
 This can be used to plot 3-colour diagrams or to compare 3 epochs.
 
@@ -2332,7 +2332,7 @@ If non-None, [xy]{min,max} are used to set the plot limits
     if "s" not in SG.lower():
         xvec[stellar] = -1000
     
-    eventHandlers[fig] = EventHandler(axes, xvec, col23, ids, xc, yc, flags, frames=frames, calexps=calexps)
+    eventHandlers[fig] = EventHandler(axes, xvec, col23, ids, xc, yc, flags, frames=frames, wcss=wcss)
 
     fig.show()
 
@@ -3721,7 +3721,7 @@ def assembleCcdSubaru(dataType, butler, dataId, fixAmpLevels=False):
 
 class EventHandler(object):
     """A class to handle key strokes with matplotlib displays"""
-    def __init__(self, axes, xs, ys, ids, x, y, flags, frames=[0], calexps=[]):
+    def __init__(self, axes, xs, ys, ids, x, y, flags, frames=[0], wcss=[]):
         self.axes = axes
         self.xs = xs
         self.ys = ys
@@ -3739,7 +3739,7 @@ class EventHandler(object):
                 frames = [frames]
             
         self.frames = frames
-        self.calexps = calexps
+        self.wcss = wcss
 
         self.cid = self.axes.figure.canvas.mpl_connect('key_press_event', self)
 
@@ -3773,13 +3773,10 @@ class EventHandler(object):
                 x = self.x[which][0]
                 y = self.y[which][0]
 
-                if self.calexps:
-                    wcs0 = self.calexps[0].getWcs()
-
-                for frame, calexp in zip(self.frames, self.calexps):
-                    if calexp:
-                        raDec = wcs0.pixelToSky(x, y)
-                        ds9.pan(*calexp.getWcs().skyToPixel(raDec[0], raDec[1]), frame=frame)
+                for frame, wcs in zip(self.frames, self.wcss):
+                    if wcs:
+                        raDec = self.wcss[0].pixelToSky(x, y)
+                        ds9.pan(*wcs.skyToPixel(raDec[0], raDec[1]), frame=frame)
                     else:
                         ds9.pan(x, y, frame=frame)
                 ds9.cmdBuffer.flush()
