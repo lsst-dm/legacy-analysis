@@ -117,7 +117,7 @@ class Prefix(object):
 def dtName(dType, md=False):
     """Get the name of a given data type (e.g. dtName("src"))"""
     dType_base = re.sub(r"_(filename|md)$", "", dType)
-    if _prefix_ in ("", "forced", ) or dType_base in ("camera", "coaddTempExp", "goodSeeingCoadd",):
+    if _prefix_ in ("", ) or dType_base in ("camera", "coaddTempExp", "goodSeeingCoadd",):
         if md:
             dType += "_md"
         return dType
