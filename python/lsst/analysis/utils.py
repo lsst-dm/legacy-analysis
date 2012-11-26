@@ -1438,6 +1438,8 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
 
     #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
+    magTypes = ["ap", "inst", "model", "psf",]
+
     if catInfo is not None:
         cat, scm = catInfo
         assert scm
@@ -1472,10 +1474,12 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
                 scm.addMapping(key)
 
         scm.addOutputField(afwTable.Field["Flag"]("stellar", "Is the source stellar?"))
-        scm.addOutputField(afwTable.Field["F"]("apMag", "The magnitude corresponding to apFlux"))
-        scm.addOutputField(afwTable.Field["F"]("instMag", "The magnitude corresponding to instFlux"))
-        scm.addOutputField(afwTable.Field["F"]("modelMag", "The magnitude corresponding to modelFlux"))
-        scm.addOutputField(afwTable.Field["F"]("psfMag", "The magnitude corresponding to psfFlux"))
+        for x in magTypes:
+            scm.addOutputField(afwTable.Field["F"]("%sMag" % x,
+                                                   "The magnitude corresponding to %sFlux" % x))
+            scm.addOutputField(afwTable.Field["F"]("%sMagErr" % x,
+                                                   "The error in the magnitude corresponding to %sFlux" % x))
+
         scm.addOutputField(afwTable.Field["Flag"]("good", "The object is good"))
 
         cat = afwTable.SourceCatalog(scm.getOutputSchema())
@@ -1497,10 +1501,6 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
     table.preallocate(len(cat) + len(sourceSet))
 
     stellarKey = cat.getSchema().find("stellar").getKey()
-    apMagKey = cat.getSchema().find("apMag").getKey()
-    instMagKey = cat.getSchema().find("instMag").getKey()
-    modelMagKey = cat.getSchema().find("modelMag").getKey()
-    psfMagKey = cat.getSchema().find("psfMag").getKey()
     goodKey = cat.getSchema().find("good").getKey()
 
     try:
@@ -1516,10 +1516,20 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
         afwTable.SourceRecord.setF = afwTable.SourceRecord.setF4
         afwTable.SourceRecord.setFlag = afwTable.SourceRecord.set_Flag
 
+    fluxMagKeys = {}
+    tab = sourceSet.table
+    for x in magTypes:
+        magKey =     scm.getOutputSchema().find("%sMag"     % x).getKey()
+        magErrKey =  scm.getOutputSchema().find("%sMagErr"  % x).getKey()
+        fluxKey =    tab.__getattribute__("get%sFluxKey"    % x.title())()
+        fluxErrKey = tab.__getattribute__("get%sFluxErrKey" % x.title())()
+
+        fluxMagKeys[x] = (fluxKey, fluxErrKey, magKey, magErrKey)
+
     try:
         afwTable.SourceRecord.setMag
     except AttributeError:
-        typeString = apMagKey.getTypeString()
+        typeString = fluxMagKeys["model"][2].getTypeString() # magKey
         print >> sys.stderr, "Checking type of magnitude keys... %s" % typeString
         afwTable.SourceRecord.setMag = \
             afwTable.SourceRecord.setD if typeString == "D" else afwTable.SourceRecord.setF
@@ -1533,25 +1543,23 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
 
             cat[-1].setId(s.getId())
 
-            try:
-                cat[-1].setMag(apMagKey,    calib.getMagnitude(s.getApFlux() + extraApFlux))
-            except Exception, e:
-                cat[-1].setMag(apMagKey,  calib.getMagnitude(float("NaN")))
-                
-            try:
-                cat[-1].setMag(instMagKey,  calib.getMagnitude(s.getInstFlux()))
-            except Exception, e:
-                cat[-1].setMag(instMagKey,  calib.getMagnitude(float("NaN")))
+            for x in magTypes:
+                (fluxKey, fluxErrKey, magKey, magErrKey) = fluxMagKeys[x]
 
-            try:
-                cat[-1].setMag(modelMagKey, calib.getMagnitude(s.getModelFlux()))
-            except Exception, e:
-                cat[-1].setMag(modelMagKey, calib.getMagnitude(float("NaN")))
-            
-            try:
-                cat[-1].setMag(psfMagKey, calib.getMagnitude(s.getPsfFlux()))
-            except Exception, e:
-                cat[-1].setMag(psfMagKey, calib.getMagnitude(float("NaN")))
+                flux = s.get(fluxKey)
+                fluxErr = s.get(fluxErrKey)
+                if x == "ap":
+                    flux += extraApFlux
+
+                try:
+                    mag, magErr = calib.getMagnitude(flux, fluxErr)
+                    if magErr > 1e38:
+                        magErr = np.nan
+                except Exception, e:
+                    mag, magErr = np.nan, np.nan
+
+                cat[-1].setMag(magKey, mag)
+                cat[-1].setF(magErrKey, magErr)
 
             cat[-1].setFlag(goodKey, True)  # for now
 
@@ -1644,10 +1652,10 @@ def getMagsFromSS(ss, dataId, extraApFlux=0.0):
     ids = cat.get("id")
     flags = _setFlagsFromSource(cat)
     stellar = cat.get("classification.extendedness") < 0.5
-    apMags = cat.get(apMagKey)
-    instMags = cat.get(instMagKey)
-    modelMags = cat.get(modelMagKey)
-    psfMags = cat.get(psfMagKey)
+    apMags = cat.get(magKeys["ap"])
+    instMags = cat.get(magKeys["inst"])
+    modelMags = cat.get(magKeys["model"])
+    psfMags = cat.get(magKeys["psf"])
     x = cat.getX()
     y = cat.getY()
     if False:
