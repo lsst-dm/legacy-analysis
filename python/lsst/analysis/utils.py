@@ -1464,12 +1464,12 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
                     ]:
             scm.addMapping(key)
 
-        definePhotoSlots = False            # add standard photometric slots?
+        definePhotoSlots = not False            # add standard photometric slots?
         if definePhotoSlots:
             for key in [tab.getInstFluxKey(),  tab.getInstFluxErrKey(),  tab.getInstFluxFlagKey(),
                         tab.getModelFluxKey(), tab.getModelFluxErrKey(), tab.getModelFluxFlagKey(),
                         tab.getPsfFluxKey(),   tab.getPsfFluxErrKey(),   tab.getPsfFluxFlagKey(),
-                        tab.getApFluxKey(),   tab.getApFluxErrKey(),     tab.getApFluxFlagKey(),
+                        tab.getApFluxKey(),    tab.getApFluxErrKey(),     tab.getApFluxFlagKey(),
                         ]:
                 scm.addMapping(key)
 
