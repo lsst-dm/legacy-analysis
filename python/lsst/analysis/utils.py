@@ -3374,7 +3374,7 @@ def getMatches(ss, refCat, radius=2):
             
     return matched, spurious, refOnly
 
-def subtractModels(data, dataId, magType="psf", frame=0, subtractedOnly=False, showExposure=True, ccd=None,
+def subtractModels(data, dataId, magType="model", frame=0, subtractedOnly=False, showExposure=True, ccd=None,
                    fitAmplitude=False):
     """Show and return all the images for some objectId and filterId (a maximum of maxDs9 are displayed, starting at ds9 frame0).
 If you specify visits, only that set of visits are considered for display
@@ -3392,15 +3392,36 @@ If fitAmplitude, fit the object's amplitudes rather than using the measured flux
     psf = exp.getPsf()
 
     subtracted =  exp.Factory(exp, True)
+    smi = subtracted.getMaskedImage()
+    si = smi.getImage()
 
     for s in data.getSources(dataId)[0]:
         if getFlagForDetection(s, "SATUR_CENTER"):
             continue
 
+        if s.get("deblend.nchild") > 0: # subtract the children, not the parent
+            continue
+
+        if magType == "model":
+            try:
+                comboImage, expImage, devImage = msViewer.makeGalaxyImages(s, imageBBox=exp.getBBox())
+            except ValueError, e:
+            #print e
+                continue
+            
+            try:
+                sub = si.Factory(si, comboImage.getBBox(afwImage.PARENT))
+                sub -= comboImage
+                del sub
+            except pexExcept.LsstCppException, e:
+                print e
+
+            continue
+
         flux = np.nan if fitAmplitude else getFlux(s, magType)
         try:
             if s.get("classification.extendedness") < 0.5:
-                measAlg.subtractPsf(psf, subtracted.getMaskedImage(), s.getX(), s.getY(), flux)
+                measAlg.subtractPsf(psf, smi, s.getX(), s.getY(), flux)
         except pexExcept.LsstCppException, e:
             pass
 
