@@ -3041,6 +3041,11 @@ def showSourceSet(sourceSet, exp=None, wcs=None, xy0=None, raDec=None, magmin=No
     else:
         x0, y0 = xy0
 
+    mat = re.search(r"^R(\d+(\.\d+)?)", symb)
+    if mat:
+        symb = "o"
+        kwargs["size"] = float(mat.group(1))
+    
     with ds9.Buffering():
         for i, s in enumerate(sourceSet):
             if doNotShow[i]:
