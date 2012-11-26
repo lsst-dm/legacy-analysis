@@ -1058,15 +1058,21 @@ raft or sensor may be None (meaning get all)
                         if s.getParent():
                             s.set(parentKey, s.getParent() | idMask)
                 
-                extendedness = np.where(cat.getModelFlux()/cat.getPsfFlux() > 1.015, 1.0, 0.0)
-                extendedness = np.where(np.isfinite(cat.getModelFlux()),
-                                        extendedness, cat.get(extendednessKey))
-                global warnedHackExtendedness
-                if not warnedHackExtendedness:
-                    print >> sys.stderr, "Hacking the extendeness value"
-                    warnedHackExtendedness = True
-                for s, e in zip(cat, extendedness):
-                    s.set(extendednessKey, e)
+                if _prefix_ == "forced":
+                    poiKey = sch.find("parentObjectId").getKey()
+                    for s in cat:
+                        s.set(parentKey, s.get(poiKey))
+
+                if False:
+                    extendedness = np.where(cat.getModelFlux()/cat.getPsfFlux() > 1.015, 1.0, 0.0)
+                    extendedness = np.where(np.isfinite(cat.getModelFlux()),
+                                            extendedness, cat.get(extendednessKey))
+                    global warnedHackExtendedness
+                    if not warnedHackExtendedness:
+                        print >> sys.stderr, "Hacking the extendeness value"
+                        warnedHackExtendedness = True
+                    for s, e in zip(cat, extendedness):
+                        s.set(extendednessKey, e)
                     
             data.append(dataElem)
 
