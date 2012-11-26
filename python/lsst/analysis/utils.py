@@ -1787,7 +1787,7 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
 
     if showMedians:
         binwidth = 1.0
-        bins = np.arange(int(magmin), int(max(mag1[stellar])), binwidth)
+        bins = np.arange(np.floor(magmin), np.floor(max(mag1[stellar])), binwidth)
         vals = np.empty_like(bins)
         for i in range(len(bins) - 1):
             inBin = np.logical_and(mag1 > bins[i], mag1 <= bins[i] + binwidth)
