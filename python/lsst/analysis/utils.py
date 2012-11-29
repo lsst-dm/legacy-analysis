@@ -1413,7 +1413,7 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
         calib = butler.get("wcs", **dataId).getCalib()
     else:
         global warnedHackCalib
-        if True:                            # XXX Use CCD 0 for calibration
+        if False:                       # XXX Use CCD 0 for calibration
             if True or not warnedHackCalib:
                 print >> sys.stderr, "Hacking Calib to use mean of first 10 ccds"
                 warnedHackCalib = True
