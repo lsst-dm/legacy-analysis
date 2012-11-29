@@ -2031,7 +2031,8 @@ def plotCC(data1, data2, data3, magType="psf", magmax=None, magmin=None,
            colorCcds=False, colorVisits=False,
            usePrincipalColor=True, stellarLocusEnds=[], adjustLocus=False, locusLtype="b:", 
            xmin=None, xmax=None, ymin=None, ymax=None,
-           title="+", markersize=1, alpha=1.0, color="red", frames=[0], wcss=[], fig=None):
+           showXlabel="bottom", showYlabel="left", title="+",
+           markersize=1, alpha=1.0, color="red", frames=[0], wcss=[], fig=None):
     """Plot (data1.magType - data2.magType) v. (data2.magType - data3.magType) mags (e.g. "psf")
 This can be used to plot 3-colour diagrams or to compare 3 epochs.
 
@@ -2040,13 +2041,21 @@ If selectObjId is provided, it's a function that returns True or False for each 
     plotCM(..., selectObjId=makeSelectCcd(2), ...)
 the ids are taken from the idN'th dataset (e.g. 2 to use data2.id); per ccd/visit labels come from idColorN.
 
-If title is provided it's used as a plot title; if it starts + the usual title is prepended
+If title is provided it's used as a plot title; if it starts + the usual title is prepended and if it's
+None no title is provided; if it starts "T:" the label will be written at the top of the plot
+
+showXlabel may be "bottom", "top", or None;  showYlabel may be "left", "right", or None.
 
 If non-None, [xy]{min,max} are used to set the plot limits
     """
-    fig = getMpFigure(fig)
-
-    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
+    subplot = isinstance(fig, pyplot.Axes)
+    if subplot:
+        axes = fig
+        fig = axes.figure
+    else:
+        fig = getMpFigure(fig)
+        
+        axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
 
     data = {1 : data1, 2 : data2, 3 : data3}
     for i, d in data.items():
@@ -2188,7 +2197,11 @@ If non-None, [xy]{min,max} are used to set the plot limits
                               ptype, alpha=alpha[c], markersize=markersize, markeredgewidth=0,
                               color=colors[i%len(colors)], label=str(visit))
             if nobj == 0:
-                axes.legend(loc="upper left")
+                axes.legend(loc="upper left", numpoints=1,
+                            ncol=2, columnspacing=0,
+                            markerscale=2,
+                            borderpad=0.1, labelspacing=0, handletextpad=0, handlelength=1, borderaxespad=0,
+                            )
         else:
             axes.plot(xvec[l], yvec[l], ptype,
                       alpha=alpha[c], markersize=markersize, markeredgewidth=0, color=color)
@@ -2265,8 +2278,8 @@ If non-None, [xy]{min,max} are used to set the plot limits
             mean, stdev = float("NaN"), float("NaN")
 
         #print "%g +- %g" % (mean, stdev)
-        fig.text(0.75, 0.85, r"$%s \pm %.3f$" % \
-                     ("%s = " % principalColor if principalColor else "", stdev), fontsize="larger")
+        axes.text(0.75, 0.85, r"$%s \pm %.3f$" % \
+                      ("%s = " % principalColor if principalColor else "", stdev), fontsize="larger")
         
     if plotRaDec:
         if xmin is not None and xmax is not None:
@@ -2283,51 +2296,100 @@ If non-None, [xy]{min,max} are used to set the plot limits
 
     if showStatistics:
         mean, stdev = [], []
+        delta = []
         for v in (xvec, yvec,):
             if "g" not in SG.lower():
                 v = v[stellar]
             if "s" not in SG.lower():
                 v = v[nonStellar]
 
-            delta = np.array(v, dtype="float64")
+            delta.append(np.array(v, dtype="float64"))
             try:
-                stats = afwMath.makeStatistics(delta, afwMath.STDEVCLIP | afwMath.MEANCLIP)
+                stats = afwMath.makeStatistics(delta[-1], afwMath.STDEVCLIP | afwMath.MEANCLIP)
                 mean.append(stats.getValue(afwMath.MEANCLIP))
                 stdev.append(stats.getValue(afwMath.STDEVCLIP))
             except:
                 mean.append(np.nan); stdev.append(np.nan)
+        #
+        # now the covariance
+        #
+        delta = (delta[0] - mean[0])*(delta[1] - mean[1])
+        stdev.append(afwMath.makeStatistics(delta, afwMath.MEANCLIP).getValue())
 
-        fig.text(0.60, 0.85, r"$(%.3f, %.3f) \pm (%.3f, %.3f)$" % \
-                     (mean[0], mean[1], stdev[0], stdev[1]), fontsize="larger")
+        ax = afwGeom.ellipses.Axes(afwGeom.ellipses.Quadrupole(stdev[0]**2, stdev[1]**2, stdev[2]))
+        theta, A, B = ax.getTheta(), ax.getA(), ax.getB()
+
+        if True:
+            from matplotlib.patches import Ellipse
+            sig1, sig2 = 1.5151729039613389, 2.4859755240637766 # 68.3% and 95.4% contours
+            for nSig in [sig1, sig2]:
+                ell = Ellipse(xy=mean, width=2*nSig*A, height=2*nSig*B, angle=np.rad2deg(theta), zorder=10)
+                axes.add_artist(ell)
+                ell.set_clip_box(axes.bbox)
+                if not True:
+                    ell.set_fill(False)
+                else:
+                    ell.set_alpha(0.3)
+                    ell.set_facecolor("yellow")
+        else:
+            _a = np.linspace(0, 2*np.pi, 100)
+            ct, st = np.cos(theta), np.sin(theta)
+            _x, _y = A*np.cos(_a), B*np.sin(_a)
+            axes.plot(mean[0] + _x*ct - _y*st, mean[1] + _x*st + _y*ct, "k")
+        #
+        # Done with covariance
+        #
+        axes.text(0.5, 0.85, r"$(%.3f, %.3f) \pm (%.3f, %.3f)$" % (mean[0], mean[1], stdev[0], stdev[1]),
+                 fontsize="larger", ha="center", transform = axes.transAxes)
 
         axes.plot(mean[0], mean[1], "k+", markersize=10)
         axes.axvline(0, color="black", ls=":")
         axes.axhline(0, color="black", ls=":")
 
     if plotRaDec:
-        axes.set_xlabel(r"$\alpha$")
-        axes.set_ylabel(r"$\delta$")
+        xlabel = r"$\alpha$"
+        ylabel = r"$\delta$"
     else:
         if multiEpoch:
-            axes.set_xlabel("(%s - %s)$_{%s}$" % (visitNames[1], visitNames[2], magType))
-            axes.set_ylabel("(%s - %s)$_{%s}$" % (visitNames[2], visitNames[3], magType))
+            xlabel = "%s - %s" % (visitNames[1], visitNames[2])
+            ylabel = "%s - %s" % (visitNames[2], visitNames[3])
         else:
-            axes.set_xlabel("(%s - %s)$_{%s}$" % (filterNames[1], filterNames[2], magType))
-            axes.set_ylabel("(%s - %s)$_{%s}$" % (filterNames[2], filterNames[3], magType))
+            xlabel = "%s - %s" % (filterNames[1], filterNames[2])
+            ylabel = "%s - %s" % (filterNames[2], filterNames[3])
 
-    if magmax is not None:
-        if magmin is not None:
-            title += " [%g < %s < %g]" % (magmin,
-                                          butler.mapperInfo.canonicalFiltername(filterNames[1]), magmax)
+    axes.text(0.15, 0.1, magType, fontsize="larger", ha="center", transform = axes.transAxes)
+
+    if showXlabel is not None:
+        axes.set_xlabel(xlabel)
+        axes.xaxis.set_label_position(showXlabel)
+    if showYlabel is not None:
+        axes.set_ylabel(ylabel)
+        axes.yaxis.set_label_position(showYlabel)
+
+    if title is not None:
+        if re.search(r"^T:", title):
+            title = title[2:]
+            titlePos = "figure"
         else:
-            title += " [%s < %g]" % (filterNames[1], magmax)
+            titlePos = "axes"
+            
+        if magmax is not None:
+            if magmin is not None:
+                title += " [%g < %s < %g]" % (magmin,
+                                              butler.mapperInfo.canonicalFiltername(filterNames[1]), magmax)
+            else:
+                title += " [%s < %g]" % (filterNames[1], magmax)
 
-    if fixZeroPoints:
-        title += " (fixed zeropoints)"
+        if fixZeroPoints:
+            title += " (fixed zeropoints)"
 
-    title += " %d objects" % nobj
-    
-    axes.set_title(re.sub(r"^\+\s*", data1.name + " ", title))
+        title += " %d objects" % nobj
+
+        title = re.sub(r"^\+\s*", data1.name + " ", title)
+        if titlePos == "axes":
+            axes.set_title(title)
+        else:
+            fig.suptitle(title)
     #
     # Make "i" print the object's ID, p pan ds9, etc.
     #
@@ -2350,7 +2412,8 @@ If non-None, [xy]{min,max} are used to set the plot limits
     
     eventHandlers[fig] = EventHandler(axes, xvec, col23, ids, xc, yc, flags, frames=frames, wcss=wcss)
 
-    fig.show()
+    if not subplot:                     # they didn't pass in an Axes object
+        fig.show()
 
     return fig
 
