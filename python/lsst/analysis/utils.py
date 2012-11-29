@@ -2101,8 +2101,12 @@ If non-None, [xy]{min,max} are used to set the plot limits
             if not selectObjId(_id):
                 good[i] = False
 
-    xc = matched.cat.get("centroid.sdss_1_1.x")[good]
-    yc = matched.cat.get("centroid.sdss_1_1.y")[good]
+    centroidStr = \
+        "centroid.sdss_1_1" if idN == 1 else \
+        "centroid.sdss_2_1" if idN == 2 else \
+        "centroid.sdss_2"
+    xc = matched.cat.get("%s.x" % centroidStr)[good]
+    yc = matched.cat.get("%s.y" % centroidStr)[good]
     stellar = matched.cat.get("stellar_2_1")[good]
 
     mag1 = matched.getMagsByType(magType, good, suffix="_1_1")
@@ -2410,7 +2414,8 @@ If non-None, [xy]{min,max} are used to set the plot limits
     if "s" not in SG.lower():
         xvec[stellar] = -1000
     
-    eventHandlers[fig] = EventHandler(axes, xvec, col23, ids, xc, yc, flags, frames=frames, wcss=wcss)
+    eventHandlers[fig] = EventHandler(axes, xvec, col23, ids, xc, yc, flags, frames=frames, wcss=wcss,
+                                      selectWcs=idN-1)
 
     if not subplot:                     # they didn't pass in an Axes object
         fig.show()
@@ -3826,11 +3831,12 @@ def assembleCcdSubaru(dataType, butler, dataId, fixAmpLevels=False):
 
 class EventHandler(object):
     """A class to handle key strokes with matplotlib displays"""
-    def __init__(self, axes, xs, ys, ids, x, y, flags, frames=[0], wcss=[]):
+    def __init__(self, axes, xs, ys, ids, x, y, flags, frames=[0], wcss=[], selectWcs=0):
         self.axes = axes
         self.xs = xs
         self.ys = ys
         self.ids = ids
+        self.selectWcs = selectWcs                  # which of frames[], wcss[] the ids correspond to
         self.x = x
         self.y = y
         self.flags = flags
@@ -3880,7 +3886,7 @@ class EventHandler(object):
 
                 for frame, wcs in zip(self.frames, self.wcss):
                     if wcs:
-                        raDec = self.wcss[0].pixelToSky(x, y)
+                        raDec = self.wcss[self.selectWcs].pixelToSky(x, y)
                         ds9.pan(*wcs.skyToPixel(raDec[0], raDec[1]), frame=frame)
                     else:
                         ds9.pan(x, y, frame=frame)
