@@ -126,6 +126,8 @@ def dtName(dType, md=False):
         if dType == "src":
             return "forcedsources"
         else:
+            if md:
+                dType += "_md"
             return dType
 
     dType = "%s_%s" % (_prefix_, dType)
