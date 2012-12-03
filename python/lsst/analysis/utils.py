@@ -2307,6 +2307,7 @@ If non-None, [xy]{min,max} are used to set the plot limits
 
         ax = afwGeom.ellipses.Axes(afwGeom.ellipses.Quadrupole(stdev[0]**2, stdev[1]**2, stdev[2]))
         theta, A, B = ax.getTheta(), ax.getA(), ax.getB()
+        r_xy = stdev[2]/(stdev[0]*stdev[1]) # Pearson's correlation coefficient
 
         if True:
             from matplotlib.patches import Ellipse
@@ -2328,8 +2329,9 @@ If non-None, [xy]{min,max} are used to set the plot limits
         #
         # Done with covariance
         #
-        axes.text(0.5, 0.85, r"$(%.3f, %.3f) \pm (%.3f, %.3f)$" % (mean[0], mean[1], stdev[0], stdev[1]),
-                 fontsize="larger", ha="center", transform = axes.transAxes)
+        axes.text(0.5, 0.85, r"$%.3f, %.3f \pm %.3f, %.3f$ $r_{xy}=%.2f$" %
+                  (mean[0], mean[1], stdev[0], stdev[1], r_xy),
+                  fontsize="larger", ha="center", transform = axes.transAxes)
 
         axes.plot(mean[0], mean[1], "k+", markersize=10)
         axes.axvline(0, color="black", ls=":")
