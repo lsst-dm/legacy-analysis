@@ -2073,10 +2073,10 @@ If non-None, [xy]{min,max} are used to set the plot limits
     mat = afwTable.matchRaDec(zipMatchList(mat), data[3].cat, matchRadius*afwGeom.arcseconds)
     matched = Data(cat=zipMatchList(mat))
 
-    suffixes = [None, "_1_1", "_2_1", "_2"]
+    suffixes = {1 : "_1_1", 2 : "_2_1", 3 : "_2"}
 
     good = None
-    for suffix in suffixes[1:]:
+    for suffix in suffixes.values():
         for name in ["flags.pixel.edge",
                      #"flags.pixel.interpolated.center",
                      "flags.pixel.saturated.center",]:
@@ -2086,61 +2086,39 @@ If non-None, [xy]{min,max} are used to set the plot limits
             else:
                 good = np.logical_and(good, _flg)
 
-    good = np.logical_and(good, matched.cat.get("deblend.nchild_1_1") +
-                                matched.cat.get("deblend.nchild_2_1") +
-                                matched.cat.get("deblend.nchild_2") == 0)
-    if False:
-        good = np.logical_and(good, matched.cat.get("parent_1_1") < 0)
-        good = np.logical_and(good, matched.cat.get("parent_2_1") < 0)
-        good = np.logical_and(good, matched.cat.get("parent_2") < 0)
-    elif True:
-        good = np.logical_and(good, matched.cat.get("parent") == 0)
-        if False:
-            good = np.logical_and(good, matched.cat.get("deblend.nchild_1_1") == 0)
-            good = np.logical_and(good, matched.cat.get("deblend.nchild_2_1") == 0)
-            good = np.logical_and(good, matched.cat.get("deblend.nchild_2") == 0)
+    good = np.logical_and(good, sum([matched.cat.get("deblend.nchild%s" % s) for s in suffixes.values()]) == 0)
+    good = np.logical_and(good, matched.cat.get("parent") == 0)
 
-    ids = matched.cat.get("id%s" % suffixes[idN])
     if selectObjId:
-        for i, _id in enumerate(ids):
+        canonicalIds = matched.cat.get("id%s" % suffixes[idN])
+        for i, _id in enumerate(canonicalIds):
             if not selectObjId(_id):
                 good[i] = False
-
-    centroidStr = \
-        "centroid.sdss_1_1" if idN == 1 else \
-        "centroid.sdss_2_1" if idN == 2 else \
-        "centroid.sdss_2"
+        del canonicalIds
+        
+    centroidStr = "centroid.sdss%s" % suffixes[idN]
     xc = matched.cat.get("%s.x" % centroidStr)[good]
     yc = matched.cat.get("%s.y" % centroidStr)[good]
-    stellar = matched.cat.get("stellar_2_1")[good]
+    stellar = matched.cat.get("stellar%s" % suffixes[idN])[good]
 
-    mag1 = matched.getMagsByType(magType, good, suffix="_1_1")
-    mag2 = matched.getMagsByType(magType, good, suffix="_2_1")
-    mag3 = matched.getMagsByType(magType, good, suffix="_2")
+    mags, ids = {}, {}
+    for k, s in suffixes.items():
+        mags[k] = matched.getMagsByType(magType, good, suffix=s)
+        ids[k]  = matched.cat.get("id%s" %s )[good]
 
-    ids_1_1 = matched.cat.get("id_1_1")[good]
-    ids_2_1 = matched.cat.get("id_2_1")[good]
-    ids_2 = matched.cat.get("id_2")[good]
-
-    ids = ids[good]
     good = good[good]
 
-    if False:
-        ccdTriples = [tuple(butler.mapperInfo.splitId(_id, asDict=True)["ccd"] for _id in x)
-                      for x in zip(ids_1_1, ids_2_1, ids_2)]
-        good = np.logical_and(good, np.array([x == (9, 9, 9) for x in ccdTriples]))
-
     if magmin is not None:
-        good = np.logical_and(good, mag1 > magmin)
+        good = np.logical_and(good, mags[1] > magmin)
     if magmax is not None:
-        good = np.logical_and(good, mag1 < magmax)
+        good = np.logical_and(good, mags[1] < magmax)
     
-    mag1 = mag1[good]; mag2 = mag2[good]; mag3 = mag3[good]
+    mags[1] = mags[1][good]; mags[2] = mags[2][good]; mags[3] = mags[3][good]
     stellar = stellar[good]
     nonStellar = np.logical_not(stellar)
 
-    col12 = mag1 - mag2
-    col23 = mag2 - mag3
+    col12 = mags[1] - mags[2]
+    col23 = mags[2] - mags[3]
 
     if plotRaDec:
         ra = np.degrees(matched.cat.get("coord.ra"))[good]
@@ -2150,24 +2128,18 @@ If non-None, [xy]{min,max} are used to set the plot limits
     else:
         xvec, yvec = col12, col23
 
-    ids = ids[good]
-    ids_1_1 = ids_1_1[good]
-    ids_2_1 = ids_2_1[good]
-    ids_2 = ids_2[good]
+    for k in ids.keys():
+        ids[k] = ids[k][good]
 
     if fixZeroPoints:
-        doFixZeroPoints(col12, col23, stellar, ids_1_1, ids_2_1, ids_2)
-
-    if False:
-        print "RHL", "\n".join([" ".join([str(butler.mapperInfo.splitId(_id, asDict=True)["ccd"])
-                                          for _id in x]) for x in zip(ids_1_1, ids_2_1, ids_2)])
+        doFixZeroPoints(col12, col23, stellar, ids[1], ids[2], ids[3])
 
     try:
         alpha.keys()
     except AttributeError:
         alpha = dict(g=alpha, s=alpha)
 
-    idsForColor = eval("ids%s" % suffixes[idColorN])
+    idsForColor = ids[idColorN]
 
     ccds = np.array([butler.mapperInfo.splitId(_id, asDict=True)["ccd"] for _id in idsForColor])
     visits = np.array([butler.mapperInfo.splitId(_id, asDict=True)["visit"] for _id in idsForColor])
@@ -2226,11 +2198,11 @@ If non-None, [xy]{min,max} are used to set the plot limits
     if stellarLocusEnds and "s" in SG.lower():
         principalColor = ""
         if usePrincipalColor and filterNames[1] == 'g' and filterNames[2] == 'r' and filterNames[3] == 'i':
-            pc = -0.227*mag1 + 0.792*mag2 - 0.567*mag3 + 0.050
+            pc = -0.227*mags[1] + 0.792*mags[2] - 0.567*mags[3] + 0.050
             principalColor = "w"
             delta = pc[good][stellar]
         elif usePrincipalColor and filterNames[1] == 'r' and filterNames[2] == 'i' and filterNames[3] == 'z':
-            pc = -0.270*mag1 + 0.800*mag2 - 0.534*mag3 + 0.054
+            pc = -0.270*mags[1] + 0.800*mags[2] - 0.534*mags[3] + 0.054
             principalColor = "y"
             delta = pc[good][stellar]
         else:
@@ -2408,18 +2380,18 @@ If non-None, [xy]{min,max} are used to set the plot limits
         for k, v in data.flags.items():
             flags[k] = data.flags[k][good] # needs to be converted to use data.cat
 
-    did = butler.mapperInfo.splitId(ids[0], asDict=True); del did["objId"]
+    canonicalIds = ids[idN]
+    did = butler.mapperInfo.splitId(canonicalIds[0], asDict=True); del did["objId"]
     md = data[1].getDataset("calexp_md", did)[0]
     xc = xc[good] + md.get("LTV1")
     yc = yc[good] + md.get("LTV2")
-    ids = ids
 
     if "g" not in SG.lower():
         xvec[nonStellar] = -1000
     if "s" not in SG.lower():
         xvec[stellar] = -1000
     
-    eventHandlers[fig] = EventHandler(axes, xvec, col23, ids, xc, yc, flags, frames=frames, wcss=wcss,
+    eventHandlers[fig] = EventHandler(axes, xvec, col23, canonicalIds, xc, yc, flags, frames=frames, wcss=wcss,
                                       selectWcs=idN-1)
 
     if not subplot:                     # they didn't pass in an Axes object
