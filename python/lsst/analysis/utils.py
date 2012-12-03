@@ -2012,24 +2012,6 @@ def robustStd(y):
     n = len(y)
     return 0.741*(y[int(0.75*n)] - y[int(0.25*n)])
 
-def doFixZeroPoints(xvec, yvec, stellar, ids_1, ids_2, ids_3):
-    """Fix the zeropoints, so that the median offsets in any patch defined by a unique combination of
-    (ccd1, ccd2, ccd3) is 0
-
-N.b. it might be better to tie ccd1 and ccd2 together, and then solve for ccd3 wrt the combo
-    """
-
-    ccds = zip(butler.mapperInfo.splitId(ids_1, asDict=True)["ccd"],
-               butler.mapperInfo.splitId(ids_2, asDict=True)["ccd"],
-               butler.mapperInfo.splitId(ids_3, asDict=True)["ccd"])
-    ccdSet = set(ccds)
-    ccds = np.array(ccds)            # an array of tuples (ccd1, ccd2, ccd3)
-
-    for ccd in ccdSet:
-        tmp = np.sum(ccd == ccds, axis=1) == 3 # i.e. all 3 datasets match
-        xvec[tmp] -= np.median(xvec[np.logical_and(stellar, tmp)])
-        yvec[tmp] -= np.median(yvec[np.logical_and(stellar, tmp)])
-
 def plotStellarLocus(axes, mags, k1, k2, k3, stellar, filterNames, stellarLocusEnds=[], locusLtype=False,
                      plotRaDec=False):
     """
@@ -2110,8 +2092,7 @@ def plotStellarLocus(axes, mags, k1, k2, k3, stellar, filterNames, stellarLocusE
 
 def plotCC(data, dataKeys=None, magType="psf", magmax=None, magmin=None,
            idN=None, idColorN=None, SG="sg", selectObjId=None, matchRadius=2, plotRaDec=False,
-           fixZeroPoints=False, showStatistics=False,
-           colorCcds=False, colorVisits=False,
+           showStatistics=False, colorCcds=False, colorVisits=False,
            usePrincipalColor=True, stellarLocusEnds=[], adjustLocus=False, locusLtype="b:", 
            xmin=None, xmax=None, ymin=None, ymax=None,
            showXlabel="bottom", showYlabel="left", title="+",
@@ -2222,13 +2203,8 @@ If non-None, [xy]{min,max} are used to set the plot limits
         if len(dataKeys) == 3:
             k1, k2, k3 = dataKeys
 
-            col12 = mags[k1] - mags[k2]
-            col23 = mags[k2] - mags[k3]
-
-            if fixZeroPoints:
-                doFixZeroPoints(col12, col23, stellar, ids[k1], ids[k2], ids[k3])
-
-            xvec, yvec = col12, col23
+            xvec = mags[k1] - mags[k2]
+            yvec = mags[k2] - mags[k3]
         else:
             k1, k2, k3, k4 = dataKeys
             xvec = mags[k1] - mags[k2]
@@ -2400,9 +2376,6 @@ If non-None, [xy]{min,max} are used to set the plot limits
                                               butler.mapperInfo.canonicalFiltername(filterNames[idN]), magmax)
             else:
                 title += " [%s < %g]" % (filterNames[idN], magmax)
-
-        if fixZeroPoints:
-            title += " (fixed zeropoints)"
 
         title += " %d objects" % nobj
 
