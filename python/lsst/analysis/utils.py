@@ -2089,14 +2089,7 @@ def plotStellarLocus(axes, mags, k1, k2, k3, stellar, filterNames, stellarLocusE
     axes.text(0.75, 0.85, r"$%s \pm %.3f$" % \
                   ("%s = " % principalColor if principalColor else "", stdev), fontsize="larger")
 
-
-def plotCC(data, dataKeys=None, magType="psf", magmax=None, magmin=None,
-           idN=None, idColorN=None, SG="sg", selectObjId=None, matchRadius=2, plotRaDec=False,
-           showStatistics=False, colorCcds=False, colorVisits=False,
-           usePrincipalColor=True, stellarLocusEnds=[], adjustLocus=False, locusLtype="b:", 
-           xmin=None, xmax=None, ymin=None, ymax=None,
-           showXlabel="bottom", showYlabel="left", title="+",
-           markersize=1, alpha=1.0, color="red", frames=[0], wcss=[], fig=None):
+def plotCC(data, dataKeys=None, magType="psf", SG="sg", fig=None, *args, **kwargs):
     """Plot (data[1].magType - data[2].magType) v. (data[2].magType - data[3].magType) mags (e.g. "psf")
 where data is a dict. This can be used to plot 3-colour diagrams or to compare 3 epochs.  If you provide
 dataKeys, then its values will be used to index data; if it's None then sorted(data.keys()) is used.
@@ -2113,6 +2106,42 @@ showXlabel may be "bottom", "top", or None;  showYlabel may be "left", "right", 
 
 If non-None, [xy]{min,max} are used to set the plot limits
     """
+
+    if isinstance(magType, str):
+        magType = [magType,]
+    if isinstance(SG, str):
+        SG = [SG,]
+
+    fig = getMpFigure(fig)
+
+    subplots = makeSubplots(fig, nx=len(magType), ny=len(SG))
+    matched = None
+    j = -1
+    for _magType in magType:
+        for _sg in SG:
+            axes = subplots.next(); j += 1
+
+            _, matched = _plotCCImpl(data, dataKeys, _magType, _sg, fig=axes, matched=matched,
+                                     title="T:+" if j == 0 else None,
+                                     showXlabel= \
+                                         "top"    if j//len(SG) == 0                else \
+                                         "bottom" if j//len(SG) == len(magType) - 1 else None,
+                                     showYlabel="left" if (j%len(SG) == 0) else "right",
+                                     *args, **kwargs
+                                     )
+                                     
+    fig.show()
+
+    return fig
+
+def _plotCCImpl(data, dataKeys, magType, SG, magmax=None, magmin=None, fig=None, matched=None,
+           idN=None, idColorN=None, selectObjId=None, matchRadius=2, plotRaDec=False,
+           showStatistics=False, show_r_xy=True, colorCcds=False, colorVisits=False,
+           usePrincipalColor=True, stellarLocusEnds=[], adjustLocus=False, locusLtype="b:", 
+           xmin=None, xmax=None, ymin=None, ymax=None,
+           showXlabel="bottom", showYlabel="left", title="+",
+           markersize=1, alpha=1.0, color="red", frames=[0], wcss=[]):
+
     subplot = isinstance(fig, pyplot.Axes)
     if subplot:
         axes = fig
@@ -2138,10 +2167,11 @@ If non-None, [xy]{min,max} are used to set the plot limits
     if idColorN is None:
         idColorN = idN
 
-    mat = afwTable.matchRaDec(data[dataKeys[0]].cat, data[dataKeys[1]].cat, matchRadius*afwGeom.arcseconds)
-    for k in dataKeys[2:]:
-        mat = afwTable.matchRaDec(zipMatchList(mat), data[k].cat, matchRadius*afwGeom.arcseconds)
-    matched = Data(cat=zipMatchList(mat))
+    if not matched:
+        mat = afwTable.matchRaDec(data[dataKeys[0]].cat, data[dataKeys[1]].cat, matchRadius*afwGeom.arcseconds)
+        for k in dataKeys[2:]:
+            mat = afwTable.matchRaDec(zipMatchList(mat), data[k].cat, matchRadius*afwGeom.arcseconds)
+        matched = Data(cat=zipMatchList(mat))
 
     suffixes = ["_2" + i*"_1" for i in range(len(dataKeys) - 1, -1, -1)]
     suffixes[0] = suffixes[0][2:]       # first name has no "_2".  Grrr
@@ -2307,7 +2337,8 @@ If non-None, [xy]{min,max} are used to set the plot limits
 
         ax = afwGeom.ellipses.Axes(afwGeom.ellipses.Quadrupole(stdev[0]**2, stdev[1]**2, stdev[2]))
         theta, A, B = ax.getTheta(), ax.getA(), ax.getB()
-        r_xy = stdev[2]/(stdev[0]*stdev[1]) # Pearson's correlation coefficient
+        if show_r_xy:
+            r_xy = stdev[2]/(stdev[0]*stdev[1]) # Pearson's correlation coefficient
 
         if True:
             from matplotlib.patches import Ellipse
@@ -2329,9 +2360,11 @@ If non-None, [xy]{min,max} are used to set the plot limits
         #
         # Done with covariance
         #
-        axes.text(0.5, 0.85, r"$%.3f, %.3f \pm %.3f, %.3f$ $r_{xy}=%.2f$" %
-                  (mean[0], mean[1], stdev[0], stdev[1], r_xy),
-                  fontsize="larger", ha="center", transform = axes.transAxes)
+        msg = r"$%.3f, %.3f \pm %.3f, %.3f$" % (mean[0], mean[1], stdev[0], stdev[1])
+        if show_r_xy:
+            msg += r" $r_{xy}=%.2f$" % r_xy
+
+        axes.text(0.5, 0.85, msg, fontsize="larger", ha="center", transform = axes.transAxes)
 
         axes.plot(mean[0], mean[1], "k+", markersize=10)
         axes.axvline(0, color="black", ls=":")
@@ -2412,7 +2445,7 @@ If non-None, [xy]{min,max} are used to set the plot limits
     if not subplot:                     # they didn't pass in an Axes object
         fig.show()
 
-    return fig
+    return fig, matched
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
