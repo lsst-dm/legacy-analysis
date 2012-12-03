@@ -2030,6 +2030,84 @@ N.b. it might be better to tie ccd1 and ccd2 together, and then solve for ccd3 w
         xvec[tmp] -= np.median(xvec[np.logical_and(stellar, tmp)])
         yvec[tmp] -= np.median(yvec[np.logical_and(stellar, tmp)])
 
+def plotStellarLocus(axes, mags, k1, k2, k3, stellar, filterNames, stellarLocusEnds=[], locusLtype=False,
+                     plotRaDec=False):
+    """
+    Calculate width of blue end of stellar locus
+    """
+    col12 = mags[k1] - mags[k2]
+    col23 = mags[k2] - mags[k3]
+
+    #stellarLocusEnds = (0.40, 1.00,)    # the blue and red colour defining the straight part of the locus
+    #stellarLocusEnds = (0.50, 1.50,)
+
+    principalColor = ""
+    if usePrincipalColor and filterNames[k1] == 'g' and filterNames[k2] == 'r' and filterNames[k3] == 'i':
+        pc = -0.227*mags[k1] + 0.792*mags[k2] - 0.567*mags[k3] + 0.050
+        principalColor = "w"
+        delta = pc[good][stellar]
+    elif usePrincipalColor and filterNames[k1] == 'r' and filterNames[k2] == 'i' and filterNames[k3] == 'z':
+        pc = -0.270*mags[k1] + 0.800*mags[k2] - 0.534*mags[k3] + 0.054
+        principalColor = "y"
+        delta = pc[good][stellar]
+    else:
+        xy = []
+        try:
+            stellarLocusEnds[0][0]  # both x and y are provided
+            stellarLocusEnds[0][0]  # both x and y are provided
+            xy = stellarLocusEnds
+            stellarLocusEnds = (xy[0][0], xy[1][0])
+        except TypeError:
+            dxx = 0.1*abs(stellarLocusEnds[1] - stellarLocusEnds[0])
+            for xx in stellarLocusEnds:
+                delta = col23[stellar][abs(col12[stellar] - xx) < dxx]
+                try:
+                    yy = afwMath.makeStatistics(np.array(delta, dtype="float64"), afwMath.MEDIAN).getValue()
+                except pexExcept.LsstCppException:
+                    yy = np.nan
+
+                if False:
+                    yy = np.median(delta)
+                    sig = robustStd(delta)
+                    yy = np.median(delta[abs(delta - yy) < 2*sig])
+
+                if not plotRaDec:
+                    if False:
+                        axes.plot([xx - dxx, xx - dxx], [-2, 2], "k:")
+                        axes.plot([xx + dxx, xx + dxx], [-2, 2], "k:")
+                    elif locusLtype:
+                        axes.axvline(xx, color="blue", ls=":")
+
+                xy.append((xx, yy))
+
+        print "Stellar locus: [(%.3f, %.3f), (%.3f, %.3f)]" % (xy[0][0], xy[0][1], xy[1][0], xy[1][1])
+
+        theta = math.atan2(xy[1][1] - xy[0][1], xy[1][0] - xy[0][0])
+        c, s = math.cos(theta), math.sin(theta)
+
+        x, y = col12[stellar], col23[stellar]
+        xp =   x*c + y*s
+        yp = - x*s + y*c
+
+        if locusLtype and not plotRaDec:
+            axes.plot([xy[0][0], xy[1][0]], [xy[0][1], xy[1][1]], locusLtype)
+            #print xy
+
+        delta = yp
+
+    delta = np.array(delta, dtype="float64")
+    blue = np.logical_and(x > stellarLocusEnds[0], x < stellarLocusEnds[1])
+    try:
+        stats = afwMath.makeStatistics(delta[blue], afwMath.STDEVCLIP | afwMath.MEANCLIP)
+        mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
+    except:
+        mean, stdev = float("NaN"), float("NaN")
+
+    #print "%g +- %g" % (mean, stdev)
+    axes.text(0.75, 0.85, r"$%s \pm %.3f$" % \
+                  ("%s = " % principalColor if principalColor else "", stdev), fontsize="larger")
+
+
 def plotCC(data, dataKeys=None, magType="psf", magmax=None, magmin=None,
            idN=None, idColorN=None, SG="sg", selectObjId=None, matchRadius=2, plotRaDec=False,
            fixZeroPoints=False, showStatistics=False,
@@ -2065,15 +2143,14 @@ If non-None, [xy]{min,max} are used to set the plot limits
 
     if dataKeys is None:
         dataKeys = sorted(data.keys())
-    else:
-        if len(data) != len(dataKeys):
-            raise RuntimeError("Mismatch: %d data items, but %d keys" % (len(data), len(dataKeys)))
 
-    for i, d in data.items():
+    for k in dataKeys:
         try:
-            d.cat
+            data[k].cat
+        except KeyError:
+            raise RuntimeError("Data ID %s is not present in data[]" % k)
         except AttributeError:
-            raise RuntimeError("Please call data%d.getMagsByVisit, then try again" % i)
+            raise RuntimeError("Please call data[%s].getMagsByVisit, then try again" % k)
 
     if idN is None:
         idN = dataKeys[0]
@@ -2085,7 +2162,7 @@ If non-None, [xy]{min,max} are used to set the plot limits
         mat = afwTable.matchRaDec(zipMatchList(mat), data[k].cat, matchRadius*afwGeom.arcseconds)
     matched = Data(cat=zipMatchList(mat))
 
-    suffixes = ["_2" + i*"_1" for i in range(len(data) - 1, -1, -1)]
+    suffixes = ["_2" + i*"_1" for i in range(len(dataKeys) - 1, -1, -1)]
     suffixes[0] = suffixes[0][2:]       # first name has no "_2".  Grrr
     suffixes = dict(zip(dataKeys, suffixes))
 
@@ -2135,13 +2212,6 @@ If non-None, [xy]{min,max} are used to set the plot limits
 
     for k in ids.keys():
         ids[k] = ids[k][good]
-    #
-    # Specialise to 3 inputs
-    #
-    k1, k2, k3 = dataKeys
-
-    col12 = mags[k1] - mags[k2]
-    col23 = mags[k2] - mags[k3]
 
     if plotRaDec:
         ra = np.degrees(matched.cat.get("coord.ra"))[good]
@@ -2149,10 +2219,20 @@ If non-None, [xy]{min,max} are used to set the plot limits
 
         xvec, yvec = ra, dec
     else:
-        xvec, yvec = col12, col23
+        if len(dataKeys) == 3:
+            k1, k2, k3 = dataKeys
 
-        if fixZeroPoints:
-            doFixZeroPoints(col12, col23, stellar, ids[k1], ids[k2], ids[k3])
+            col12 = mags[k1] - mags[k2]
+            col23 = mags[k2] - mags[k3]
+
+            if fixZeroPoints:
+                doFixZeroPoints(col12, col23, stellar, ids[k1], ids[k2], ids[k3])
+
+            xvec, yvec = col12, col23
+        else:
+            k1, k2, k3, k4 = dataKeys
+            xvec = mags[k1] - mags[k2]
+            yvec = mags[k3] - mags[k4]
 
     try:
         alpha.keys()
@@ -2211,90 +2291,21 @@ If non-None, [xy]{min,max} are used to set the plot limits
         nobj += np.sum(l)
 
     #axes.plot((0, 30), (0, 0), "b-")
-    #
-    # Calculate width of blue end of stellar locus
-    #
-    #stellarLocusEnds = (0.40, 1.00,)    # the blue and red colour defining the straight part of the locus
-    #stellarLocusEnds = (0.50, 1.50,)
+
     if stellarLocusEnds and "s" in SG.lower():
-        principalColor = ""
-        if usePrincipalColor and filterNames[k1] == 'g' and filterNames[k2] == 'r' and filterNames[k3] == 'i':
-            pc = -0.227*mags[k1] + 0.792*mags[k2] - 0.567*mags[k3] + 0.050
-            principalColor = "w"
-            delta = pc[good][stellar]
-        elif usePrincipalColor and filterNames[k1] == 'r' and filterNames[k2] == 'i' and filterNames[k3] == 'z':
-            pc = -0.270*mags[k1] + 0.800*mags[k2] - 0.534*mags[k3] + 0.054
-            principalColor = "y"
-            delta = pc[good][stellar]
-        else:
-            xy = []
-            try:
-                stellarLocusEnds[0][0]  # both x and y are provided
-                stellarLocusEnds[0][0]  # both x and y are provided
-                xy = stellarLocusEnds
-                stellarLocusEnds = (xy[0][0], xy[1][0])
-            except TypeError:
-                dxx = 0.1*abs(stellarLocusEnds[1] - stellarLocusEnds[0])
-                for xx in stellarLocusEnds:
-                    delta = col23[stellar][abs(col12[stellar] - xx) < dxx]
-                    try:
-                        yy = afwMath.makeStatistics(np.array(delta, dtype="float64"), afwMath.MEDIAN).getValue()
-                    except pexExcept.LsstCppException:
-                        yy = np.nan
-
-                    if False:
-                        yy = np.median(delta)
-                        sig = robustStd(delta)
-                        yy = np.median(delta[abs(delta - yy) < 2*sig])
-
-                    if not plotRaDec:
-                        if False:
-                            axes.plot([xx - dxx, xx - dxx], [-2, 2], "k:")
-                            axes.plot([xx + dxx, xx + dxx], [-2, 2], "k:")
-                        elif locusLtype:
-                            axes.axvline(xx, color="blue", ls=":")
-
-                    xy.append((xx, yy))
-
-            print "Stellar locus: [(%.3f, %.3f), (%.3f, %.3f)]" % (xy[0][0], xy[0][1], xy[1][0], xy[1][1])
-
-            theta = math.atan2(xy[1][1] - xy[0][1], xy[1][0] - xy[0][0])
-            c, s = math.cos(theta), math.sin(theta)
-
-            x, y = col12[stellar], col23[stellar]
-            xp =   x*c + y*s
-            yp = - x*s + y*c
-
-            if locusLtype and not plotRaDec:
-                axes.plot([xy[0][0], xy[1][0]], [xy[0][1], xy[1][1]], locusLtype)
-                #print xy
-
-            delta = yp
-
-        delta = np.array(delta, dtype="float64")
-        blue = np.logical_and(x > stellarLocusEnds[0], x < stellarLocusEnds[1])
-        try:
-            stats = afwMath.makeStatistics(delta[blue], afwMath.STDEVCLIP | afwMath.MEANCLIP)
-            mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
-        except:
-            mean, stdev = float("NaN"), float("NaN")
-
-        #print "%g +- %g" % (mean, stdev)
-        axes.text(0.75, 0.85, r"$%s \pm %.3f$" % \
-                      ("%s = " % principalColor if principalColor else "", stdev), fontsize="larger")
+        plotStellarLocus(axes, mags, k1, k2, k3, stellar, filterNames, stellarLocusEnds, locusLtype, plotRaDec)
         
     if plotRaDec:
         if xmin is not None and xmax is not None:
             axes.set_xlim(xmin, xmax)
         if ymin is not None and ymax is not None:
             axes.set_ylim(ymin, ymax)
+    elif multiEpoch:
+        axes.set_xlim(-0.3 if xmin is None else xmin, 0.3 if xmax is None else xmax)
+        axes.set_ylim(-0.3 if ymin is None else ymin, 0.3 if ymax is None else ymax)
     else:
-        if multiEpoch:
-            axes.set_xlim(-0.3 if xmin is None else xmin, 0.3 if xmax is None else xmax)
-            axes.set_ylim(-0.3 if ymin is None else ymin, 0.3 if ymax is None else ymax)
-        else:
-            axes.set_xlim(-1 if xmin is None else xmin, 2 if xmax is None else xmax)
-            axes.set_ylim(-1 if ymin is None else ymin, 2 if ymax is None else ymax)
+        axes.set_xlim(-1 if xmin is None else xmin, 2 if xmax is None else xmax)
+        axes.set_ylim(-1 if ymin is None else ymin, 2 if ymax is None else ymax)
 
     if showStatistics:
         mean, stdev = [], []
@@ -2352,14 +2363,22 @@ If non-None, [xy]{min,max} are used to set the plot limits
         xlabel = r"$\alpha$"
         ylabel = r"$\delta$"
     else:
-        if multiEpoch:
-            xlabel = "%s - %s" % (visitNames[k1], visitNames[k2])
-            ylabel = "%s - %s" % (visitNames[k2], visitNames[k3])
+        if len(dataKeys) == 3:
+            lk1, lk2, lk3, lk4 = k1, k2, k2, k3
         else:
-            xlabel = "%s - %s" % (filterNames[k1], filterNames[k2])
-            ylabel = "%s - %s" % (filterNames[k2], filterNames[k3])
+            lk1, lk2, lk3, lk4 = k1, k2, k3, k4
 
+        if multiEpoch:
+            xlabel = "%s - %s" % (visitNames[lk1], visitNames[lk2])
+            ylabel = "%s - %s" % (visitNames[lk3], visitNames[lk4])
+        else:
+            xlabel = "%s - %s" % (filterNames[lk1], filterNames[lk2])
+            ylabel = "%s - %s" % (filterNames[lk3], filterNames[lk4])
+        
     axes.text(0.15, 0.1, magType, fontsize="larger", ha="center", transform = axes.transAxes)
+    if idN != idColorN:
+        axes.text(0.80, 0.1, "legend: %s" % idColorN,
+                  fontsize="larger", ha="center", transform = axes.transAxes)
 
     if showXlabel is not None:
         axes.set_xlabel(xlabel)
