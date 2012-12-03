@@ -2075,17 +2075,19 @@ If non-None, [xy]{min,max} are used to set the plot limits
         except AttributeError:
             raise RuntimeError("Please call data%d.getMagsByVisit, then try again" % i)
 
-    k1, k2, k3 = dataKeys
     if idN is None:
-        idN = k1
+        idN = dataKeys[0]
     if idColorN is None:
-        idColorN = k1
+        idColorN = idN
 
-    mat = afwTable.matchRaDec(data[k1].cat, data[k2].cat, matchRadius*afwGeom.arcseconds)
-    mat = afwTable.matchRaDec(zipMatchList(mat), data[k3].cat, matchRadius*afwGeom.arcseconds)
+    mat = afwTable.matchRaDec(data[dataKeys[0]].cat, data[dataKeys[1]].cat, matchRadius*afwGeom.arcseconds)
+    for k in dataKeys[2:]:
+        mat = afwTable.matchRaDec(zipMatchList(mat), data[k].cat, matchRadius*afwGeom.arcseconds)
     matched = Data(cat=zipMatchList(mat))
 
-    suffixes = {k1 : "_1_1", k2 : "_2_1", k3 : "_2"}
+    suffixes = ["_2" + i*"_1" for i in range(len(data) - 1, -1, -1)]
+    suffixes[0] = suffixes[0][2:]       # first name has no "_2".  Grrr
+    suffixes = dict(zip(dataKeys, suffixes))
 
     good = None
     for suffix in suffixes.values():
@@ -2121,13 +2123,22 @@ If non-None, [xy]{min,max} are used to set the plot limits
     good = good[good]
 
     if magmin is not None:
-        good = np.logical_and(good, mags[k1] > magmin)
+        good = np.logical_and(good, mags[idN] > magmin)
     if magmax is not None:
-        good = np.logical_and(good, mags[k1] < magmax)
-    
-    mags[k1] = mags[k1][good]; mags[k2] = mags[k2][good]; mags[k3] = mags[k3][good]
+        good = np.logical_and(good, mags[idN] < magmax)
+
+    for k, s in suffixes.items():
+        mags[k] = mags[k][good]
+
     stellar = stellar[good]
     nonStellar = np.logical_not(stellar)
+
+    for k in ids.keys():
+        ids[k] = ids[k][good]
+    #
+    # Specialise to 3 inputs
+    #
+    k1, k2, k3 = dataKeys
 
     col12 = mags[k1] - mags[k2]
     col23 = mags[k2] - mags[k3]
@@ -2140,11 +2151,8 @@ If non-None, [xy]{min,max} are used to set the plot limits
     else:
         xvec, yvec = col12, col23
 
-    for k in ids.keys():
-        ids[k] = ids[k][good]
-
-    if fixZeroPoints:
-        doFixZeroPoints(col12, col23, stellar, ids[k1], ids[k2], ids[k3])
+        if fixZeroPoints:
+            doFixZeroPoints(col12, col23, stellar, ids[k1], ids[k2], ids[k3])
 
     try:
         alpha.keys()
@@ -2370,16 +2378,16 @@ If non-None, [xy]{min,max} are used to set the plot limits
         if magmax is not None:
             if magmin is not None:
                 title += " [%g < %s < %g]" % (magmin,
-                                              butler.mapperInfo.canonicalFiltername(filterNames[k1]), magmax)
+                                              butler.mapperInfo.canonicalFiltername(filterNames[idN]), magmax)
             else:
-                title += " [%s < %g]" % (filterNames[k1], magmax)
+                title += " [%s < %g]" % (filterNames[idN], magmax)
 
         if fixZeroPoints:
             title += " (fixed zeropoints)"
 
         title += " %d objects" % nobj
 
-        title = re.sub(r"^\+\s*", data[k1].name + " ", title)
+        title = re.sub(r"^\+\s*", data[idN].name + " ", title)
         if titlePos == "axes":
             axes.set_title(title)
         else:
@@ -2395,7 +2403,7 @@ If non-None, [xy]{min,max} are used to set the plot limits
 
     canonicalIds = ids[idN]
     did = butler.mapperInfo.splitId(canonicalIds[0], asDict=True); del did["objId"]
-    md = data[k1].getDataset("calexp_md", did)[0]
+    md = data[idN].getDataset("calexp_md", did)[0]
     xc = xc[good] + md.get("LTV1")
     yc = yc[good] + md.get("LTV2")
 
@@ -2404,7 +2412,7 @@ If non-None, [xy]{min,max} are used to set the plot limits
     if "s" not in SG.lower():
         xvec[stellar] = -1000
     
-    eventHandlers[fig] = EventHandler(axes, xvec, col23, canonicalIds, xc, yc, flags, frames=frames, wcss=wcss,
+    eventHandlers[fig] = EventHandler(axes, xvec, yvec, canonicalIds, xc, yc, flags, frames=frames, wcss=wcss,
                                       selectWcs=idN-1)
 
     if not subplot:                     # they didn't pass in an Axes object
