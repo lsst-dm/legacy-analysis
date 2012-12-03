@@ -3481,7 +3481,6 @@ If fitAmplitude, fit the object's amplitudes rather than using the measured flux
             try:
                 comboImage, expImage, devImage = msViewer.makeGalaxyImages(s, imageBBox=exp.getBBox())
             except ValueError, e:
-            #print e
                 continue
             
             try:
