@@ -3522,6 +3522,10 @@ If fitAmplitude, fit the object's amplitudes rather than using the measured flux
         ds9.setMaskTransparency(95)
         ds9.mtv(subtracted.getMaskedImage().getImage(), title=title, frame=frame + 1)
 
+    si -= exp.getMaskedImage().getImage()
+    si *= -1
+
+    return subtracted    
 
 def plotObject(exp, xc, yc, dir="-", hlen=10, findPeak=0, frame=None, fig=None):
     """Plot a cross section through an object centered at (xc, yc) on the specified figure
