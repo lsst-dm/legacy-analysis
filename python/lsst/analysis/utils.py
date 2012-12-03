@@ -32,6 +32,11 @@ from lsst.meas.algorithms.detection import SourceDetectionTask
 import lsst.meas.algorithms.utils as maUtils
 
 try:
+    import lsst.meas.extensions.multiShapelet.simpleViewer as msViewer
+except ImportError:
+    msViewer = None
+    
+try:
     from lsst.obs.lsstSim import LsstSimMapper
     _raw_ = "raw"
     _visit_ = "visit"
@@ -3480,11 +3485,19 @@ If fitAmplitude, fit the object's amplitudes rather than using the measured flux
                 continue
             
             try:
-                sub = si.Factory(si, comboImage.getBBox(afwImage.PARENT))
-                sub -= comboImage
+                if True:
+                    modelImage = comboImage
+                elif True:
+                    modelImage = devImage
+                else:
+                    modelImage = expImage
+
+                sub = si.Factory(si, modelImage.getBBox(afwImage.PARENT))
+                sub -= modelImage
                 del sub
             except pexExcept.LsstCppException, e:
-                print e
+                #print e
+                pass
 
             continue
 
