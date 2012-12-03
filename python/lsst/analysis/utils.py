@@ -2030,21 +2030,22 @@ N.b. it might be better to tie ccd1 and ccd2 together, and then solve for ccd3 w
         xvec[tmp] -= np.median(xvec[np.logical_and(stellar, tmp)])
         yvec[tmp] -= np.median(yvec[np.logical_and(stellar, tmp)])
 
-def plotCC(data1, data2, data3, magType="psf", magmax=None, magmin=None,
-           idN=1, idColorN=1, SG="sg", selectObjId=None, matchRadius=2, plotRaDec=False,
+def plotCC(data, dataKeys=None, magType="psf", magmax=None, magmin=None,
+           idN=None, idColorN=None, SG="sg", selectObjId=None, matchRadius=2, plotRaDec=False,
            fixZeroPoints=False, showStatistics=False,
            colorCcds=False, colorVisits=False,
            usePrincipalColor=True, stellarLocusEnds=[], adjustLocus=False, locusLtype="b:", 
            xmin=None, xmax=None, ymin=None, ymax=None,
            showXlabel="bottom", showYlabel="left", title="+",
            markersize=1, alpha=1.0, color="red", frames=[0], wcss=[], fig=None):
-    """Plot (data1.magType - data2.magType) v. (data2.magType - data3.magType) mags (e.g. "psf")
-This can be used to plot 3-colour diagrams or to compare 3 epochs.
+    """Plot (data[1].magType - data[2].magType) v. (data[2].magType - data[3].magType) mags (e.g. "psf")
+where data is a dict. This can be used to plot 3-colour diagrams or to compare 3 epochs.  If you provide
+dataKeys, then its values will be used to index data; if it's None then sorted(data.keys()) is used.
 
 If selectObjId is provided, it's a function that returns True or False for each object. E.g.
     sel = makeSelectCcd(ccd=2)
     plotCM(..., selectObjId=makeSelectCcd(2), ...)
-the ids are taken from the idN'th dataset (e.g. 2 to use data2.id); per ccd/visit labels come from idColorN.
+the ids are taken from the idN'th dataset (e.g. 2 to use data[2].id); per ccd/visit labels come from idColorN.
 
 If title is provided it's used as a plot title; if it starts + the usual title is prepended and if it's
 None no title is provided; if it starts "T:" the label will be written at the top of the plot
@@ -2062,18 +2063,29 @@ If non-None, [xy]{min,max} are used to set the plot limits
         
         axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
 
-    data = {1 : data1, 2 : data2, 3 : data3}
+    if dataKeys is None:
+        dataKeys = sorted(data.keys())
+    else:
+        if len(data) != len(dataKeys):
+            raise RuntimeError("Mismatch: %d data items, but %d keys" % (len(data), len(dataKeys)))
+
     for i, d in data.items():
         try:
             d.cat
         except AttributeError:
             raise RuntimeError("Please call data%d.getMagsByVisit, then try again" % i)
 
-    mat = afwTable.matchRaDec(data[1].cat, data[2].cat, matchRadius*afwGeom.arcseconds)
-    mat = afwTable.matchRaDec(zipMatchList(mat), data[3].cat, matchRadius*afwGeom.arcseconds)
+    k1, k2, k3 = dataKeys
+    if idN is None:
+        idN = k1
+    if idColorN is None:
+        idColorN = k1
+
+    mat = afwTable.matchRaDec(data[k1].cat, data[k2].cat, matchRadius*afwGeom.arcseconds)
+    mat = afwTable.matchRaDec(zipMatchList(mat), data[k3].cat, matchRadius*afwGeom.arcseconds)
     matched = Data(cat=zipMatchList(mat))
 
-    suffixes = {1 : "_1_1", 2 : "_2_1", 3 : "_2"}
+    suffixes = {k1 : "_1_1", k2 : "_2_1", k3 : "_2"}
 
     good = None
     for suffix in suffixes.values():
@@ -2109,16 +2121,16 @@ If non-None, [xy]{min,max} are used to set the plot limits
     good = good[good]
 
     if magmin is not None:
-        good = np.logical_and(good, mags[1] > magmin)
+        good = np.logical_and(good, mags[k1] > magmin)
     if magmax is not None:
-        good = np.logical_and(good, mags[1] < magmax)
+        good = np.logical_and(good, mags[k1] < magmax)
     
-    mags[1] = mags[1][good]; mags[2] = mags[2][good]; mags[3] = mags[3][good]
+    mags[k1] = mags[k1][good]; mags[k2] = mags[k2][good]; mags[k3] = mags[k3][good]
     stellar = stellar[good]
     nonStellar = np.logical_not(stellar)
 
-    col12 = mags[1] - mags[2]
-    col23 = mags[2] - mags[3]
+    col12 = mags[k1] - mags[k2]
+    col23 = mags[k2] - mags[k3]
 
     if plotRaDec:
         ra = np.degrees(matched.cat.get("coord.ra"))[good]
@@ -2132,7 +2144,7 @@ If non-None, [xy]{min,max} are used to set the plot limits
         ids[k] = ids[k][good]
 
     if fixZeroPoints:
-        doFixZeroPoints(col12, col23, stellar, ids[1], ids[2], ids[3])
+        doFixZeroPoints(col12, col23, stellar, ids[k1], ids[k2], ids[k3])
 
     try:
         alpha.keys()
@@ -2144,13 +2156,14 @@ If non-None, [xy]{min,max} are used to set the plot limits
     ccds = np.array([butler.mapperInfo.splitId(_id, asDict=True)["ccd"] for _id in idsForColor])
     visits = np.array([butler.mapperInfo.splitId(_id, asDict=True)["visit"] for _id in idsForColor])
 
-    filterNames = [None] + [butler.mapperInfo.canonicalFiltername(data[i + 1].dataId[0]["filter"])
-                            for i in range(len(data.keys()))]
-    visitNames = [None] + [data[i + 1].dataId[0]["visit"] for i in range(len(data.keys()))]
+    filterNames, visitNames = {}, {}
+    for k in data.keys():
+        filterNames[k] = butler.mapperInfo.canonicalFiltername(data[k].dataId[0]["filter"])
+        visitNames[k] = data[k].dataId[0]["visit"]
     #
     # Are we dealing with multi-band or multi-epoch data?
     #
-    multiEpoch = True if len(set(filterNames[1:])) == 1 else False
+    multiEpoch = True if len(set(filterNames.values())) == 1 else False
 
     nobj = 0
     for c, l, ptype, markersize, color in [("g", nonStellar, "h", markersize, color),
@@ -2197,12 +2210,12 @@ If non-None, [xy]{min,max} are used to set the plot limits
     #stellarLocusEnds = (0.50, 1.50,)
     if stellarLocusEnds and "s" in SG.lower():
         principalColor = ""
-        if usePrincipalColor and filterNames[1] == 'g' and filterNames[2] == 'r' and filterNames[3] == 'i':
-            pc = -0.227*mags[1] + 0.792*mags[2] - 0.567*mags[3] + 0.050
+        if usePrincipalColor and filterNames[k1] == 'g' and filterNames[k2] == 'r' and filterNames[k3] == 'i':
+            pc = -0.227*mags[k1] + 0.792*mags[k2] - 0.567*mags[k3] + 0.050
             principalColor = "w"
             delta = pc[good][stellar]
-        elif usePrincipalColor and filterNames[1] == 'r' and filterNames[2] == 'i' and filterNames[3] == 'z':
-            pc = -0.270*mags[1] + 0.800*mags[2] - 0.534*mags[3] + 0.054
+        elif usePrincipalColor and filterNames[k1] == 'r' and filterNames[k2] == 'i' and filterNames[k3] == 'z':
+            pc = -0.270*mags[k1] + 0.800*mags[k2] - 0.534*mags[k3] + 0.054
             principalColor = "y"
             delta = pc[good][stellar]
         else:
@@ -2332,11 +2345,11 @@ If non-None, [xy]{min,max} are used to set the plot limits
         ylabel = r"$\delta$"
     else:
         if multiEpoch:
-            xlabel = "%s - %s" % (visitNames[1], visitNames[2])
-            ylabel = "%s - %s" % (visitNames[2], visitNames[3])
+            xlabel = "%s - %s" % (visitNames[k1], visitNames[k2])
+            ylabel = "%s - %s" % (visitNames[k2], visitNames[k3])
         else:
-            xlabel = "%s - %s" % (filterNames[1], filterNames[2])
-            ylabel = "%s - %s" % (filterNames[2], filterNames[3])
+            xlabel = "%s - %s" % (filterNames[k1], filterNames[k2])
+            ylabel = "%s - %s" % (filterNames[k2], filterNames[k3])
 
     axes.text(0.15, 0.1, magType, fontsize="larger", ha="center", transform = axes.transAxes)
 
@@ -2357,16 +2370,16 @@ If non-None, [xy]{min,max} are used to set the plot limits
         if magmax is not None:
             if magmin is not None:
                 title += " [%g < %s < %g]" % (magmin,
-                                              butler.mapperInfo.canonicalFiltername(filterNames[1]), magmax)
+                                              butler.mapperInfo.canonicalFiltername(filterNames[k1]), magmax)
             else:
-                title += " [%s < %g]" % (filterNames[1], magmax)
+                title += " [%s < %g]" % (filterNames[k1], magmax)
 
         if fixZeroPoints:
             title += " (fixed zeropoints)"
 
         title += " %d objects" % nobj
 
-        title = re.sub(r"^\+\s*", data1.name + " ", title)
+        title = re.sub(r"^\+\s*", data[k1].name + " ", title)
         if titlePos == "axes":
             axes.set_title(title)
         else:
@@ -2382,7 +2395,7 @@ If non-None, [xy]{min,max} are used to set the plot limits
 
     canonicalIds = ids[idN]
     did = butler.mapperInfo.splitId(canonicalIds[0], asDict=True); del did["objId"]
-    md = data[1].getDataset("calexp_md", did)[0]
+    md = data[k1].getDataset("calexp_md", did)[0]
     xc = xc[good] + md.get("LTV1")
     yc = yc[good] + md.get("LTV2")
 
