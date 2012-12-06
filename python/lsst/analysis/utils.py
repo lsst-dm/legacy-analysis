@@ -2333,8 +2333,8 @@ def _plotCCImpl(data, dataKeys, magType, SG, magmax=None, magmin=None, fig=None,
                 if not True:
                     ell.set_fill(False)
                 else:
-                    ell.set_alpha(0.3)
-                    ell.set_facecolor("yellow")
+                    ell.set_alpha(0.2)
+                    ell.set_facecolor("black")
         else:
             _a = np.linspace(0, 2*np.pi, 100)
             ct, st = np.cos(theta), np.sin(theta)
