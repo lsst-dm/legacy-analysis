@@ -1717,9 +1717,14 @@ def getFluxMag0DB(visit, raft, sensor, db=None):
 
 def plotDmag(data, magType1="model", magType2="psf", maglim=20, magmin=14,
              showMedians=False, sgVal=0.05, meanDelta=0.0, adjustMean=False, parents=False,
+             selectObjId=None,
              xmin=None, xmax=None, ymin=None, ymax=None,
              title="+", markersize=1, color="red", frames=[0], fig=None):
     """Plot (magType1 - magType2) v. magType1 mags (e.g. "model" and "psf")
+
+If selectObjId is provided, it's a function that returns True or False for each object. E.g.
+    sel = makeSelectCcd(ccd=2)
+    plotDmag(..., selectObjId=makeSelectCcd(2), ...)
 
 The magnitude limit for the "locus" box used to calculate statistics is maglim, and only objects within
 +- sgLim of meanDelta are included in the locus (the axes are also adjusted to include meanDelta in the
@@ -1750,6 +1755,13 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
         good = np.logical_and(good, data.cat.get("parent") == 0)
     else:
         good = np.logical_and(good, data.cat.get("deblend.nchild") == 0)
+
+    if selectObjId:
+        ids = data.cat.get("id")
+        for i, _id in enumerate(ids):
+            if not selectObjId(_id):
+                good[i] = False
+        del ids
 
     mag1 = data.getMagsByType(magType1, good)
     mag2 = data.getMagsByType(magType2, good)
