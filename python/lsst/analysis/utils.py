@@ -2241,7 +2241,7 @@ def _plotCCImpl(data, dataKeys, magType, SG, magmax=None, magmin=None, fig=None,
 
     nobj = 0
     for c, l, ptype, markersize, color in [("g", nonStellar, "h", markersize, color),
-                                           ("s", stellar, "*", 2*markersize, "green",)]:
+                                           ("s", stellar,    "*", markersize, "green",)]:
         if c not in SG.lower():
             continue
 
