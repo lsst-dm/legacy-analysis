@@ -2114,7 +2114,7 @@ If non-None, [xy]{min,max} are used to set the plot limits
 
     return fig
 
-def _plotCCImpl(data, dataKeys, magType, SG, magmax=None, magmin=None, fig=None, matched=None,
+def _plotCCImpl(data, dataKeys, magType, SG, magmax=None, magmin=None, fig=None, show=True, matched=None,
            idN=None, idColorN=None, selectObjId=None, matchRadius=2, plotRaDec=False,
            showStatistics=False, show_r_xy=True, colorCcds=False, colorVisits=False,
            usePrincipalColor=True, stellarLocusEnds=[], adjustLocus=False, locusLtype="b:", 
