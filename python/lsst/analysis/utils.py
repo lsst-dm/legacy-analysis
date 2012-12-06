@@ -2313,7 +2313,10 @@ def _plotCCImpl(data, dataKeys, magType, SG, magmax=None, magmin=None, fig=None,
         # now the covariance
         #
         delta = (delta[0] - mean[0])*(delta[1] - mean[1])
-        stdev.append(afwMath.makeStatistics(delta, afwMath.MEANCLIP).getValue())
+        try:
+            stdev.append(afwMath.makeStatistics(delta, afwMath.MEANCLIP).getValue())
+        except:
+            stdev.append(np.nan)
 
         ax = afwGeom.ellipses.Axes(afwGeom.ellipses.Quadrupole(stdev[0]**2, stdev[1]**2, stdev[2]))
         theta, A, B = ax.getTheta(), ax.getA(), ax.getB()
@@ -2408,11 +2411,16 @@ def _plotCCImpl(data, dataKeys, magType, SG, magmax=None, magmin=None, fig=None,
         for k, v in data.flags.items():
             flags[k] = data.flags[k][good] # needs to be converted to use data.cat
 
+    if len(xc):
+        xc = xc[good]
+        yc = yc[good]
+
     canonicalIds = ids[idN]
-    did = butler.mapperInfo.splitId(canonicalIds[0], asDict=True); del did["objId"]
-    md = data[idN].getDataset("calexp_md", did)[0]
-    xc = xc[good] + md.get("LTV1")
-    yc = yc[good] + md.get("LTV2")
+    if len(canonicalIds):
+        did = butler.mapperInfo.splitId(canonicalIds[0], asDict=True); del did["objId"]
+        md = data[idN].getDataset("calexp_md", did)[0]
+        xc += md.get("LTV1")
+        yc += md.get("LTV2")
 
     if "g" not in SG.lower():
         xvec[nonStellar] = -1000
@@ -2423,6 +2431,9 @@ def _plotCCImpl(data, dataKeys, magType, SG, magmax=None, magmin=None, fig=None,
                                       selectWcs=idN-1)
 
     if not subplot:                     # they didn't pass in an Axes object
+        show = False
+
+    if show:
         fig.show()
 
     return fig, matched
