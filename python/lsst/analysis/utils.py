@@ -1719,7 +1719,7 @@ def plotDmag(data, magType1="model", magType2="psf", maglim=20, magmin=14,
              showMedians=False, sgVal=0.05, meanDelta=0.0, adjustMean=False, parents=False,
              selectObjId=None,
              xmin=None, xmax=None, ymin=None, ymax=None,
-             title="+", markersize=1, color="red", frames=[0], fig=None):
+             title="+", markersize=1, color="red", frames=[0], wcss=[], fig=None):
     """Plot (magType1 - magType2) v. magType1 mags (e.g. "model" and "psf")
 
 If selectObjId is provided, it's a function that returns True or False for each object. E.g.
@@ -1822,7 +1822,7 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     x = data.cat.getX()[good] + md.get("LTV1")
     y = data.cat.getY()[good] + md.get("LTV2")
     ids = data.cat.get("id")[good]
-    eventHandlers[fig] = EventHandler(axes, mag1, delta, ids, x, y, flags, frames=frames)
+    eventHandlers[fig] = EventHandler(axes, mag1, delta, ids, x, y, flags, frames=frames, wcss=wcss)
 
     fig.show()
 
