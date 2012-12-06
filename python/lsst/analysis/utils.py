@@ -1780,19 +1780,6 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     except:
         mean, stdev = np.nan, np.nan
 
-    if adjustMean:
-        raise RuntimeError("Fix me")
-        ids = data.ids[good]
-        ccds = set([x["ccd"] for x in sum(data.dataSets.values(), [])])
-        ccdIds = [butler.mapperInfo.splitId(i)[1] for i in ids]
-        for ccd in ccds:
-            l = np.logical_and(np.equal(ccdIds, ccd), locus)
-            try:
-                delta[np.equal(ccdIds, ccd)] += \
-                    mean - afwMath.makeStatistics(delta[l], afwMath.MEANCLIP).getValue()
-            except Exception, e:
-                print "Adjusting mean for CCD %d: %s" % (ccd, e)
-
     if False:
         axes.plot(mag1[locus], delta[locus], "o", markersize=2*markersize, color="blue")
 
@@ -1813,25 +1800,6 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
             vals[i] = np.median(delta[np.where(np.logical_and(stellar, inBin))])
 
         axes.plot(bins + 0.5*binwidth, vals, linestyle="-", marker="o", color="cyan")
-
-    if False:
-        if False:                           # clump
-            magmin, magmax = 20.03, 20.13
-            if magType == "model":
-                dmin, dmax = -0.72, -0.67
-            else:
-                dmin, dmax = -0.576, -0.512
-        else:                               # "saturated"
-            magmin, magmax = 14, 14.9
-            dmin, dmax = -0.2, 0.2
-            dmin, dmax = -0.2, -0.1
-
-        axes.plot([magmax, magmin, magmin, magmax, magmax], [dmin, dmin, dmax, dmax, dmin], "r-")
-        objs = np.logical_and(np.logical_and(mag1 > magmin, mag1 < magmax),
-                              np.logical_and(delta > dmin, delta < dmax))
-        ids = data.ids[good]
-        for i in sorted(ids[objs]):
-            print i, butler.mapperInfo.splitId(i)
 
     axes.set_xlim(14 if xmin is None else xmin, 26 if xmax is None else xmax)
     axes.set_ylim(meanDelta + (0.2 if ymin is None else ymin), meanDelta + (- 0.8 if ymax is None else ymax))
