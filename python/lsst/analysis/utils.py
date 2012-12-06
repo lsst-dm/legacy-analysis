@@ -2250,20 +2250,22 @@ def _plotCCImpl(data, dataKeys, magType, SG, magmax=None, magmin=None, fig=None,
             
             if colorCcds:
                 for i, ccd in enumerate(sorted(set(ccds))):
+                    color = colors[i%len(colors)]
                     tmp = (ccd == ccds)
 
                     axes.plot(xvec[np.logical_and(l, tmp)],
                               yvec[np.logical_and(l, tmp)],
                               ptype, alpha=alpha[c], markersize=markersize, markeredgewidth=0,
-                              color=colors[i%len(colors)], label=str(ccd))
+                              markeredgecolor=color, color=color, label=str(ccd))
             else:
                 for i, visit in enumerate(sorted(set(visits))):
+                    color = colors[i%len(colors)]
                     tmp = (visit == visits)
 
                     axes.plot(xvec[np.logical_and(l, tmp)],
                               yvec[np.logical_and(l, tmp)],
                               ptype, alpha=alpha[c], markersize=markersize, markeredgewidth=0,
-                              color=colors[i%len(colors)], label=str(visit))
+                              color=color, label=str(visit))
             if nobj == 0:
                 axes.legend(loc="upper left", numpoints=1,
                             ncol=2, columnspacing=0,
