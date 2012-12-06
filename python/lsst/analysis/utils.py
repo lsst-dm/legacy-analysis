@@ -4298,3 +4298,34 @@ def makeContiguous(cat):
         ncat.append(ncat.copyRecord(c, scm))
 
     return ncat
+
+def plotFrames(das, fig=None):
+    fig = getMpFigure(fig)
+    
+    plottingArea = (0.1, 0.1, 0.85, 0.80)
+    axes = fig.add_axes(plottingArea)
+
+    for k, da in das.items():
+        for did in da.dataId:
+            calexp_md = butler.get(dtName("calexp", True), **did)
+            w, h = calexp_md.get("NAXIS1"), calexp_md.get("NAXIS2")
+            wcs = afwImage.makeWcs(calexp_md)
+            xvec, yvec = [], []
+            for x, y in [(0, 0), (w, 0), (w, h), (0, h),]:
+                pos = wcs.pixelToSky(x, y)
+                xvec.append(pos[0].asDegrees())
+                yvec.append(pos[1].asDegrees())
+            #print k, did, w, h, xvec, yvec
+            xvec.append(xvec[0]); yvec.append(yvec[0])
+
+            axes.plot(xvec, yvec)
+
+            p = pyplot.Polygon(zip(xvec, yvec), alpha=0.2 )
+            axes.add_artist(p)
+
+    axes.set_xlabel("RA")
+    axes.set_ylabel("Dec")
+    
+    fig.show()
+
+    return fig
