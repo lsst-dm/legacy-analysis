@@ -1854,6 +1854,81 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
 
     return fig
 
+def plotClassification(data, magType1="model", maglim=20, magmin=14,
+             showMedians=False, parents=False, criticalFracDeV=0.5,
+             xmin=None, xmax=None, ymin=None, ymax=None,
+             title="+", markersize=1, SG="sg",  color="red", color2="green", frames=[0], fig=None):
+    """Plot objects' classification v. magType1
+
+If title is provided it's used as a plot title; if it starts + the usual title is prepended
+
+If non-None, [xy]{min,max} are used to set the plot limits
+    """
+    fig = getMpFigure(fig)
+
+    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
+
+    try:
+        data.cat
+    except AttributeError:
+        raise RuntimeError("Please call da.getMagsByVisit, then try again")
+
+    bad = reduce(lambda x, y: np.logical_or(x, data.cat.get(y)),
+                 ["flags.pixel.edge",
+                  #"flags.pixel.interpolated.center",
+                  "flags.pixel.saturated.center",],
+                 False)
+    good = np.logical_not(bad)
+
+    if parents:
+        good = np.logical_and(good, data.cat.get("parent") == 0)
+    else:
+        good = np.logical_and(good, data.cat.get("deblend.nchild") == 0)
+
+    mag1 = data.getMagsByType(magType1, good)
+    fracDeV = data.cat.get("multishapelet.combo.components")[good][:, 0]
+    deV = fracDeV > criticalFracDeV
+
+    nonStellar = np.logical_not(data.cat.get("stellar"))[good]
+    ids = data.cat.get("id")[good]
+
+    plotKW = dict(markersize=markersize, markeredgewidth=0, zorder=1)
+    if "d" in SG.lower() or "e" in SG.lower():           # split by deV/exp
+        plotKW["alpha"] = 0.5
+        if "d" in SG.lower():
+            tmp = np.logical_and(deV, nonStellar)
+            axes.plot(mag1[tmp], fracDeV[tmp], "o", color="red", **plotKW)
+        if "e" in SG.lower():
+            tmp = np.logical_and(np.logical_not(deV), nonStellar)
+            axes.plot(mag1[tmp], fracDeV[tmp], "o", color="blue", **plotKW)
+    else:
+        axes.plot(mag1[nonStellar], fracDeV[nonStellar], "o", color=color, **plotKW)
+
+    axes.set_xlim(14 if xmin is None else xmin, 26 if xmax is None else xmax)
+    axes.set_ylim(-0.1 if ymin is None else ymin, 1.1 if ymax is None else ymax)
+    axes.set_xlabel(magType1)
+    axes.set_ylabel("$frac_{deV}$")
+    axes.set_title(re.sub(r"^\+\s*", data.name + " ", title))
+    #
+    # Make "i" print the object's ID, p pan ds9, etc.
+    #
+    did = butler.mapperInfo.splitId(ids[0], asDict=True); del did["objId"]
+    md = data.getDataset("calexp_md", did)[0]
+
+    global eventHandlers
+    flags = {}
+    if False:
+        for k, v in data.flags.items():
+            flags[k] = data.flags[k][good] # needs to be converted to use data.cat
+    x = data.cat.getX()[good] + md.get("LTV1")
+    y = data.cat.getY()[good] + md.get("LTV2")
+    ids = data.cat.get("id")[good]
+    eventHandlers[fig] = EventHandler(axes, mag1, fracDeV, ids, x, y, flags, frames=frames)
+
+    fig.show()
+
+    return fig
+
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 def plotRadii(data, magType1="model", maglim=20, magmin=14,
