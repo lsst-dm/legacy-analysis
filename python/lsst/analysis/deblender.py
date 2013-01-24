@@ -189,6 +189,8 @@ def plotDeblendFamily(mi, parent, kids, dkids=[],
 def footprintToImage(fp, mi=None, mask=False):
     if fp.isHeavy():
         fp = afwDet.cast_HeavyFootprintF(fp)
+    elif mi is None:
+        raise RuntimeError("Unable to make a HeavyFootprint as image is None")
     else:
         fp = afwDet.makeHeavyFootprint(fp, mi)
     bb = fp.getBBox()
