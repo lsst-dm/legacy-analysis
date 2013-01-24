@@ -173,6 +173,20 @@ if True:
 
         s.set(keyName, value)
     
+def findMapper(root, mapperFile):
+    """Search root, looking for mapperFile; follow _parent links if they exist"""
+    root0 = root
+    while root:
+        mapper_py = os.path.join(root, mapperFile)
+        if os.path.exists(mapper_py):
+            return mapper_py
+
+        parent = os.path.join(root, "_parent")
+        if os.path.exists(parent):
+            root = parent
+        else:
+            raise RuntimeError("Unable to find file %s starting at %s" % (mapperFile, root0))
+
 def getMapper(registryRoot, defaultMapper=None, mapperFile="mapper.py"):
     """
     Get proper mapper given a directory registryRoot
@@ -185,7 +199,7 @@ def getMapper(registryRoot, defaultMapper=None, mapperFile="mapper.py"):
     """
     Mapper = None
     _locals = {}
-    mapper_py = os.path.join(registryRoot, mapperFile)
+    mapper_py = findMapper(registryRoot, mapperFile)
     try:
         execfile(mapper_py, {}, _locals)
         Mapper = _locals.get("Mapper")
