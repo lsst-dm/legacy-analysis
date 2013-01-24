@@ -1722,9 +1722,10 @@ def getFluxMag0DB(visit, raft, sensor, db=None):
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 def plotDmag(data, magType1="model", magType2="psf", maglim=20, magmin=14,
-             showMedians=False, sgVal=0.05, meanDelta=0.0, adjustMean=False, parents=False,
+             showMedians=False, sgVal=0.05, criticalFracDeV=0.5,
+             meanDelta=0.0, adjustMean=False, parents=False,
              xmin=None, xmax=None, ymin=None, ymax=None,
-             title="+", markersize=1, color="red", frames=[0], fig=None):
+             title="+", markersize=1, SG="sg",  color="red", color2="green", frames=[0], fig=None):
     """Plot (magType1 - magType2) v. magType1 mags (e.g. "model" and "psf")
 
 The magnitude limit for the "locus" box used to calculate statistics is maglim, and only objects within
@@ -1768,11 +1769,14 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     stellar = stellar[good]; nonStellar = nonStellar[good]
     ids = data.cat.get("id")[good]
 
-    try:
-        stats = afwMath.makeStatistics(delta[locus], afwMath.STDEVCLIP | afwMath.MEANCLIP)
-        mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
-    except:
-        mean, stdev = np.nan, np.nan
+    if "s" not in SG.lower():
+        mean = None
+    else:
+        try:
+            stats = afwMath.makeStatistics(delta[locus], afwMath.STDEVCLIP | afwMath.MEANCLIP)
+            mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
+        except:
+            mean, stdev = np.nan, np.nan
 
     if adjustMean:
         raise RuntimeError("Fix me")
@@ -1790,23 +1794,55 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     if False:
         axes.plot(mag1[locus], delta[locus], "o", markersize=2*markersize, color="blue")
 
-    axes.plot((magmin, maglim, maglim, magmin, magmin), meanDelta + sgVal*np.array([-1, -1, 1, 1, -1]), "b:")
-    axes.plot((0, 30), meanDelta + np.array([0, 0]), "b-")
+    axes.axhline(meanDelta, linestyle=":", color="black")
+    if mean is not None:
+        axes.plot((magmin, maglim, maglim, magmin, magmin),
+                  meanDelta + sgVal*np.array([-1, -1, 1, 1, -1]), linestyle=":", color="black")
 
-    color2 = "green"
-    axes.plot(mag1[nonStellar], delta[nonStellar], "o", markersize=markersize, markeredgewidth=0, color=color)
-    axes.plot(mag1[stellar], delta[stellar], "o", markersize=markersize, markeredgewidth=0, color=color2)
-    #axes.plot((0, 30), (0, 0), "b-")
+    if "d" in SG.lower() or "e" in SG.lower():           # split by deV/exp?
+        SG += "g"
+
+    plotKW = dict(markersize=markersize, markeredgewidth=0, zorder=1)
+    if "g" in SG.lower():
+        if "d" in SG.lower() or "e" in SG.lower():           # split by deV/exp
+            fracDeV = data.cat.get("multishapelet.combo.components")[good][:, 0]
+            deV = fracDeV > criticalFracDeV # it's a deV
+
+            plotKW["alpha"] = 0.5
+            if "d" in SG.lower():
+                tmp = np.logical_and(deV, nonStellar)
+                axes.plot(mag1[tmp], delta[tmp], "o", color="red", **plotKW)
+            if "e" in SG.lower():
+                tmp = np.logical_and(np.logical_not(deV), nonStellar)
+                axes.plot(mag1[tmp], delta[tmp], "o", color="blue", **plotKW)
+        else:
+            axes.plot(mag1[nonStellar], delta[nonStellar], "o", color=color, **plotKW)
+    if "s" in SG.lower():
+        axes.plot(mag1[stellar], delta[stellar], "o", markersize=markersize, markeredgewidth=0,
+                  color=color2, zorder=1)
 
     if showMedians:
         binwidth = 1.0
         bins = np.arange(np.floor(magmin), np.floor(max(mag1[stellar])), binwidth)
         vals = np.empty_like(bins)
+        err = np.empty_like(bins)
         for i in range(len(bins) - 1):
             inBin = np.logical_and(mag1 > bins[i], mag1 <= bins[i] + binwidth)
-            vals[i] = np.median(delta[np.where(np.logical_and(stellar, inBin))])
+            tmp = delta[np.where(np.logical_and(stellar if 's' in SG else nonStellar, inBin))]
+            tmp.sort()
 
-        axes.plot(bins + 0.5*binwidth, vals, linestyle="-", marker="o", color="cyan")
+            if len(tmp) == 0:
+                median, iqr = np.nan, np.nan
+            else:
+                median = tmp[int(0.5*len(tmp) + 0.5)] if len(tmp) > 1 else tmp[0]
+                iqr = (tmp[int(0.75*len(tmp) + 0.5)] - tmp[int(0.25*len(tmp) + 0.5)]) \
+                    if len(tmp) > 2 else np.nan
+
+            vals[i] = median
+            err[i] = 0.741*iqr
+
+        axes.errorbar(bins + 0.5*binwidth, vals, yerr=err, zorder=3,
+                      linestyle="-", marker="o", color="black")
 
     if False:
         if False:                           # clump
@@ -1833,10 +1869,23 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     axes.set_ylabel("%s - %s" % (magType1, magType2))
     axes.set_title(re.sub(r"^\+\s*", data.name + " ", title))
 
-    fig.text(0.20, 0.85, r"$%.3f \pm %.3f$" % (mean, stdev), fontsize="larger")
+    if mean is not None:
+        fig.text(0.20, 0.85, r"$%.3f \pm %.3f$" % (mean, stdev), fontsize="larger")
     #
     # Make "i" print the object's ID, p pan ds9, etc.
     #
+    if "g" not in SG.lower():
+        mag1[nonStellar] = -1000        # we don't want to pick these objects
+    if "s" not in SG.lower():
+        mag1[stellar] = -1000
+        if "d" in SG.lower():
+            if "e" in SG.lower():       # show deV and /exp
+                pass
+            else:
+                mag1[np.logical_not(deV)] = -1000
+        elif "e" in SG.lower():         # show only exp
+            mag1[deV] = -1000
+
     did = butler.mapperInfo.splitId(ids[0], asDict=True); del did["objId"]
     md = data.getDataset("calexp_md", did)[0]
 
