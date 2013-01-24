@@ -98,6 +98,8 @@ try:
 except NameError:
     mpFigures = {0 : None}              # matplotlib (actually pyplot) figures
     eventHandlers = {}                  # event handlers for matplotlib figures
+    eventCallbacks = {}                 # callbacks for event handlers
+    eventFrame = 0                      # ds9 frame to use for callbacks
 
 #
 try:
@@ -3894,7 +3896,20 @@ class EventHandler(object):
         if ev.inaxes != self.axes:
             return
         
-        if ev.key in ("i", "I", "p", "P"):
+        if ev.key.lower() == 'h':
+            print """
+Options:
+   d, D    Display the object in ds9, frame utils.eventFrame.  If D, show the deblended child
+   h, H    Print this message
+   p, P    Pan to the object in ds9 in all the frames specified to the event handler; 'P' also prints a newline
+   i, I    Print info about the object; 'I' also prints a newline
+
+If utils.eventCallbacks[ev.key] is defined it'll be called with arguments:
+   ev.key, source, maskedImage, frame
+(see utils.kronCallback for an example)
+""",
+            return
+        elif ev.key.lower() in ("dip"):
             dist = np.hypot(self.xs - ev.xdata, self.ys - ev.ydata)
             dist[np.where(np.isnan(dist))] = 1e30
             dmin = min(dist)
@@ -3914,7 +3929,39 @@ class EventHandler(object):
                  self.x[which][0], self.y[which][0], ""),
             sys.stdout.flush()
 
-            if ev.key == "I":
+            if ev.key in ('d', 'D'):
+                dataId = butler.mapperInfo.splitId(objId, asDict=True)
+                title = re.sub(r"[' {}]", "", str(dataId)).replace(",", " ")
+                oid = dataId["objId"]; del dataId["objId"]
+                ss = butler.get(dtName("src"), **dataId)
+                i = int(np.where(objId == ss.get("id"))[0][0])
+                s = ss[i]
+
+                bbox = s.getFootprint().getBBox()
+                grow = 0.5
+                bbox.grow(afwGeom.ExtentI(int(grow*bbox.getWidth()), int(grow*bbox.getHeight())))
+
+                md = butler.get(dtName("calexp_md"), **dataId)
+                bbox.clip(afwGeom.BoxI(afwGeom.PointI(0, 0),
+                                       afwGeom.ExtentI(md.get("NAXIS1"), md.get("NAXIS2"))))
+
+                if ev.key == 'd':
+                    calexp = butler.get(dtName("calexp_sub"), bbox=bbox, **dataId).getMaskedImage()
+                else:
+                    import deblender
+                    try:
+                        calexp = deblender.footprintToImage(s.getFootprint())
+                    except:
+                        calexp = butler.get(dtName("calexp"), **dataId).getMaskedImage()
+                        calexp = deblender.footprintToImage(s.getFootprint(), calexp)
+
+                ds9.mtv(calexp, title=title, frame=eventFrame)
+                ds9.pan(s.getX() - calexp.getX0(), s.getY() - calexp.getY0(), frame=eventFrame)
+
+                callback = eventCallbacks.get(ev.key)
+                if callback:
+                    callback(ev.key, s, calexp, frame=eventFrame)
+            elif ev.key == "I":
                 print ""
             elif ev.key in ("p", "P"):
                 x = self.x[which][0]
