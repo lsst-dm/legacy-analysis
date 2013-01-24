@@ -1125,6 +1125,8 @@ raft or sensor may be None (meaning get all)
                 mags = cat.get("apMag" + suffix)
             elif magType == "inst":
                 mags = cat.get("instMag" + suffix)
+            elif magType == "kron":
+                mags = cat.get("kronMag" + suffix)
             elif magType == "model":
                 mags = cat.get("modelMag" + suffix)
             elif magType == "psf":
@@ -1453,7 +1455,7 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
 
     #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-    magTypes = ["ap", "inst", "model", "psf",]
+    magTypes = ["ap", "inst", "model", "psf", "kron",]
 
     if catInfo is not None:
         cat, scm = catInfo
@@ -1467,6 +1469,8 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
         for f in ["id", "coord", "parent",  # must be first and in this order --- #2154
                   "deblend.nchild",
                   "classification.extendedness",
+                  "multishapelet.combo.components",
+                  "flux.kron.radius",
                   "flags.pixel.edge",
                   "flags.pixel.interpolated.any",
                   "flags.pixel.interpolated.center",
@@ -1852,12 +1856,93 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-def makeSelectCcd(ccds, include=True):
-    try:
-        ccds[0]
-    except TypeError:
-        ccds = [ccds]
+def plotRadii(data, magType1="model", maglim=20, magmin=14,
+              showMedians=False, parents=False, criticalFracDeV=0.5,
+              xmin=None, xmax=None, ymin=None, ymax=None,
+              title="+", markersize=1, SG="sg",  color="red", color2="green", frames=[0], fig=None):
+    """Plot objects' radii v. magType1
 
+If title is provided it's used as a plot title; if it starts + the usual title is prepended
+
+If non-None, [xy]{min,max} are used to set the plot limits
+    """
+    fig = getMpFigure(fig)
+
+    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
+
+    try:
+        data.cat
+    except AttributeError:
+        raise RuntimeError("Please call da.getMagsByVisit, then try again")
+
+    if "d" in SG.lower() or "e" in SG.lower():           # split by deV/exp?
+        SG += "g"
+
+    bad = reduce(lambda x, y: np.logical_or(x, data.cat.get(y)),
+                 ["flags.pixel.edge",
+                  #"flags.pixel.interpolated.center",
+                  "flags.pixel.saturated.center",],
+                 False)
+    good = np.logical_not(bad)
+
+    if parents:
+        good = np.logical_and(good, data.cat.get("parent") == 0)
+    else:
+        good = np.logical_and(good, data.cat.get("deblend.nchild") == 0)
+
+    mag1 = data.getMagsByType(magType1, good)
+    radii = data.cat.get("flux.kron.radius")[good]
+    fracDeV = data.cat.get("multishapelet.combo.components")[good][:, 0]
+    deV = fracDeV > criticalFracDeV
+
+    stellar = data.cat.get("stellar")[good]
+    nonStellar = np.logical_not(stellar)
+    ids = data.cat.get("id")[good]
+
+    plotKW = dict(markersize=markersize, markeredgewidth=0, zorder=1)
+    if "g" in SG.lower():
+        if "d" in SG.lower() or "e" in SG.lower():           # split by deV/exp
+            plotKW["alpha"] = 0.5
+            if "d" in SG.lower():
+                tmp = np.logical_and(deV, nonStellar)
+                axes.plot(mag1[tmp], radii[tmp], "o", color="red", **plotKW)
+            if "e" in SG.lower():
+                tmp = np.logical_and(np.logical_not(deV), nonStellar)
+                axes.plot(mag1[tmp], radii[tmp], "o", color="blue", **plotKW)
+        else:
+            axes.plot(mag1[nonStellar], radii[nonStellar], "o", color=color, **plotKW)
+    if "s" in SG.lower():
+        axes.plot(mag1[stellar], radii[stellar], "o", markersize=markersize, markeredgewidth=0,
+                  color=color2, zorder=1)
+
+    axes.set_xlim(14 if xmin is None else xmin, 26 if xmax is None else xmax)
+    axes.set_ylim(-0.1 if ymin is None else ymin, 1.1 if ymax is None else ymax)
+    axes.set_xlabel(magType1)
+    axes.set_ylabel("$R_{%s}$" % (magType1.title()))
+    axes.set_title(re.sub(r"^\+\s*", data.name + " ", title))
+    #
+    # Make "i" print the object's ID, p pan ds9, etc.
+    #
+    did = butler.mapperInfo.splitId(ids[0], asDict=True); del did["objId"]
+    md = data.getDataset("calexp_md", did)[0]
+
+    global eventHandlers
+    flags = {}
+    if False:
+        for k, v in data.flags.items():
+            flags[k] = data.flags[k][good] # needs to be converted to use data.cat
+    x = data.cat.getX()[good] + md.get("LTV1")
+    y = data.cat.getY()[good] + md.get("LTV2")
+    ids = data.cat.get("id")[good]
+    eventHandlers[fig] = EventHandler(axes, mag1, radii, ids, x, y, flags, frames=frames)
+
+    fig.show()
+
+    return fig
+
+#-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+def makeSelectCcd(ccd):
     def selectCcd(id):
         matches = butler.mapperInfo.splitId(id, asDict=True)["ccd"] in ccds
         return matches if include else not matches
@@ -3087,6 +3172,40 @@ def getMissed(data, dataId):
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
+def drawKron(s, xy0=(0, 0), **kwargs):
+    x, y = s.getCentroid()
+    x -= xy0[0]; y -= xy0[1]
+
+    if s.get("flux.kron.flags"): # failed; draw an \odot
+        kw = kwargs.copy()
+        kw["size"] = 5; kw["ctype"] = ds9.GREEN
+        ds9.dot('x', x, y, **kw)
+        ds9.dot('o', x, y, **kw)
+        return
+
+    shape = s.getShape()
+    R_K = s.get("flux.kron.radius")
+    if False:
+        if math.isnan(R_K):
+            import pdb; pdb.set_trace() 
+        assert not math.isnan(R_K)
+
+    nRadiusForFlux = 2.5
+    rDet = shape.getDeterminantRadius()
+    for r, ct in [(R_K, ds9.BLUE), (R_K*nRadiusForFlux, ds9.MAGENTA),
+                  (s.get("flux.kron.radiusForRadius"), ds9.GREEN)]:
+        shape = shape.clone()
+        shape.scale(r/shape.getDeterminantRadius())
+
+        try:
+            ds9.dot(shape, x, y, ctype=ct, silent=True, **kwargs) # requires a ds9.py >= 2013-01-15
+        except:
+            pass
+
+def kronEventCallback(key, source, im, frame):
+    """Callback for event handlers; e.g. utils.EventHandler.callbacks['d'] = kronEventCallback"""
+    drawKron(source, im.getXY0(), frame=frame)
+
 def showSourceSet(sourceSet, exp=None, wcs=None, xy0=None, raDec=None, magmin=None, magmax=None, magType="psf",
                   nSource=-1, SG=False, deblend=True, obeyXY0=True,
                   mask=None, symb="+", **kwargs):
@@ -3187,7 +3306,13 @@ def showSourceSet(sourceSet, exp=None, wcs=None, xy0=None, raDec=None, magmin=No
                     kwargs["ctype"] = ds9.RED if s.get("parent") == 0 else ds9.MAGENTA                    
 
             elif symb == "@":
-                _symb = "@:%g,%g,%g" % (s.getIxx(), s.getIxy(), s.getIyy())                
+                _symb = s.getShape()    # requires a ds9.py >= 2013-01-15
+            elif symb.lower() == "kron":
+                if not deblend and s.get("deblend.nchild") > 0:
+                    continue
+
+                drawKron(s, xy0=(x0, y0) if obeyXY0 else (0, 0), **kwargs)
+                continue
             elif deblend:
                 kwargs["ctype"] = ds9.RED if s.get("parent") == 0 else ds9.MAGENTA
 
@@ -3673,6 +3798,8 @@ def getFlux(s, magType="psf"):
         return s.getApFlux()
     elif magType == "inst":
         return s.getInstFlux()
+    elif magType == "kron":
+        return s.get("flux.kron")
     elif magType == "model":
         return s.getModelFlux()
     elif magType == "psf":
