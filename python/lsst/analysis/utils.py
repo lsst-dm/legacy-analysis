@@ -1557,8 +1557,12 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
     for x in magTypes:
         magKey =     scm.getOutputSchema().find("%sMag"     % x).getKey()
         magErrKey =  scm.getOutputSchema().find("%sMagErr"  % x).getKey()
-        fluxKey =    tab.__getattribute__("get%sFluxKey"    % x.title())()
-        fluxErrKey = tab.__getattribute__("get%sFluxErrKey" % x.title())()
+        try:
+            fluxKey =    tab.__getattribute__("get%sFluxKey"    % x.title())()
+            fluxErrKey = tab.__getattribute__("get%sFluxErrKey" % x.title())()
+        except AttributeError:          # not available as a slot
+            fluxKey = tab.getSchema().find("flux.%s" % x).getKey()
+            fluxErrKey = tab.getSchema().find("flux.%s.err" % x).getKey()
 
         fluxMagKeys[x] = (fluxKey, fluxErrKey, magKey, magErrKey)
 
