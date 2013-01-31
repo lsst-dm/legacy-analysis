@@ -1491,7 +1491,10 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
                   "flags.pixel.saturated.any",
                   "flags.pixel.saturated.center",
                   ]:
-            scm.addMapping(sch.find(f).getKey())
+            try:
+                scm.addMapping(sch.find(f).getKey())
+            except KeyError, e:
+                print >> sys.stderr, e
         for key in [tab.getCentroidKey(), tab.getCentroidErrKey(), tab.getCentroidFlagKey(),
                     tab.getShapeKey(),
                     ]:
@@ -1819,7 +1822,12 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     plotKW = dict(markersize=markersize, markeredgewidth=0, zorder=1)
     if "g" in SG.lower():
         if "d" in SG.lower() or "e" in SG.lower():           # split by deV/exp
-            fracDeV = data.cat.get("multishapelet.combo.components")[good][:, 0]
+            try:
+                fracDeV = data.cat.get("multishapelet.combo.components")[good][:, 0]
+            except KeyError:
+                print >> sys.stderr, "No frac_deV is available"
+                fracDeV = np.ones_like(nonStellar)
+                
             deV = fracDeV > criticalFracDeV # it's a deV
 
             plotKW["alpha"] = 0.5
