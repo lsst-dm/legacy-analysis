@@ -1498,7 +1498,11 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
         for key in [tab.getCentroidKey(), tab.getCentroidErrKey(), tab.getCentroidFlagKey(),
                     tab.getShapeKey(),
                     ]:
-            scm.addMapping(key)
+            try:
+                scm.addMapping(key)
+            except Exception, e:
+                #print >> sys.stderr, e
+                pass
 
         definePhotoSlots = not False            # add standard photometric slots?
         if definePhotoSlots:
@@ -1521,7 +1525,10 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
         cat = afwTable.SourceCatalog(scm.getOutputSchema())
         table = cat.table
 
-        table.defineCentroid(tab.getCentroidDefinition())
+        try:
+            table.defineCentroid(tab.getCentroidDefinition())
+        except:
+            pass                        # there may not be a centroid slot defined
 
         if definePhotoSlots:
             #
@@ -1561,8 +1568,12 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
             fluxKey =    tab.__getattribute__("get%sFluxKey"    % x.title())()
             fluxErrKey = tab.__getattribute__("get%sFluxErrKey" % x.title())()
         except AttributeError:          # not available as a slot
-            fluxKey = tab.getSchema().find("flux.%s" % x).getKey()
-            fluxErrKey = tab.getSchema().find("flux.%s.err" % x).getKey()
+            try:
+                fluxKey = tab.getSchema().find("flux.%s" % x).getKey()
+                fluxErrKey = tab.getSchema().find("flux.%s.err" % x).getKey()
+            except KeyError, e:
+                if catInfo is None:     # we're reading the first CCD
+                    print >> sys.stderr, e                
 
         fluxMagKeys[x] = (fluxKey, fluxErrKey, magKey, magErrKey)
 
@@ -1900,8 +1911,15 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     if False:
         for k, v in data.flags.items():
             flags[k] = data.flags[k][good] # needs to be converted to use data.cat
-    x = data.cat.getX()[good] + md.get("LTV1")
-    y = data.cat.getY()[good] + md.get("LTV2")
+    try:
+        x = data.cat.getX()[good] + md.get("LTV1")
+        y = data.cat.getY()[good] + md.get("LTV2")
+    except pexExcept.LsstCppException, e:
+        if not re.search(r"pex::exceptions::LogicErrorException", e.message.getType()):
+            raise e
+        x = np.zeros_like(mag1)
+        y = np.zeros_like(mag1)
+        
     ids = data.cat.get("id")[good]
     eventHandlers[fig] = EventHandler(axes, mag1, delta, ids, x, y, flags, frames=frames, wcss=wcss)
 
