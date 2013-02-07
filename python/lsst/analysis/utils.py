@@ -44,6 +44,15 @@ except ImportError:
     class LsstSimMapper(object): pass
 
 try:
+    from lsst.obs.hscSim.hscSimMapper import HscSimMapper
+    HscMapper = HscSimMapper
+    _raw_ = "raw"
+    _visit_ = "visit"
+except ImportError:
+    class HscMapper(object): pass
+    class HscSimMapper(object): pass
+
+try:
     from lsst.obs.suprimecam.suprimecamMapper import SuprimecamMapper
     from lsst.obs.suprimecam.suprimecamMapper import SuprimecamMapperMit
     _raw_ = "raw"
@@ -406,6 +415,127 @@ def makeMapperInfo(mapper):
                 return dict(visit=visit, raft=raft, sensor=sensor, objId=objId)
             else:
                 return visit, raft, sensor, objId
+
+    #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+    class HscMapperInfo(MapperInfo):
+        def __init__(self, Mapper):
+            HscMapperInfo.Mapper = Mapper
+
+        @staticmethod
+        def getFields(dataType):
+            fields = ["visit", "filter", "ccd",]
+
+            return fields
+
+        @staticmethod
+        def getTrimmableData():
+            """Return a list of data products that needs to be trimmed"""
+            return ("raw", "flat", "bias", "dark",)
+
+        @staticmethod
+        def dataIdToTitle(dataIds):
+            filters = set()
+            sensors = set()
+            rafts = set()
+            visits = set()
+            for dataId in dataIds:
+                if dataId.get("sensor") == None:
+                    did = dataId.copy(); did["sensor"] = 0
+                    try:
+                        filters.add(afwImage.Filter(butler.get(dtName("calexp", True), **did)).getName())
+                    except:
+                        filters.add("?")
+                    sensors.add("all")
+                else:
+                    try:
+                        filters.add(afwImage.Filter(butler.get(dtName("calexp", True), **dataId)).getName())
+                    except:
+                        filters.add("?")
+
+                    try:
+                        sensors.add(dataId["sensor"])
+                    except TypeError:
+                        for c in dataId["sensor"]:
+                            sensors.add(c)
+
+                if dataId.get("raft") == None:
+                    did = dataId.copy(); did["raft"] = 0
+                    try:
+                        filters.add(afwImage.Filter(butler.get(dtName("calexp", True), **did)).getName())
+                    except:
+                        filters.add("?")
+                    rafts.add("all")
+                else:
+                    try:
+                        filters.add(afwImage.Filter(butler.get(dtName("calexp", True), **dataId)).getName())
+                    except:
+                        filters.add("?")
+
+                    try:
+                        rafts.add(dataId["raft"])
+                    except TypeError:
+                        for c in dataId["raft"]:
+                            rafts.add(c)
+
+                try:
+                    visits.add(dataId["visit"])
+                except TypeError:
+                    for v in dataId["visit"]:
+                        visits.add(v)
+
+            sensors = sorted(list(sensors))
+            rafts = sorted(list(rafts))
+            visits = sorted(list(visits))
+            filters = sorted(list(filters))
+
+            if len(visits) > 1 and len(filters) > 1:
+                print >> sys.stderr, \
+                      "I don't know how to make a title out of multiple visits and filters: %s %s" % \
+                      (visits, filters)
+                visits = visits[0:1]
+
+            title = "%s R%s S%s [%s]" % (getNameOfSet(visits),
+                                         getNameOfSRSet(rafts, 5, ['0,0', '4,0', '0,4', '4,4']),
+                                         getNameOfSRSet(sensors, 3), ", ".join(filters))
+            if rerunName:
+                title += " %s" % rerunName
+
+            return title
+
+        @staticmethod
+        def exposureToStr(exposure):
+            ccdId = cameraGeom.cast_Ccd(exposure.getDetector()).getId().getName()
+            visit = exposure.getMetadata().get("OBSID")
+
+            return "%s %s" % (visit, ccdId)
+
+        assembleCcd = staticmethod(assembleCcdLsst)
+
+        @staticmethod
+        def getInButler(dataRoot, registry, butler=None):
+            inputRoot = os.path.join(os.path.split(dataRoot)[0], "input")
+            return dafPersist.ButlerFactory(mapper=HscMapperInfo.Mapper(root=inputRoot,
+                                                                            registry=registry)).create()
+
+        @staticmethod
+        def splitId(oid, asDict=False):
+            """Split an ObjectId into visit, raft, sensor, and objId"""
+            objId = int((oid & 0xffff) - 1)     # Should be the same value as was set by apps code
+            oid >>= 16
+            raftSensorId = oid & 0x1ff
+            oid >>= 9
+            visit = int(oid)
+
+            raftId, sensorId = int(raftSensorId//10), int(raftSensorId%10)
+            raft = "%d,%d" % (raftId//5, raftId%5)
+            sensor = "%d,%d" % (sensorId//3, sensorId%3)
+
+            if asDict:
+                return dict(visit=visit, raft=raft, sensor=sensor, objId=objId)
+            else:
+                return visit, raft, sensor, objId
+
 
     #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
@@ -784,6 +914,8 @@ def makeMapperInfo(mapper):
         return SubaruMapperInfo(SuprimecamMapper)
     elif isinstance(butler.mapper, SuprimecamMapperMit):
         return SubaruMapperInfoMit(SuprimecamMapperMit)
+    elif isinstance(butler.mapper, (HscSimMapper, HscMapper,)):
+        return HscMapperInfo(HscSimMapper)
     else:
         raise RuntimeError("Impossible mapper")
 
