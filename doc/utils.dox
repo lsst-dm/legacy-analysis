@@ -46,5 +46,14 @@ utils.plotCalibration(d)
 \endcode
 
  */
+ /*
+\subsection The class Data
+\code
+import lsst.analysis.utils as utils
+
+da=utils.Data(os.environ["SUPRIME_DATA_DIR"], "rhl/abell781_1")
+da.getMagsByVisit(dict(visit=902070, ccd=49))
+fig=utils.plotDmag(da, fig=None)
+\endcode
 }}
 
