@@ -65,8 +65,12 @@ try:
     from lsst.obs.sdss.sdssMapper import SdssMapper
     _raw_ = "fpC"
     _visit_ = "run"
-except ImportError:
-    class SdssMapper(object): pass
+except Exception, e:
+    try:
+        SdssMapper
+    except NameError:
+        print >> sys.stderr, "Importing SdssMapper:", e
+        class SdssMapper(object): pass
 
 try:
     import lsst.ip.isr as ipIsr
