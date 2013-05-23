@@ -1455,6 +1455,7 @@ def _setFlagsFromSource(ssc=None):
     dictionary of the Source fields used"""
     
     names = dict(
+        BAD =           "flags.pixel.bad",
         EDGE =          "flags.pixel.edge",
         INTERP =        "flags.pixel.interpolated.any",
         INTERP_CENTER = "flags.pixel.interpolated.center",
@@ -1804,6 +1805,7 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
 
     bad = reduce(lambda x, y: np.logical_or(x, data.cat.get(y)),
                  ["flags.pixel.edge",
+                  "flags.pixel.bad",
                   #"flags.pixel.interpolated.center",
                   "flags.pixel.saturated.center",],
                  False)
@@ -1969,6 +1971,7 @@ If non-None, [xy]{min,max} are used to set the plot limits
 
     bad = reduce(lambda x, y: np.logical_or(x, data.cat.get(y)),
                  ["flags.pixel.edge",
+                  "flags.pixel.bad",
                   #"flags.pixel.interpolated.center",
                   "flags.pixel.saturated.center",],
                  False)
@@ -2049,6 +2052,7 @@ If non-None, [xy]{min,max} are used to set the plot limits
 
     bad = reduce(lambda x, y: np.logical_or(x, data.cat.get(y)),
                  ["flags.pixel.edge",
+                  "flags.pixel.bad",
                   #"flags.pixel.interpolated.center",
                   "flags.pixel.saturated.center",],
                  False)
@@ -2191,6 +2195,7 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     for i in range(2):
         suffix = "_%d" % (i + 1)
         for name in ["flags.pixel.edge",
+                     "flags.pixel.bad",
                      #"flags.pixel.interpolated.center",
                      "flags.pixel.saturated.center",]:
             _flg = matched.cat.get(name + suffix)
@@ -2367,7 +2372,7 @@ dataKeys, then its values will be used to index data; if it's None then sorted(d
 
 If selectObjId is provided, it's a function that returns True or False for each object. E.g.
     sel = makeSelectCcd(ccd=2)
-    plotCM(..., selectObjId=makeSelectCcd(2), ...)
+    plotCC(..., selectObjId=makeSelectCcd(2), ...)
 the ids are taken from the idN'th dataset (e.g. 2 to use data[2].id); per ccd/visit labels come from idColorN.
 
 If title is provided it's used as a plot title; if it starts + the usual title is prepended and if it's
@@ -2451,6 +2456,7 @@ def _plotCCImpl(data, dataKeys, magType, SG, magmax=None, magmin=None, fig=None,
     good = None
     for suffix in suffixes.values():
         for name in ["flags.pixel.edge",
+                     "flags.pixel.bad",
                      #"flags.pixel.interpolated.center",
                      "flags.pixel.saturated.center",]:
             _flg = np.logical_not(matched.cat.get(name + suffix))
@@ -2790,6 +2796,7 @@ def plotDmagHistograms(data, magType1="model", magType2="psf",
 
     bad = reduce(lambda x, y: np.logical_or(x, data.cat.get(y)),
                  ["flags.pixel.edge",
+                  "flags.pixel.bad",
                   #"flags.pixel.interpolated.center",
                   "flags.pixel.saturated.center",],
                  False)
