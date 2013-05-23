@@ -227,7 +227,7 @@ def getNameOfSet(vals):
     if not vals:
         return ""
 
-    def addPairToName(valName, val0, val1):
+    def addPairToName(valName, val0, val1, stride=1):
         """Add a pair of values, val0 and val1, to the valName list"""
         if isinstance(val0, str) and isinstance(val1, str):
             if val0 != val1:
@@ -237,18 +237,38 @@ def getNameOfSet(vals):
         else:
             sval0 = str(val0)
             sval1 = str(val1)
-        valName.append("%s-%s" % (sval0, sval1) if sval1 != sval0 else str(val0))
+        if sval1 == sval0:
+            dvn = str(val0)
+        else:
+            dvn = "%s-%s" % (sval0, sval1)
+            if stride > 1:
+                dvn += ":%d" % stride
+        valName.append(dvn)
+    #
+    # Find the minimum spacing between values and interpret it as a stride
+    #
+    if len(vals) <= 1 or not isinstance(vals[0], int):
+        stride = 1
+    else:
+        stride = vals[1] - vals[0]
+        oval = vals[1]
+    for val in vals[2:]:
+        if val - oval < stride:
+            stride = val - oval
+        if stride == 1:
+            break
+        oval = val
 
     valName = []
     val0 = vals[0]; val1 = val0
     for val in vals[1:]:
-        if isinstance(val, int) and val == val1 + 1:
+        if isinstance(val, int) and val == val1 + stride:
             val1 = val
         else:
-            addPairToName(valName, val0, val1)
+            addPairToName(valName, val0, val1, stride=stride)
             val0 = val; val1 = val0
 
-    addPairToName(valName, val0, val1)
+    addPairToName(valName, val0, val1, stride)
 
     return ", ".join(valName)
 
