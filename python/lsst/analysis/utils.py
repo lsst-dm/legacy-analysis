@@ -276,6 +276,13 @@ def getNameOfSRSet(sr, n, omit=[]):
 
     return ", ".join(name)
 
+def idsToDataIds(data, ids):
+    """Convert an array of 64-bit IDs to a list of dataIds
+    (e.g. [{'ccd': 43, 'visit': 902040}, {'ccd': 1, 'visit': 902040}, ...])
+    """
+    idDict = data.mapperInfo.splitId(ids, True); del(idDict["objId"])
+    return map(dict, set(zip(*[zip(len(v)*[k], v) for k, v in idDict.items()])))
+
 def makeMapperInfo(butler):
     """Return an object with extra per-mapper information (e.g. which fields fully specify an exposure)"""
 
@@ -323,10 +330,15 @@ def makeMapperInfo(butler):
             rafts = set()
             visits = set()
             for dataId in dataIds:
+                dataId = dataId.copy()
+                for k, v in dataId.items():
+                    if isinstance(v, np.int32):
+                        dataId[k] = int(v)
+
                 if dataId.get("sensor") == None:
-                    did = dataId.copy(); did["sensor"] = 0
+                    dataId["sensor"] = 0
                     try:
-                        filters.add(afwImage.Filter(butler.get(dtName("calexp", True), **did)).getName())
+                        filters.add(afwImage.Filter(butler.get(dtName("calexp", True), **dataId)).getName())
                     except:
                         filters.add("?")
                     sensors.add("all")
@@ -538,10 +550,15 @@ def makeMapperInfo(butler):
             camcols = set()
             fields = set()
             for dataId in dataIds:
+                dataId = dataId.copy()
+                for k, v in dataId.items():
+                    if isinstance(v, np.int32):
+                        dataId[k] = int(v)
+
                 if dataId.get("camcol") == None:
-                    did = dataId.copy(); did["camcol"] = 0
+                    dataId["camcol"] = 0
                     try:
-                        filters.add(afwImage.Filter(butler.get(dtName("calexp", True), **did)).getName())
+                        filters.add(afwImage.Filter(butler.get(dtName("calexp", True), **dataId)).getName())
                     except:
                         filters.add(dataId.get("filter", "?"))
                     if _prefix_ in ("", "forced"):
@@ -672,10 +689,15 @@ def makeMapperInfo(butler):
             ccds = set()
             visits = set()
             for dataId in dataIds:
+                dataId = dataId.copy()
+                for k, v in dataId.items():
+                    if isinstance(v, np.int32):
+                        dataId[k] = int(v)
+
                 if dataId.get("ccd") == None:
-                    did = dataId.copy(); did["ccd"] = 0
+                    dataId["ccd"] = 0
                     try:
-                        filters.add(afwImage.Filter(butler.get(dtName("calexp", True), **did)).getName())
+                        filters.add(afwImage.Filter(butler.get(dtName("calexp", True), **dataId)).getName())
                     except:
                         filters.add(dataId.get("filter", "?"))
                     ccds.add("(all)")
@@ -1778,7 +1800,7 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     try:
         data.cat
     except AttributeError:
-        raise RuntimeError("Please call da.getMagsByVisit, then try again")
+        raise RuntimeError("Please call data.getMagsByVisit, then try again")
 
     bad = reduce(lambda x, y: np.logical_or(x, data.cat.get(y)),
                  ["flags.pixel.edge",
@@ -1793,11 +1815,7 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
         good = np.logical_and(good, data.cat.get("deblend.nchild") == 0)
 
     if selectObjId:
-        ids = data.cat.get("id")
-        for i, _id in enumerate(ids):
-            if not selectObjId(_id):
-                good[i] = False
-        del ids
+        good = np.logical_and(good, selectObjId(data, data.cat.get("id")))
 
     mag1 = data.getMagsByType(magType1, good)
     mag2 = data.getMagsByType(magType2, good)
@@ -1885,7 +1903,9 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     axes.set_ylim(meanDelta + (0.2 if ymin is None else ymin), meanDelta + (- 0.8 if ymax is None else ymax))
     axes.set_xlabel(magType1)
     axes.set_ylabel("%s - %s" % (magType1, magType2))
-    axes.set_title(re.sub(r"^\+\s*", data.name + " ", title))
+
+    name = data.name if selectObjId is None else data.mapperInfo.dataIdToTitle(idsToDataIds(data, ids))
+    axes.set_title(re.sub(r"^\+\s*", name + " ", title))
 
     if mean is not None:
         fig.text(0.20, 0.85, r"$%.3f \pm %.3f$" % (mean, stdev), fontsize="larger")
@@ -2091,9 +2111,19 @@ If non-None, [xy]{min,max} are used to set the plot limits
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-def makeSelectCcd(ccd):
-    def selectCcd(id):
-        matches = data.mapperInfo.splitId(id, asDict=True)["ccd"] in ccds
+def makeSelectCcd(ccds, include=True):
+    def selectCcd(data, id, ccds=ccds, include=include):
+        try:
+            ccds[0]
+        except TypeError:
+            ccds = [ccds]
+
+        if ccds[0] is None:
+            return True
+
+        ccd = data.mapperInfo.splitId(id, asDict=True)["ccd"]
+        matches = reduce(lambda m, c: np.logical_or(m, ccd == c), ccds, False)
+
         return matches if include else not matches
 
     return selectCcd
@@ -2109,10 +2139,15 @@ def makeSelectVisit(visits, ccds=None, include=True):
     else:
         selectCcd = makeSelectCcd(ccds)
 
-    def selectVisit(id):
-        matches = data.mapperInfo.splitId(id, asDict=True)["visit"] in visits
+    def selectVisit(data, id, visits=visits, include=include):
+        if visits[0] is None:
+            return True
+
+        visit = data.mapperInfo.splitId(id, asDict=True)["visit"]
+        matches = reduce(lambda m, v: np.logical_or(m, visit == v), visits, False)
+
         if selectCcd:
-            matches = matches and selectCcd(id)
+            matches = np.logical_and(matches, selectCcd(data, id))
 
         return matches if include else not matches
 
@@ -2168,9 +2203,7 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
 
     ids = matched.cat.get("id")
     if selectObjId:
-        for i, _id in enumerate(ids):
-            if not selectObjId(_id):
-                good[i] = False
+        good = np.logical_and(good, selectObjId(data, ids))
 
     ids = ids[good]
     xc = matched.cat.get("centroid.sdss_1.x")[good]
@@ -2212,7 +2245,9 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     axes.set_ylabel("%s$_{%s}$" % (filter1, magType))
 
     title += " %d objects" % nobj
-    axes.set_title(re.sub(r"^\+\s*", data1.name + " ", title))
+    name = data1.name if selectObjId is None else data1.mapperInfo.dataIdToTitle(idsToDataIds(data, ids))
+
+    axes.set_title(re.sub(r"^\+\s*", name + " ", title))
     #
     # Make "i" print the object's ID, p pan ds9, etc.
     #
@@ -2428,11 +2463,7 @@ def _plotCCImpl(data, dataKeys, magType, SG, magmax=None, magmin=None, fig=None,
     good = np.logical_and(good, matched.cat.get("parent") == 0)
 
     if selectObjId:
-        canonicalIds = matched.cat.get("id%s" % suffixes[idN])
-        for i, _id in enumerate(canonicalIds):
-            if not selectObjId(_id):
-                good[i] = False
-        del canonicalIds
+        good = np.logical_and(good, selectObjId(data, matched.cat.get("id%s" % suffixes[idN])))
         
     centroidStr = "centroid.sdss%s" % suffixes[idN]
     xc = matched.cat.get("%s.x" % centroidStr)[good]
