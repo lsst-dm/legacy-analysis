@@ -1851,6 +1851,7 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
         SG += "g"
 
     plotKW = dict(markersize=markersize, markeredgewidth=0, zorder=1)
+    nobj = 0
     if "g" in SG.lower():
         if "d" in SG.lower() or "e" in SG.lower():           # split by deV/exp
             try:
@@ -1864,13 +1865,17 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
             plotKW["alpha"] = 0.5
             if "d" in SG.lower():
                 tmp = np.logical_and(deV, nonStellar)
+                nobj += tmp.sum()
                 axes.plot(mag1[tmp], delta[tmp], "o", color="red", **plotKW)
             if "e" in SG.lower():
                 tmp = np.logical_and(np.logical_not(deV), nonStellar)
+                nobj += tmp.sum()
                 axes.plot(mag1[tmp], delta[tmp], "o", color="blue", **plotKW)
         else:
+            nobj += nonStellar.sum()
             axes.plot(mag1[nonStellar], delta[nonStellar], "o", color=color, **plotKW)
     if "s" in SG.lower():
+        nobj += stellar.sum()
         axes.plot(mag1[stellar], delta[stellar], "o", markersize=markersize, markeredgewidth=0,
                   color=color2, zorder=1)
 
@@ -1906,6 +1911,7 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     axes.set_xlabel(magType1)
     axes.set_ylabel("%s - %s" % (magType1, magType2))
 
+    title += " %d objects" % nobj
     name = data.name if selectObjId is None else data.mapperInfo.dataIdToTitle(idsToDataIds(data, ids))
     axes.set_title(re.sub(r"^\+\s*", name + " ", title))
 
