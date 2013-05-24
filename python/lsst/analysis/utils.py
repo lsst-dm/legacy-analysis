@@ -995,7 +995,7 @@ class Data(object):
         self.dataId = []
         self.matches = None
 
-        self.matched = None
+        self.matchedCalibs = None
         self.ZP0 = 31
         self.zp = None
 
@@ -1300,13 +1300,13 @@ ccd may be a list"""
         if verbose:
             print
 
-        self.matched = sum([len(m) for m in _matched])*[None]
-        self.zp = np.empty(len(self.matched))
+        self.matchedCalibs = sum([len(m) for m in _matched])*[None]
+        self.zp = np.empty(len(self.matchedCalibs))
 
         start = 0
         for i, m in enumerate(_matched):
             end = start + len(m)
-            self.matched[start:end] = m
+            self.matchedCalibs[start:end] = m
             self.zp[start:end] = _zp[i]*np.ones(end - start)
             start = end
 
@@ -3015,7 +3015,8 @@ def getCanonicalFilterName(filterName):
 
     return filterName
 
-def plotCalibration(data, plotBand=0.05, magType='psf', magmin=14, maglim=20, cursor=False,
+def plotCalibration(data, plotBand=0.05, magType='psf', magmin=14, maglim=20, eventHandler=False,
+                    selectObjId=None, showCamera=False, correctRadial=False, plotRadial=False,
                     xmin=None, xmax=None, ymin=None, ymax=None,
                     markersize=2, alpha=1.0, title="+", showMedians=False,
                     frame=None, ctype=None, ds9Size=None, fig=None):
@@ -3023,21 +3024,32 @@ def plotCalibration(data, plotBand=0.05, magType='psf', magmin=14, maglim=20, cu
 
 The Data must have been initialised with a call to the getCalibObjects method
 
+If selectObjId is provided, it's a function that returns True or False for each object. E.g.
+    plotCalibration(..., selectObjId=makeSelectCcd(2), ...)
+
 Use the matplotlib Figure object fig; if none is provided it'll be created and saved in data (and if it's true, a new one will be created)
+
+if eventHandler is true, make the points in the plot live
     
 If plotBand is provided, draw lines at +- plotBand
 
 If title is provided it's used as a plot title; if it starts + the usual title is prepended
 """
-    if not data.matched:
+    if not data.matchedCalibs:
         raise RuntimeError("You need to call the Data.getCalibObjects method before calling this routine")
 
     fig = getMpFigure(fig)
 
     mstars, zp = [], []
-    for m, z in zip(data.matched, data.zp):
-        # m[0] == catalogue, m[1] == source
-        if m[0].get("stargal") and not m[1].get("flags.pixel.saturated.center"):
+    for m, z in zip(data.matchedCalibs, data.zp):
+        catobj, source = m[0], m[1]               # m[0] == catalogue, m[1] == source
+
+        if selectObjId:
+            sid = source.getId()
+            if not selectObjId(data, sid):
+                continue
+
+        if catobj.get("stargal") and not source.get("flags.pixel.saturated.center"):
             mstars.append(m)
             zp.append(z)
 
@@ -3061,24 +3073,36 @@ If title is provided it's used as a plot title; if it starts + the usual title i
     flux = [getFlux(s[1], magType) for s in mstars]
 
     instmag = zp - 2.5*np.log10(np.array(flux))
+
+    if showCamera or correctRadial or plotRadial: # we need to know the distance from the centre of the camera
+        cam = data.butler.get("camera")
+        x = np.empty(len(mstars)); y = np.empty_like(x)
+        for i, _id in enumerate(ids):
+            ccdId = data.mapperInfo.splitId(_id, True)["ccd"]
+            ccd = cameraGeomUtils.findCcd(cam, cameraGeom.Id(ccdId))
+            x[i], y[i] = ccd.getPositionFromPixel(mstars[i][1].getCentroid()).getMm()
+
+        x0, y0 = -2000, 0               # center of correction pattern
+        r = np.hypot(x - x0, y - y0)
+
+        if correctRadial:               # apply a radial correction
+            instmag += (-0.01 + 0.065*(r/15000)**2)
+            title += " (radial correction)"
+
     delta = refmag - instmag
 
-    if cursor:
-        x = np.empty(len(mstars))
-        y = np.empty_like(x)
+    if eventHandler:
+        xc = np.empty(len(mstars))
+        yc = np.empty_like(xc)
         flagNames, flags = _setFlagsFromSource(), {}
         for k in flagNames.keys():
-            flags[k] = np.empty_like(x)
+            flags[k] = np.empty_like(xc)
 
         for i, s in enumerate(mstars):
             src = s[1]
-            x[i], y[i] = src.getX(), src.getY()
+            xc[i], yc[i] = src.getCentroid()
             for k, n in flagNames.items():
                 flags[k][i] = src.get(n)
-
-        if False:
-            for i in range(len(ids)):
-                print "%d4 %.2f %.2f (%.2f, %.2f)" % (ids[i], refmag[i], delta[i], x[i], y[i])
 
     try:
         stats = afwMath.makeStatistics(delta[np.logical_and(refmag > magmin, refmag < maglim)],
@@ -3088,39 +3112,68 @@ If title is provided it's used as a plot title; if it starts + the usual title i
         print "Failed to estimate mean: %s" % e
         mean, stdev = float("NaN"), float("NaN")
         
-    axes.plot(refmag, delta, "k.", markersize=markersize, alpha=alpha, markeredgewidth=0)
+    if showCamera or plotRadial:
+        inRange = np.logical_and(refmag > magmin, refmag < maglim)
 
-    axes.plot((magmin, maglim, maglim, magmin, magmin), 100*np.array([-1, -1, 1, 1, -1]), "g:")
+        if plotRadial:
+            axes.plot(r[inRange], delta[inRange], "k.", markersize=markersize, alpha=alpha, markeredgewidth=0)
 
-    axes.plot((-100, 100), (0, 0), "g-")
-    if plotBand:
-        for i in (-plotBand, plotBand):
-            axes.plot((-100, 100), i*np.ones(2), "g--")
+            axes.set_ylim(-0.6 if ymin is None else ymin,
+                           0.6 if ymax is None else -ymin if ymax is None else ymax)
+            axes.axhline(0, linestyle=":", color="red")
+            axes.set_xlabel("Radius (mm)")
+            axes.set_ylabel("Reference - %s" % magType)
+        else:
+            sc = axes.scatter(x[inRange], y[inRange], c=delta[inRange], norm=pyplot.Normalize(ymin, ymax),
+                              cmap=pyplot.cm.rainbow, marker="o", s=10*markersize,
+                              edgecolors="none", alpha=alpha)
+            fig.colorbar(sc)
+            axes.set_aspect('equal')
+            
+            axes.set_xlabel("X (mm)")
+            axes.set_ylabel("Y (mm)")
+            
+            title += " %s" % magType
+    else:
+        axes.plot(refmag, delta, "k.", markersize=markersize, alpha=alpha, markeredgewidth=0)
 
-    axes.set_ylim(-0.6, 0.6)
-    axes.set_xlim(14   if xmin is None else xmin, 26  if xmax is None else xmax)
-    axes.set_ylim(-0.6 if ymin is None else ymin, 0.6 if ymax is None else -ymin if ymax is None else ymax)
-    axes.set_xlabel("Reference")
-    axes.set_ylabel("Reference - %s" % magType)
-    axes.set_title(re.sub(r"^\+\s*", data.name + " ", title))
+        for m in (magmin, maglim,):
+            axes.axvline(m, color="blue", ls=":")
 
-    if showMedians:
-        binwidth = 1.0
-        bins = np.arange(int(min(refmag)), int(max(refmag)), binwidth)
-        vals = np.empty_like(bins)
-        for i in range(len(bins) - 1):
-            inBin = np.logical_and(refmag > bins[i], refmag <= bins[i] + binwidth)
-            vals[i] = np.median(delta[np.where(inBin)])
+        axes.axhline(mean, color="green", linestyle="-")
+        if plotBand:
+            for i in (-plotBand, plotBand):
+                axes.axhline(mean + i, color="green", linestyle="--")
 
-        axes.plot(bins + 0.5*binwidth, vals, linestyle="-", marker="o", color="cyan")
+        axes.set_xlim(magmin - 0.5 if xmin is None else xmin,
+                      26  if xmax is None else xmax)
+        axes.set_ylim(-0.6         if ymin is None else ymin,
+                      0.6 if ymax is None else -ymin if ymax is None else ymax)
+        axes.set_xlabel("Reference")
+        axes.set_ylabel("Reference - %s" % magType)
 
-    fig.text(0.75, 0.85, r"$%.3f \pm %.3f$" % (mean, stdev), fontsize="larger")
+        if showMedians:
+            binwidth = 1.0
+            bins = np.arange(int(min(refmag)), int(max(refmag)), binwidth)
+            vals = np.empty_like(bins)
+            for i in range(len(bins) - 1):
+                inBin = np.logical_and(refmag > bins[i], refmag <= bins[i] + binwidth)
+                vals[i] = np.median(delta[np.where(inBin)])
+
+            axes.plot(bins + 0.5*binwidth, vals, linestyle="-", marker="o", color="cyan")
+
+        fig.text(0.2, 0.85, r"$%.3f \pm %.3f$" % (mean, stdev), fontsize="larger")
+
+    name = data.name if selectObjId is None else data.mapperInfo.dataIdToTitle(idsToDataIds(data, ids))
+    axes.set_title(re.sub(r"^\+\s*", name + " ", title))
     #
     # Make "i" print the object's ID, p pan ds9, etc.
     #
-    if cursor:
+    if eventHandler:
         global eventHandlers
-        eventHandlers[fig] = EventHandler(data, axes, refmag, delta, ids, x, y, flags, [frame,])
+        eventHandlers[fig] = EventHandler(data, axes,
+                                          x if showCamera else refmag,
+                                          y if showCamera else delta, ids, xc, yc, flags, [frame,])
 
     fig.show()
 
@@ -3137,7 +3190,7 @@ Use the matplotlib Figure object fig; if none is provided it'll be created and s
     
 If plotBand is provided, draw lines at +- plotBand
     """
-    if not data.matched:
+    if not data.matchedCalibs:
         raise RuntimeError("You need to call the Data.getCalibObjects method before calling this routine")
 
     raise RuntimeError("Convert me")
@@ -3231,11 +3284,11 @@ def displayCalibration(data, frame=0):
     """display the calibration objects in Data object data on ds9
 Stars are green; galaxies are red based on our processing
     """
-    if not data.matched:
+    if not data.matchedCalibs:
         raise RuntimeError("You need to call the Data.getCalibObjects method before calling this routine")
 
     with ds9.Buffering():
-        for m in data.matched:
+        for m in data.matchedCalibs:
             ref, src = m[0], m[1]
             x1, y1 = src.getX(), src.getY()
             if ref.get("stargal"):      # a star in the reference catalogue
