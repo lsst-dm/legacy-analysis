@@ -993,6 +993,7 @@ class Data(object):
         self.setButler(*args, **kwargs)
 
         self.dataId = []
+        self.matches = None
 
         self.matched = None
         self.ZP0 = 31
@@ -2154,7 +2155,7 @@ def makeSelectCcd(ccds, include=True):
         ccd = data.mapperInfo.splitId(id, asDict=True)["ccd"]
         matches = reduce(lambda m, c: np.logical_or(m, ccd == c), ccds, False)
 
-        return matches if include else not matches
+        return matches if include else np.logical_not(matches)
 
     return selectCcd
 
@@ -2179,43 +2180,62 @@ def makeSelectVisit(visits, ccds=None, include=True):
         if selectCcd:
             matches = np.logical_and(matches, selectCcd(data, id))
 
-        return matches if include else not matches
+        return matches if include else np.logical_not(matches)
 
     return selectVisit
 
-def plotCM(data1, data2, magType="psf", maglim=20, magmin=14,
-           SG="sg", selectObjId=None, showMedians=False, sgVal=0.05, meanDelta=0.0, adjustMean=False,
+def plotCM(data, select1, select2, magType="psf", maglim=20, magmin=14,
+           SG="sg", showMedians=False,
            xmin=None, xmax=None, ymin=None, ymax=None,
-           title="+", markersize=1, color="red", alpha=1.0, frames=[0], fig=None):
-    """Plot (data1.magType - data2.magType) v. data1.magType mags (e.g. "psf")
+           title="+", markersize=1, color="red", alpha=1.0, frames=[0], verbose=False, fig=None):
+    """Plot (data[select1].magType - data[select2].magType) v. data1.magType mags (e.g. "psf")
+where data[selectN] means, "the objects in data for which selectN(ids) returns True".  E.g.
 
-The magnitude limit for the "locus" box used to calculate statistics is maglim, and only objects within
-+- sgLim of meanDelta are included in the locus (the axes are also adjusted to include meanDelta in the
-visible area).  If adjustMean is True, adjust all the CCDs being plotted to have the same mean within
-the "locus" area.
+    plotCM(data, makeSelectVisit(902030), makeSelectVisit(902032)...)
 
-If selectObjId is provided, it's a function that returns True or False for each object. E.g.
-    sel = makeSelectCcd(ccd=2)
-    plotCM(..., selectObjId=makeSelectCcd(2), ...)
+The magnitude limits for the box used to calculate statistics are magmin..maglim
 
 If title is provided it's used as a plot title; if it starts + the usual title is prepended
 
-If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are interpreted relative to meanDelta
+If non-None, [xy]{min,max} are used to set the plot limits
     """
+
+    try:
+        data.cat
+    except AttributeError:
+        raise RuntimeError("Please call data.getMagsByVisit, then try again")
+
     fig = getMpFigure(fig)
 
     axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
+    #
+    allIds = data.cat.get("id")
+    selections = {1: select1(data, allIds),
+                  2: select2(data, allIds)}
+    cats = dict([(k, data.cat[v]) for k,v in selections.items()])
+    #
+    # See if we've done this match before
+    #
+    if data.matches:
+        if set(selections.keys()) != set(data.matches[0].keys()):
+            data.matches = None
+        else:
+            dselections = data.matches[0]
+            for k in selections.keys():
+                if not (selections[k] == dselections[k]).all():
+                    data.matches = None
+                    break
 
-    data = {1 : data1, 2 : data2}
-    for i, d in data.items():
-        try:
-            d.cat
-        except AttributeError:
-            raise RuntimeError("Please call data%d.getMagsByVisit, then try again" % i)
-
-    matchRadius = 2                     # arcsec
-    mat = afwTable.matchRaDec(data[1].cat, data[2].cat, matchRadius*afwGeom.arcseconds)
-    matched = Data(cat=zipMatchList(mat))
+    if data.matches:
+        matched = data.matches[1]
+    else:
+        if verbose:
+            print "Matching selected sources"
+        matchRadius = 2                     # arcsec
+        mat = afwTable.matchRaDec(cats[1], cats[2], matchRadius*afwGeom.arcseconds)
+        matched = Data(cat=zipMatchList(mat))
+        
+        data.matches = selections, matched
 
     bad = None
     for i in range(2):
@@ -2231,19 +2251,20 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
                 bad = np.logical_or(bad, _flg)
 
     good = np.logical_not(bad)
+    stellar = matched.cat.get("stellar_1")
+    if SG.lower() == 's':
+        good = np.logical_and(good, stellar)
+    elif SG.lower() == 'g':
+        good = np.logical_and(good, np.logical_not(stellar))
 
-    ids = matched.cat.get("id")
-    if selectObjId:
-        good = np.logical_and(good, selectObjId(data, ids))
-
-    ids = ids[good]
+    ids = matched.cat.get("id")[good]
     xc = matched.cat.get("centroid.sdss_1.x")[good]
     yc = matched.cat.get("centroid.sdss_1.y")[good]
-    stellar = matched.cat.get("stellar_1")[good]
+    stellar = stellar[good]
 
     mag1 = matched.getMagsByType(magType, good, suffix="_1")
     mag2 = matched.getMagsByType(magType, good, suffix="_2")
-    delta = mag1 - mag2
+    delta = np.array(mag1 - mag2, dtype='float64') # float64 is needed by makeStatistics --- why?
 
     good = good[good]
 
@@ -2259,15 +2280,66 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     if "g" in SG.lower():
         nobj += np.sum(nonStellar)
         axes.plot(delta[nonStellar], mag1[nonStellar], "o",
-                  alpha=alpha["g"], markersize=markersize, markeredgewidth=0, color=color)
+                  alpha=alpha["g"], markersize=markersize, markeredgewidth=0, color=color, zorder=-1)
     if "s" in SG.lower():
         nobj += np.sum(stellar)
         axes.plot(delta[stellar], mag1[stellar], "o",
-                  alpha=alpha["s"], markersize=markersize, markeredgewidth=0, color=color2)
+                  alpha=alpha["s"], markersize=markersize, markeredgewidth=0, color=color2, zorder=-1)
 
-    #axes.plot((0, 30), (0, 0), "b-")
+    if showMedians:
+        binwidth = 0.5
+        bins = np.arange(np.floor(magmin), np.floor(np.nanmax(mag1)), binwidth)
+        vals = np.empty_like(bins)
+        err = np.empty_like(bins)
+        for i in range(len(bins) - 1):
+            inBin = np.logical_and(mag1 > bins[i], mag1 <= bins[i] + binwidth)
+            if SG.lower() == 's':
+                tmp = delta[np.where(np.logical_and(stellar, inBin))]
+            else:
+                tmp = delta[inBin]
+            tmp.sort()
 
-    filterNames = [None] + [data[i + 1].dataId[0]["filter"] for i in range(len(data.keys()))]
+            if len(tmp) == 0:
+                median, iqr = np.nan, np.nan
+            else:
+                median = tmp[int(0.5*len(tmp) + 0.5)] if len(tmp) > 1 else tmp[0]
+                iqr = (tmp[int(0.75*len(tmp) + 0.5)] - tmp[int(0.25*len(tmp) + 0.5)]) \
+                    if len(tmp) > 2 else np.nan
+
+            vals[i] = median
+            err[i] = 0.741*iqr
+
+        if True:
+            axes.errorbar(vals, bins + 0.5*binwidth, xerr=err, zorder=3,
+                          linestyle="-", marker="o", color="black")
+        else:
+            axes.plot(vals, bins + 0.5*binwidth, zorder=3, marker="o", color="black")
+            for pm in (-1, 1):
+                axes.plot(vals + pm*err, bins + 0.5*binwidth, zorder=3, linestyle="-", color="blue")
+
+        axes.axvline(0.0, color="blue", ls=":")
+
+        try:
+            inBin = np.logical_and(mag1 > magmin, mag1 <= maglim)
+            stats = afwMath.makeStatistics(delta[inBin], afwMath.STDEVCLIP | afwMath.MEANCLIP)
+            mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
+            print "%-5s %5.2f%% +- %5.2f%%" % (magType, 100*mean, 100*stdev)
+        except Exception, e:
+            print "Failed to estimate mean: %s" % e
+            mean, stdev = float("NaN"), float("NaN")
+
+        for m in (magmin, maglim,):
+            axes.axhline(m, color="black", ls=":")
+
+        fig.text(0.20, 0.85, r"$%.3f \pm %.3f$" % (mean, stdev), fontsize="larger")
+        
+    filterNames = [None]
+    for k in sorted(cats.keys()):
+        dataId = idsToDataIds(data, allIds[selections[k]][0:2])[0]
+        for k, v in dataId.items():
+            if isinstance(v, np.int32):
+                dataId[k] = int(v)
+        filterNames.append(afwImage.Filter(data.butler.get(dtName("calexp", True), **dataId)).getName())
     filter1, filter2 = filterNames[1], filterNames[2]
 
     axes.set_xlim(-1 if xmin is None else xmin, 2 if xmax is None else xmax)
@@ -2276,7 +2348,8 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     axes.set_ylabel("%s$_{%s}$" % (filter1, magType))
 
     title += " %d objects" % nobj
-    name = data1.name if selectObjId is None else data1.mapperInfo.dataIdToTitle(idsToDataIds(data, ids))
+    name = ", ".join([data.mapperInfo.dataIdToTitle(
+                idsToDataIds(data, allIds[selections[i]])) for i in (1, 2)])
 
     axes.set_title(re.sub(r"^\+\s*", name + " ", title))
     #
@@ -2289,7 +2362,7 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
             flags[k] = data.flags[k][good] # needs to be converted to use data.cat
 
     did = data.mapperInfo.splitId(ids[0], asDict=True); del did["objId"]
-    md = data[1].getDataset("calexp_md", did)[0]
+    md = data.getDataset("calexp_md", did)[0]
     xc = xc[good] + md.get("LTV1")
     yc = yc[good] + md.get("LTV2")
     ids = ids[good]
