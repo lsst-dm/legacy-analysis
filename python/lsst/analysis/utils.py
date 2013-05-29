@@ -1542,6 +1542,7 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
                   "flags.pixel.interpolated.center",
                   "flags.pixel.saturated.any",
                   "flags.pixel.saturated.center",
+                  "jacobian",
                   ]:
             try:
                 scm.addMapping(sch.find(f).getKey())
@@ -3017,6 +3018,7 @@ def getCanonicalFilterName(filterName):
 
 def plotCalibration(data, plotBand=0.05, magType='psf', magmin=14, maglim=20, eventHandler=False,
                     selectObjId=None, showCamera=False, correctRadial=False, plotRadial=False,
+                    correctJacobian=False,
                     xmin=None, xmax=None, ymin=None, ymax=None,
                     markersize=2, alpha=1.0, title="+", showMedians=False,
                     frame=None, ctype=None, ds9Size=None, fig=None):
@@ -3072,6 +3074,13 @@ If title is provided it's used as a plot title; if it starts + the usual title i
     ids = np.array([s[1].getId() for s in mstars])
     flux = [getFlux(s[1], magType) for s in mstars]
 
+    if correctJacobian:
+        sch = mstars[0][1].getSchema()
+        jacobianKey = sch.find("jacobian").getKey()
+        jacobian = np.array([s[1].get(jacobianKey) for s in mstars])
+        
+        flux *= jacobian
+
     instmag = zp - 2.5*np.log10(np.array(flux))
 
     if showCamera or correctRadial or plotRadial: # we need to know the distance from the centre of the camera
@@ -3086,7 +3095,10 @@ If title is provided it's used as a plot title; if it starts + the usual title i
         r = np.hypot(x - x0, y - y0)
 
         if correctRadial:               # apply a radial correction
-            instmag += (-0.01 + 0.065*(r/15000)**2)
+            if correctJacobian:
+                instmag += -0.040 + 0.176*(r/15000)**2
+            else:
+                instmag += -0.010 + 0.065*(r/15000)**2
             title += " (radial correction)"
 
     delta = refmag - instmag
