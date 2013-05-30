@@ -1310,6 +1310,8 @@ ccd may be a list"""
             self.zp[start:end] = _zp[i]*np.ones(end - start)
             start = end
 
+        self.matchedCalibs = zipMatchList(self.matchedCalibs, swap=True)
+
     def _getCalibObjectsImpl(self, dataId, displayType, frame, verbose, allSources=False):
         calexp_md = self.butler.get(dtName("calexp", True), **dataId)
         wcs = afwImage.makeWcs(calexp_md)
@@ -2979,20 +2981,13 @@ def plotDmagHistograms(data, magType1="model", magType2="psf",
 
     return fig
 
-def getRefmag(data, mstars, desiredBand):
-    """Get the reference magnitude from a set of match objects"""
-    
-    try:
-        mstars[0]
-    except TypeError:
-        mstars = [mstars,]
+def getRefmag(data, matchedCat, desiredBand, referenceSuffix=""):
+    """Get the reference magnitude from a catalog objects"""
 
-    refmag = np.empty(len(mstars))
+    if len(matchedCat) == 0:
+        return np.zeros(0)
 
-    if len(refmag) == 0:
-        return refmag
-
-    sch = mstars[0][0].getSchema()
+    sch = matchedCat.getSchema()
 
     ct = data.mapperInfo.getColorterm(desiredBand)
     if False:
@@ -3000,16 +2995,16 @@ def getRefmag(data, mstars, desiredBand):
         ct = None
 
     if ct:
-        primaryKey = sch.find(ct.primary).getKey()
-        secondaryKey = sch.find(ct.secondary).getKey()
+        primaryKey = sch.find(ct.primary + referenceSuffix).getKey()
+        secondaryKey = sch.find(ct.secondary + referenceSuffix).getKey()
 
-        refMag = -2.5*np.log10(np.array([m[0].get(primaryKey)   for m in mstars]))
-        secMag = -2.5*np.log10(np.array([m[0].get(secondaryKey) for m in mstars]))
+        refMag = -2.5*np.log10(matchedCat.get(primaryKey))
+        secMag = -2.5*np.log10(matchedCat.get(secondaryKey))
 
         refMag = data.mapperInfo.photometricTransform(desiredBand, refMag, secMag)
     else:
-        fluxKey = sch.find("flux").getKey()
-        refMag = -2.5*np.log10(np.array([m[0].get(fluxKey) for m in mstars]))
+        fluxKey = sch.find("flux" + referenceSuffix).getKey()
+        refMag = -2.5*np.log10(matchedCat.get(fluxKey))
 
     return refMag
 
@@ -3024,7 +3019,7 @@ def getCanonicalFilterName(filterName):
 
 def plotCalibration(data, plotBand=0.05, magType='psf', magmin=14, maglim=20, eventHandler=False,
                     selectObjId=None, showCamera=False, correctRadial=False, plotRadial=False,
-                    correctJacobian=False,
+                    showJacobian=False, correctJacobian=False, useDistortion=False,
                     xmin=None, xmax=None, ymin=None, ymax=None,
                     markersize=2, alpha=1.0, title="+", showMedians=False,
                     frame=None, ctype=None, ds9Size=None, fig=None):
@@ -3048,18 +3043,41 @@ If title is provided it's used as a plot title; if it starts + the usual title i
 
     fig = getMpFigure(fig)
 
-    mstars, zp = [], []
-    for m, z in zip(data.matchedCalibs, data.zp):
-        catobj, source = m[0], m[1]               # m[0] == catalogue, m[1] == source
+    sourceSuffix = "_2"
+    referenceSuffix="_1"
+    good = np.logical_and(data.matchedCalibs["stargal" + referenceSuffix],
+                          np.logical_not(data.matchedCalibs["flags.pixel.saturated.center" + sourceSuffix]))
+    magTypeName = "sinc" if magType == "ap" else "deconvolvedPsf" if magType == "inst" else magType
+    flux = data.matchedCalibs.get("flux.%s%s" % (magTypeName, sourceSuffix))[good]
+    
+    ids = data.matchedCalibs.get("id")[good]
+    xc = data.matchedCalibs.get("centroid.sdss%s.x" % sourceSuffix)[good]
+    yc = data.matchedCalibs.get("centroid.sdss%s.y" % sourceSuffix)[good]
+    #
+    # Get focal-plane positions ("mm" -- for HSC they are actually in units of 15 micron pixels)
+    #
+    camera = data.butler.get("camera")
+    xmm = np.empty_like(xc); ymm = np.empty_like(yc)
+    for i, _id in enumerate(ids):
+        ccdId = data.mapperInfo.splitId(_id, True)["ccd"]
+        ccd = cameraGeomUtils.findCcd(camera, cameraGeom.Id(ccdId))
+        xmm[i], ymm[i] = ccd.getPositionFromPixel(afwGeom.PointD(xc[i], yc[i])).getMm()
 
-        if selectObjId:
-            sid = source.getId()
-            if not selectObjId(data, sid):
-                continue
+    if correctJacobian:
+        if useDistortion:
+            title += " (Jacobian corr from Distort)"
+            jacobian = np.empty_like(xmm)
+            dist = camera.getDistortion()
+            for i in range(len(jacobian)):
+                jacobian[i] = dist.computeQuadrupoleTransform(afwGeom.PointD(xmm[i], ymm[i]), False).computeDeterminant()
+        else:
+            title += " (Jacobian corr)"
+            jacobian = data.matchedCalibs.get("jacobian%s" % sourceSuffix)[good]
 
-        if catobj.get("stargal") and not source.get("flags.pixel.saturated.center"):
-            mstars.append(m)
-            zp.append(z)
+        flux *= jacobian
+
+    zp = data.zp[good]
+    instmag = zp - 2.5*np.log10(flux)
 
     if frame is not None:
         kwargs = {}
@@ -3068,59 +3086,39 @@ If title is provided it's used as a plot title; if it starts + the usual title i
         if ds9Size:
             kwargs["size"] = ds9Size
         with ds9.Buffering():
-            for i, m in enumerate(mstars):
-                s = m[1]
-                if zp[i] - 2.5*np.log10(getFlux(s, magType)) < 17.3:
-                    ds9.dot("o", s.getX(), s.getY(), frame=frame, **kwargs)
+            for i in range(len(xc)):
+                if instmag[i] < 21:        # XXXXXXXX
+                    ds9.dot("o", xc[i], yc[i], frame=frame, **kwargs)
 
     axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
     
-    refmag = getRefmag(data, mstars, getCanonicalFilterName(data.dataId[0]["filter"]))
+    refmag = getRefmag(data, data.matchedCalibs, getCanonicalFilterName(data.dataId[0]["filter"]),
+                       referenceSuffix=referenceSuffix)[good]
 
-    ids = np.array([s[1].getId() for s in mstars])
-    flux = [getFlux(s[1], magType) for s in mstars]
+    if correctRadial:               # apply a radial correction
+        if correctJacobian:
+            if useDistortion:
+                x0, y0 = 3000, 0               # center of correction pattern
+                r = np.hypot(xmm - x0, ymm - y0)
 
-    if correctJacobian:
-        sch = mstars[0][1].getSchema()
-        jacobianKey = sch.find("jacobian").getKey()
-        jacobian = np.array([s[1].get(jacobianKey) for s in mstars])
-        
-        flux *= jacobian
-
-    instmag = zp - 2.5*np.log10(np.array(flux))
-
-    if showCamera or correctRadial or plotRadial: # we need to know the distance from the centre of the camera
-        cam = data.butler.get("camera")
-        x = np.empty(len(mstars)); y = np.empty_like(x)
-        for i, _id in enumerate(ids):
-            ccdId = data.mapperInfo.splitId(_id, True)["ccd"]
-            ccd = cameraGeomUtils.findCcd(cam, cameraGeom.Id(ccdId))
-            x[i], y[i] = ccd.getPositionFromPixel(mstars[i][1].getCentroid()).getMm()
-
-        x0, y0 = -2000, 0               # center of correction pattern
-        r = np.hypot(x - x0, y - y0)
-
-        if correctRadial:               # apply a radial correction
-            if correctJacobian:
-                instmag += -0.040 + 0.176*(r/15000)**2
+                instmag += -0.009 - 0.045*(r/15000)**2
             else:
-                instmag += -0.010 + 0.065*(r/15000)**2
-            title += " (radial correction)"
+                x0, y0 = 3000, 0               # center of correction pattern
+                r = np.hypot(xmm - x0, ymm - y0)
 
-    delta = refmag - instmag
+                instmag +=  0.005 - 0.050*(r/15000)**2
+        else:
+            x0, y0 = -2000, 0               # center of correction pattern
+            r = np.hypot(xmm - x0, ymm - y0)
 
-    if eventHandler:
-        xc = np.empty(len(mstars))
-        yc = np.empty_like(xc)
-        flagNames, flags = _setFlagsFromSource(), {}
-        for k in flagNames.keys():
-            flags[k] = np.empty_like(xc)
+            instmag += -0.010 + 0.065*(r/15000)**2
+        title += " (radial correction)"
 
-        for i, s in enumerate(mstars):
-            src = s[1]
-            xc[i], yc[i] = src.getCentroid()
-            for k, n in flagNames.items():
-                flags[k][i] = src.get(n)
+    if showJacobian:
+        delta = jacobian
+        title = "+ Jacobian"
+    else:
+        delta = refmag - instmag
 
     try:
         stats = afwMath.makeStatistics(delta[np.logical_and(refmag > magmin, refmag < maglim)],
@@ -3134,15 +3132,17 @@ If title is provided it's used as a plot title; if it starts + the usual title i
         inRange = np.logical_and(refmag > magmin, refmag < maglim)
 
         if plotRadial:
+            r = np.hypot(xmm, ymm)
             axes.plot(r[inRange], delta[inRange], "k.", markersize=markersize, alpha=alpha, markeredgewidth=0)
 
             axes.set_ylim(-0.6 if ymin is None else ymin,
                            0.6 if ymax is None else -ymin if ymax is None else ymax)
-            axes.axhline(0, linestyle=":", color="red")
+            axes.axhline(0.0, linestyle=":", color="cyan")
+            axes.axhline(mean, linestyle=":", color="red")
             axes.set_xlabel("Radius (mm)")
             axes.set_ylabel("Reference - %s" % magType)
         else:
-            sc = axes.scatter(x[inRange], y[inRange], c=delta[inRange], norm=pyplot.Normalize(ymin, ymax),
+            sc = axes.scatter(xmm[inRange], ymm[inRange], c=delta[inRange], norm=pyplot.Normalize(ymin, ymax),
                               cmap=pyplot.cm.rainbow, marker="o", s=10*markersize,
                               edgecolors="none", alpha=alpha)
             fig.colorbar(sc)
@@ -3180,7 +3180,7 @@ If title is provided it's used as a plot title; if it starts + the usual title i
 
             axes.plot(bins + 0.5*binwidth, vals, linestyle="-", marker="o", color="cyan")
 
-        fig.text(0.2, 0.85, r"$%.3f \pm %.3f$" % (mean, stdev), fontsize="larger")
+    fig.text(0.2, 0.85, r"$%.3f \pm %.3f$" % (mean, stdev), fontsize="larger")
 
     name = data.name if selectObjId is None else data.mapperInfo.dataIdToTitle(idsToDataIds(data, ids))
     axes.set_title(re.sub(r"^\+\s*", name + " ", title))
@@ -3189,9 +3189,10 @@ If title is provided it's used as a plot title; if it starts + the usual title i
     #
     if eventHandler:
         global eventHandlers
+        flags ={}
         eventHandlers[fig] = EventHandler(data, axes,
-                                          x if showCamera else refmag,
-                                          y if showCamera else delta, ids, xc, yc, flags, [frame,])
+                                          xmm if showCamera else refmag,
+                                          ymm if showCamera else delta, ids, xc, yc, flags, [frame,])
 
     fig.show()
 
@@ -3304,6 +3305,8 @@ Stars are green; galaxies are red based on our processing
     """
     if not data.matchedCalibs:
         raise RuntimeError("You need to call the Data.getCalibObjects method before calling this routine")
+
+    raise RuntimeError("Convert me to zipped matches")
 
     with ds9.Buffering():
         for m in data.matchedCalibs:
