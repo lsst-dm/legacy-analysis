@@ -1666,15 +1666,19 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
 
     return cat, scm
 
-def zipMatchList(matchList, suffixes=None):
+def zipMatchList(matchList, suffixes=None, swap=False):
     """zip a matchList into a single catalogue
 
     @param matchList MatchList, as returned by e.g. afwTable.matchRaDec
+    @param swap      Interchange [0] and [1]
     """
 
     records = [matchList[0][i] for i in range(2)]
     if suffixes is None:
         suffixes = ["_1", "_2"]
+    if swap:
+        records = list(reversed(records))
+        suffixes = list(reversed(suffixes))
 
     requiredFields = ["id", "coord", "parent"] # keys that must be first and in this order --- #2154
 
@@ -1719,6 +1723,8 @@ def zipMatchList(matchList, suffixes=None):
     id_2Key = scm.getOutputSchema().find("id_2").getKey()
 
     for m1, m2, d in matchList:
+        if swap:
+            m1, m2 = m2, m1
         cat.append(cat.copyRecord(m1, scm))
         rec = cat[-1]
 
