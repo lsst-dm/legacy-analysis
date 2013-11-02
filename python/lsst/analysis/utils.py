@@ -345,6 +345,11 @@ def makeMapperInfo(butler):
 
         @staticmethod
         def dataIdToTitle(dataIds, rerunName=None):
+            try:
+                dataIds[0]
+            except TypeError:
+                dataIds = [dataIds]
+
             filters = set()
             sensors = set()
             rafts = set()
@@ -565,6 +570,11 @@ def makeMapperInfo(butler):
 
         @staticmethod
         def dataIdToTitle(dataIds, rerunName=None):
+            try:
+                dataIds[0]
+            except TypeError:
+                dataIds = [dataIds]
+
             runs = set()
             filters = set()
             camcols = set()
@@ -698,6 +708,12 @@ def makeMapperInfo(butler):
 
         @staticmethod
         def dataIdToTitle(dataIds, rerunName=None):
+            try:
+                dataIds[0]
+            except TypeError:
+                dataIds = [dataIds]
+
+
             if _prefix_ == "stack":
                 title = []
                 for did in dataIds:
@@ -778,11 +794,12 @@ def makeMapperInfo(butler):
         def splitId(oid, asDict=False):
             """Split an ObjectId into visit, ccd, and objId.
             See obs/subaru/python/lsst/obs/suprimecam/suprimecamMapper.py"""
-            oid = long(oid)
-            objId = int(oid & 0xffff)     # Should be the same value as was set by apps code
-            oid >>= 22L
+            oid = np.array(oid, dtype='int64')
+            objId = np.bitwise_and(oid, 0xffff) # Should be the same value as was set by apps code
+            oid = np.right_shift(oid, 22).astype('int32')
 
             if _prefix_ == "stack":
+                print "Warning: not vectorized"
                 nfilter = len(butler.mapper.filters)
                 nPatches = 1000000L
 
@@ -802,10 +819,15 @@ def makeMapperInfo(butler):
                     return stack, patch, filter, objId
                 
             else:
-                oid >>= 10L
-                ccd = int(oid % 10)
+                oid = np.right_shift(oid, 10).astype('int32')
+                ccd = oid % 10
                 oid //= 10
-                visit = int(oid)
+                visit = oid
+
+                if visit.size == 1:     # sqlite doesn't like numpy types
+                    visit = int(visit)
+                    ccd = int(ccd)
+                    objId = int(objId)
 
                 if asDict:
                     return dict(visit=visit, ccd=ccd, objId=objId)
@@ -837,7 +859,6 @@ def makeMapperInfo(butler):
 
         @staticmethod
         def exposureToStr(exposure):
-            import pdb; pdb.set_trace() 
             try:
                 ccdId = cameraGeom.cast_Ccd(exposure.getDetector()).getId().getSerial()
                 visit = re.sub(r"^HSC", "", exposure.getMetadata().get("FRAMEID"))
@@ -1039,6 +1060,9 @@ class Data(object):
 
             rerunName = os.path.basename(dr0)
 
+    def get(self, *args, **kwargs):
+        return self.butler.get(*args, **kwargs)
+
     def lookupDataBySkytile(self, dataType):
         """N.b. not converted to use dataId --- Lsst specific"""
         dataSets = {}
@@ -1131,12 +1155,7 @@ raft or sensor may be None (meaning get all)
         for did in dataSets:
             dataElem = self.butler.get(dtName(dataType), **did)
 
-            if dataType == "calexp":
-                psf = self.butler.get(dtName("psf"), **did)
-		psf.setDetector(dataElem.getDetector())
-                dataElem.setPsf(psf)
-                del psf
-            elif dataType == "psf":
+            if dataType == "psf":
                 calexp = self.butler.get(dtName("calexp"), **did)
                 dataElem.setDetector(calexp.getDetector())
 		del calexp
@@ -1159,13 +1178,15 @@ raft or sensor may be None (meaning get all)
                     for s in cat:
                         s.set(parentKey, s.get(poiKey))
 
-                if False:
-                    extendedness = np.where(cat.getModelFlux()/cat.getPsfFlux() > 1.015, 1.0, 0.0)
-                    extendedness = np.where(np.isfinite(cat.getModelFlux()),
+                if True:
+                    modelFluxName, corrFac = "flux.kron", 10**(0.4*0.047)
+                    extendedness = np.where(cat.get(modelFluxName)*corrFac/cat.getPsfFlux() > 1.05, 1.0, 0.0)
+                    extendedness = np.where(np.isfinite(cat.get(modelFluxName)),
                                             extendedness, cat.get(extendednessKey))
                     global warnedHackExtendedness
                     if not warnedHackExtendedness:
-                        print >> sys.stderr, "Hacking the extendeness value"
+                        print >> sys.stderr, "Hacking the extendeness value to use %.2f*%s" % \
+                            (corrFac, modelFluxName)
                         warnedHackExtendedness = True
                     for s, e in zip(cat, extendedness):
                         s.set(extendednessKey, e)
@@ -1263,8 +1284,9 @@ ccd may be a list"""
 
     #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-    def getCalibObjects(self, dataId, allSources=True,
-                        displayType="psf", frame=None, mtv=False, verbose=False):
+    def getCalibObjects(self, dataId={}, allSources=True,
+                        displayType="psf", frame=None, mtv=False, erase=True, maglim=None, showGalaxies=False,
+                        verbose=False):
         """If frame is not None then information about displayType will be plotted on ds9; if
         mtv is true the calexp will be displayed first
 
@@ -1278,13 +1300,6 @@ ccd may be a list"""
 
         if mtv and frame is None:
             frame = 0
-        if frame is not None:
-            if mtv:
-                calexp = self.getDataset("calexp", dataIds[0])[0]
-                Id = calexp.getDetector().getId() if calexp.getDetector() else self.name
-                ds9.mtv(calexp, title=Id, frame=frame)
-            else:
-                ds9.erase(frame)
             
         _matched = []
         _zp = []
@@ -1293,7 +1308,61 @@ ccd may be a list"""
                 print "Reading %s         \r" % dataId,
                 sys.stdout.flush()
                 
-            matched, zp = self._getCalibObjectsImpl(dataId, displayType, frame, verbose, allSources=allSources)
+            if frame is not None:
+                if mtv:
+                    calexp = self.getDataset("calexp", dataId)[0]
+                    Id = calexp.getDetector().getId() if calexp.getDetector() else self.name
+                    ds9.mtv(calexp, title=Id, frame=frame)
+                elif erase:
+                    ds9.erase(frame)
+                else:
+                    pass 
+                    
+            matched, zp, frame = self._getCalibObjectsImpl(dataId, displayType, frame, verbose=verbose,
+                                                           maglim=maglim, showGalaxies=showGalaxies,
+                                                           allSources=allSources)
+
+            if frame is not None and len(dataIds) > 1:
+                while True:
+                    try:
+                        res = raw_input("%s: [ chnpq] " % str(dataId)[1:-1]).strip()
+                    except EOFError:
+                        res = ""
+                        
+                    if res == "c":
+                        frame = None
+                    elif res == "h":
+                        print """' ' \\n c[ontinue without plotting] h[elp] n[ext] p[db] q[uit reading data]
+
+Plotted symbols are:
+   if displayType is "src":
+      detected sources: x green
+      catalog sources:  o red
+   else:
+      plot a 0.01 error at each matched point
+          In red if bad else yellow; symbol is * if stellar else o
+      plot error of specified type in cyan if error > 0 else magenta
+
+      if displayType is "jacobian":
+         The error is the (Jacobian - 1)
+      elif displayType in ("ap", "psf", "sinc")
+         error is (ref - mag) of specified type"""
+                        continue
+                    elif res == "p":
+                        import pdb; pdb.set_trace()
+                        continue
+                    elif res == "q":
+                        break
+                    elif not res or res == "n":
+                        break
+                    else:
+                        print >> sys.stderr, "Unexpected response: %s" % res
+                        continue
+
+                    break
+
+                if res == "q":
+                    break                
             
             _matched.append(matched)
             _zp.append(zp)
@@ -1312,7 +1381,8 @@ ccd may be a list"""
 
         self.matchedCalibs = zipMatchList(self.matchedCalibs, swap=True)
 
-    def _getCalibObjectsImpl(self, dataId, displayType, frame, verbose, allSources=False):
+    def _getCalibObjectsImpl(self, dataId, displayType, frame, maglim=None,
+                             showGalaxies=False, verbose=False, allSources=False):
         calexp_md = self.butler.get(dtName("calexp", True), **dataId)
         wcs = afwImage.makeWcs(calexp_md)
         imageSize = calexp_md.get("NAXIS1"), calexp_md.get("NAXIS2")
@@ -1321,7 +1391,9 @@ ccd may be a list"""
         calib = afwImage.Calib(calexp_md)
 
         if not self.astrom:
-            self.astrom = measAstrom.Astrometry(measAstrom.Astrometry.ConfigClass())
+            astromConfig = measAstrom.Astrometry.ConfigClass()
+            astromConfig.catalogMatchDist = 10
+            self.astrom = measAstrom.Astrometry(astromConfig)
 
         if allSources:
             sources = self.butler.get(dtName("src"), **dataId)
@@ -1330,12 +1402,14 @@ ccd may be a list"""
             if frame is not None and displayType == "src":
                 showSourceSet(sources, xy0=xy0, raDec=False, frame=frame)
                 showSourceSet(cat, xy0=xy0, wcs=wcs, raDec=True,  frame=frame, symb="o", ctype=ds9.RED)
+                displayType = None
+
             try:
                 matched = self.astrom._getMatchList(sources, cat, wcs)
             except Exception, e:
                 print "RHL", e
 
-                matchRadius = 2
+                matchRadius = 3
                 x, y = sources.getX(), sources.getY()
                 x0, y0 = xy0
                 xk = sources.getSchema().find("%s.x" % sources.getTable().getCentroidDefinition()).getKey()
@@ -1358,11 +1432,9 @@ ccd may be a list"""
             print >> sys.stderr, "Failed to calculate zp: %s" % e
             zp = 0.0
 
-        showDistortion = False
-        if displayType == "distortion":
-            showDistortion = False
-        elif displayType in ("src",):
-            pass
+        showJacobian = False
+        if displayType == "jacobian":
+            showJacobian = True
         elif displayType in ("psf", "ap"):
             if displayType == "ap":
                 displayType = "sinc"
@@ -1384,19 +1456,17 @@ ccd may be a list"""
                     fluxKey_r = sch.find("flux").getKey()
 
         else:
-            print >> sys.stderr, "Ignoring unknown displayType %s" % displayType
+            if displayType:
+                print >> sys.stderr, "Ignoring unknown displayType %s" % displayType
             frame = None
             
-        if False:
-            return matched, zp
-
-        if showDistortion:
+        if showJacobian:
             calexp = self.butler.get('calexp', **dataId)
             ccd = cameraGeom.cast_Ccd(calexp.getDetector())
             distortion = ccd.getDistortion()
 
             import lsst.afw.geom.ellipses as geomEllipses
-            quad = geomEllipses.Quadrupole() # used for estimating distortion
+            quad = geomEllipses.Quadrupole() # used for estimating jacobian
             quad.scale(1/math.sqrt(quad.getArea()))
 
         keepMatched = []
@@ -1407,37 +1477,50 @@ ccd may be a list"""
                 x, y = wcs.skyToPixel(ref.getRa(), ref.getDec())
                 if x < 0 or y < 0 or x > imageSize[0] or y > imageSize[1]:
                     continue
-                
+
                 keepMatched.append(match)
 
-                if frame is not None:
-                    if False:
-                        ds9.dot("o", x, y, frame=frame, ctype=ds9.GREEN)
-                        ds9.dot("+", src.getX(), src.getY(), frame=frame, ctype=ds9.RED)
+                if frame is not None and displayType:
+                    if showJacobian:
+                        delta = distortion.distort(afwGeom.PointD(x, y), quad, ccd).getArea() - 1
                     else:
-                        if showDistortion:
-                            delta = distortion.distort(afwGeom.PointD(x, y), quad, ccd).getArea() - 1
+                        if ct:
+                            p = -2.5*math.log10(ref.get(primaryKey_r))
+                            s = -2.5*math.log10(ref.get(secondaryKey_r))
+
+                            refmag = self.mapperInfo.photometricTransform(filterName, p, s)
                         else:
-                            if ct:
-                                p = -2.5*math.log10(ref.get(primaryKey_r))
-                                s = -2.5*math.log10(ref.get(secondaryKey_r))
+                            refmag = -2.5*math.log10(ref.get(fluxKey_r))
 
-                                refmag = self.mapperInfo.photometricTransform(filterName, p, s)
-                            else:
-                                refmag = -2.5*math.log10(ref.get(fluxKey_r))
-
+                        try:
                             delta = refmag - (zp - 2.5*math.log10(src.get(fluxKey)))
+                        except:
+                            continue
 
-                        size = min([100, max([deltaScale*delta, -100])])
-                        ds9.dot("o", src.getX(), src.getY(), size=abs(size),
-                                frame=frame, ctype=ds9.CYAN if size > 0 else ds9.MAGENTA)
-                        ds9.dot("o", src.getX(), src.getY(), size=deltaScale*0.01, # 10 mmag
-                                frame=frame, ctype=ds9.YELLOW)
+                        if maglim is not None:
+                            if refmag > maglim:
+                                continue
+                        
+                    size = min([100, max([deltaScale*delta, -100])])
+                    bad = src.get("flags.pixel.interpolated.center") | src.get("flags.pixel.edge")
+                    stellar = src.get("classification.extendedness") < 0.5
+                    
+                    if not showJacobian and not (stellar or showGalaxies):
+                        continue
+
+                    ds9.dot("*" if stellar else "o", src.getX(), src.getY(), size=deltaScale*0.01, # 10 mmag
+                            frame=frame, ctype=ds9.RED if bad else ds9.YELLOW)
+
+                    if not showJacobian and bad:
+                        continue
+
+                    ds9.dot("o", src.getX(), src.getY(), size=abs(size),
+                            frame=frame, ctype=ds9.CYAN if size > 0 else ds9.MAGENTA)
            
         if verbose > 1:
             print "Kept %d out of %d reference sources for %s" % (len(keepMatched), len(matched), dataId)
 
-        return keepMatched, zp
+        return keepMatched, zp, frame
 
 def _dataIdDictOuterProduct(dataId, expandedDataId=[]):
     """Given a dataId which may contain lists, return a list of dataIds with all lists expanded"""
@@ -1663,8 +1746,8 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
             fluxErr[fluxErr > 1e38] = np.nan
 
             mag_magErr = calib.getMagnitude(flux, fluxErr)
-            cat.get("%sMag" % x)[oldLen:] = mag_magErr.first
-            cat.get("%sMagErr" % x)[oldLen:] = mag_magErr.second
+            cat.get("%sMag" % x)[oldLen:] = mag_magErr[0]
+            cat.get("%sMagErr" % x)[oldLen:] = mag_magErr[1]
 
     return cat, scm
 
@@ -1803,11 +1886,51 @@ def getFluxMag0DB(visit, raft, sensor, db=None):
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
+def overlayCcds(camera, axes, names=False):
+    """Overlay camera's CCDs' outlines and serials (or names) using maplotlib axes"""
+    for raft in camera:
+        raft = cameraGeom.cast_Raft(raft)
+        for ccd in raft:
+            ccd = cameraGeom.cast_Ccd(ccd)
+            ccd.setTrimmed(True)
+            
+            width, height = ccd.getAllPixels(True).getDimensions()
+
+            corners = ((0.0,0.0), (0.0, height), (width, height), (width, 0.0), (0.0, 0.0))
+            for (x0, y0), (x1, y1) in zip(corners[0:4],corners[1:5]):
+                if x0 == x1 and y0 != y1:
+                    yList = np.linspace(y0, y1, num=2)
+                    xList = [x0] * len(yList)
+                elif y0 == y1 and x0 != x1:
+                    xList = np.linspace(x0, x1, num=2)
+                    yList = [y0] * len(xList)
+                else:
+                    raise RuntimeError("Should never get here")
+
+                xOriginal = []; yOriginal = []
+                for x, y in zip(xList, yList):
+                    position = ccd.getPositionFromPixel(afwGeom.Point2D(x,y)) # focal plane position
+
+                    xOriginal.append(position.getMm().getX())
+                    yOriginal.append(position.getMm().getY())
+
+                axes.plot(xOriginal, yOriginal, 'k-')
+
+            x,y = ccd.getPositionFromPixel(afwGeom.Point2D(width/2, height/2)).getMm()
+            cid = ccd.getId()
+            if names:
+                axes.text(x, y, cid.getName(), ha='center', rotation=90 if height > width else 0,
+                        fontsize="smaller")
+            else:
+                axes.text(x, y, cid.getSerial(), ha='center', va='center')
+
+#-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
 def plotDmag(data, magType1="model", magType2="psf", maglim=20, magmin=14,
              showMedians=False, sgVal=0.05, criticalFracDeV=0.5,
-             selectObjId=None,
+             selectObjId=None, colorCcds=False, showCamera=False,
              meanDelta=0.0, adjustMean=False, parents=False,
-             xmin=None, xmax=None, ymin=None, ymax=None,
+             xmin=None, xmax=None, ymin=None, ymax=None, overlay=True,
              title="+", markersize=1, SG="sg",  color="red", color2="green", frames=[0], wcss=[], fig=None):
     """Plot (magType1 - magType2) v. magType1 mags (e.g. "model" and "psf")
 
@@ -1821,6 +1944,8 @@ visible area).  If adjustMean is True, adjust all the CCDs being plotted to have
 the "locus" area.
 
 If title is provided it's used as a plot title; if it starts + the usual title is prepended
+
+If overlay is True, plot the CCDs' outlines and IDs
 
 If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are interpreted relative to meanDelta
     """
@@ -1872,11 +1997,6 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     if False:
         axes.plot(mag1[locus], delta[locus], "o", markersize=2*markersize, color="blue")
 
-    axes.axhline(meanDelta, linestyle=":", color="black")
-    if mean is not None:
-        axes.plot((magmin, maglim, maglim, magmin, magmin),
-                  meanDelta + sgVal*np.array([-1, -1, 1, 1, -1]), linestyle=":", color="black")
-
     if "d" in SG.lower() or "e" in SG.lower():           # split by deV/exp?
         SG += "g"
 
@@ -1906,43 +2026,89 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
             axes.plot(mag1[nonStellar], delta[nonStellar], "o", color=color, **plotKW)
     if "s" in SG.lower():
         nobj += stellar.sum()
-        axes.plot(mag1[stellar], delta[stellar], "o", markersize=markersize, markeredgewidth=0,
-                  color=color2, zorder=1)
 
-    if showMedians:
-        if sum(stellar) == 0:
-            print >> sys.stderr, "Without stars I can't show the stellar sequence"
-            showMedians = False
-    if showMedians:
-        binwidth = 1.0
-        bins = np.arange(np.floor(magmin), np.floor(max(mag1[stellar])), binwidth)
-        vals = np.empty_like(bins)
-        err = np.empty_like(bins)
-        for i in range(len(bins) - 1):
-            inBin = np.logical_and(mag1 > bins[i], mag1 <= bins[i] + binwidth)
-            tmp = delta[np.where(np.logical_and(stellar if 's' in SG else nonStellar, inBin))]
-            tmp.sort()
+        if showCamera:
+            #
+            # Get focal-plane positions ("mm" -- for HSC they are actually in units of 15 micron pixels)
+            #
+            inRange = np.logical_and(stellar, np.logical_and(mag1 > magmin, mag1 < maglim))
 
-            if len(tmp) == 0:
-                median, iqr = np.nan, np.nan
-            else:
-                median = tmp[int(0.5*len(tmp) + 0.5)] if len(tmp) > 1 else tmp[0]
-                iqr = (tmp[int(0.75*len(tmp) + 0.5)] - tmp[int(0.25*len(tmp) + 0.5)]) \
-                    if len(tmp) > 2 else np.nan
+            camera = data.butler.get("camera")
+            xc = data.cat.getX()[good][inRange]
+            yc = data.cat.getY()[good][inRange]
 
-            vals[i] = median
-            err[i] = 0.741*iqr
+            xmm = np.empty_like(xc); ymm = np.empty_like(yc)
+            for i, _id in enumerate(ids[inRange]):
+                ccdId = data.mapperInfo.splitId(_id, True)["ccd"]
+                ccd = cameraGeomUtils.findCcd(camera, cameraGeom.Id(ccdId))
+                xmm[i], ymm[i] = ccd.getPositionFromPixel(afwGeom.PointD(xc[i], yc[i])).getMm()
 
-        axes.errorbar(bins + 0.5*binwidth, vals, yerr=err, zorder=3,
-                      linestyle="-", marker="o", color="black")
 
-    axes.set_xlim(14 if xmin is None else xmin, 26 if xmax is None else xmax)
-    axes.set_ylim(meanDelta + (0.2 if ymin is None else ymin), meanDelta + (- 0.8 if ymax is None else ymax))
-    axes.set_xlabel(magType1)
-    axes.set_ylabel("%s - %s" % (magType1, magType2))
+            sc = axes.scatter(xmm, ymm, c=delta[inRange], norm=pyplot.Normalize(ymin, ymax),
+                              cmap=pyplot.cm.rainbow, marker="o", s=10*markersize,
+                              edgecolors="none")
+            fig.colorbar(sc)
+            axes.set_aspect('equal')
+
+            axes.set_xlabel("X (mm)")
+            axes.set_ylabel("Y (mm)")
+
+            title += " %s - %s" % (magType1, magType2)
+
+            if overlay:
+                overlayCcds(camera, axes) 
+        elif colorCcds:
+            ccdIds = data.mapperInfo.splitId(ids[stellar], True)["ccd"]
+            sc = axes.scatter(mag1[stellar], delta[stellar], c=ccdIds,
+                              cmap=pyplot.cm.rainbow, marker="o", s=5*markersize,
+                              edgecolors="none")
+            fig.colorbar(sc)
+        else:
+            axes.plot(mag1[stellar], delta[stellar], "o", markersize=markersize, markeredgewidth=0,
+                      color=color2, zorder=1)
+
+    if not showCamera:
+        axes.axhline(meanDelta, linestyle=":", color="black")
+        if mean is not None:
+            axes.plot((magmin, maglim, maglim, magmin, magmin),
+                      meanDelta + sgVal*np.array([-1, -1, 1, 1, -1]), linestyle=":", color="black")
+
+        if showMedians:
+            if sum(stellar) == 0:
+                print >> sys.stderr, "Without stars I can't show the stellar sequence"
+                showMedians = False
+        if showMedians:
+            binwidth = 1.0
+            bins = np.arange(np.floor(magmin), np.floor(max(mag1[stellar])), binwidth)
+            vals = np.empty_like(bins)
+            err = np.empty_like(bins)
+            for i in range(len(bins) - 1):
+                inBin = np.logical_and(mag1 > bins[i], mag1 <= bins[i] + binwidth)
+                tmp = delta[np.where(np.logical_and(stellar if 's' in SG else nonStellar, inBin))]
+                tmp.sort()
+
+                if len(tmp) == 0:
+                    median, iqr = np.nan, np.nan
+                else:
+                    median = tmp[int(0.5*len(tmp) + 0.5)] if len(tmp) > 1 else tmp[0]
+                    iqr = (tmp[int(0.75*len(tmp) + 0.5)] - tmp[int(0.25*len(tmp) + 0.5)]) \
+                        if len(tmp) > 2 else np.nan
+
+                vals[i] = median
+                err[i] = 0.741*iqr
+
+            axes.errorbar(bins + 0.5*binwidth, vals, yerr=err, zorder=3,
+                          linestyle="-", marker="o", color="black")
+
+        axes.set_xlim(14 if xmin is None else xmin, 26 if xmax is None else xmax)
+        axes.set_ylim(meanDelta + (0.2 if ymin is None else ymin),
+                      meanDelta + (- 0.8 if ymax is None else ymax))
+        axes.set_xlabel(magType1)
+        axes.set_ylabel("%s - %s" % (magType1, magType2))
 
     title += " %d objects" % nobj
-    name = data.name if selectObjId is None else data.mapperInfo.dataIdToTitle(idsToDataIds(data, ids))
+    name = data.name if selectObjId is None else \
+        data.mapperInfo.dataIdToTitle(idsToDataIds(data, ids), data._rerun)
     axes.set_title(re.sub(r"^\+\s*", name + " ", title))
 
     if mean is not None:
@@ -2161,30 +2327,38 @@ def makeSelectCcd(ccds, include=True):
         if ccds[0] is None:
             return True
 
-        ccd = data.mapperInfo.splitId(id, asDict=True)["ccd"]
+        if not isinstance(id, dict):
+            id = data.mapperInfo.splitId(id, asDict=True)
+        ccd = id["ccd"]
         matches = reduce(lambda m, c: np.logical_or(m, ccd == c), ccds, False)
 
         return matches if include else np.logical_not(matches)
 
     return selectCcd
 
-def makeSelectVisit(visits, ccds=None, include=True):
+def makeSelectVisit(visits=None, ccds=None, include=True):
     try:
         visits[0]
     except TypeError:
         visits = [visits]
 
     if ccds is None:
-        selectCcd = False
+        selectCcd = None
     else:
         selectCcd = makeSelectCcd(ccds)
 
     def selectVisit(data, id, visits=visits, include=include):
-        if visits[0] is None:
+        if visits[0] is None and selectCcd is None:
             return True
 
-        visit = data.mapperInfo.splitId(id, asDict=True)["visit"]
-        matches = reduce(lambda m, v: np.logical_or(m, visit == v), visits, False)
+        if not isinstance(id, dict):
+            id = data.mapperInfo.splitId(id, asDict=True)
+
+        if visits[0] is None:
+            matches = np.ones_like(id)
+        else:
+            visit = id["visit"]
+            matches = reduce(lambda m, v: np.logical_or(m, visit == v), visits, False)
 
         if selectCcd:
             matches = np.logical_and(matches, selectCcd(data, id))
@@ -2397,7 +2571,7 @@ def robustStd(y):
     return 0.741*(y[int(0.75*n)] - y[int(0.25*n)])
 
 def plotStellarLocus(axes, mags, k1, k2, k3, stellar, filterNames, stellarLocusEnds=[], locusLtype=False,
-                     plotRaDec=False):
+                     usePrincipalColor=False, plotRaDec=False):
     """
     Calculate width of blue end of stellar locus
     """
@@ -2407,47 +2581,40 @@ def plotStellarLocus(axes, mags, k1, k2, k3, stellar, filterNames, stellarLocusE
     #stellarLocusEnds = (0.40, 1.00,)    # the blue and red colour defining the straight part of the locus
     #stellarLocusEnds = (0.50, 1.50,)
 
+    # Find the stellar locus
+    xy = []
+    try:
+        stellarLocusEnds[0][0]  # both x and y are provided
+        stellarLocusEnds[0][0]  # both x and y are provided
+        xy = stellarLocusEnds
+        stellarLocusEnds = (xy[0][0], xy[1][0])
+    except TypeError:
+        dxx = 0.1*abs(stellarLocusEnds[1] - stellarLocusEnds[0])
+        for xx in stellarLocusEnds:
+            delta = col23[stellar][abs(col12[stellar] - xx) < dxx]
+            try:
+                yy = afwMath.makeStatistics(np.array(delta, dtype="float64"), afwMath.MEDIAN).getValue()
+            except pexExcept.LsstCppException:
+                yy = np.nan
+
+            if False and not plotRaDec:
+                axes.axvline(xx, color="blue", ls=":")
+
+            xy.append((xx, yy))
+
+    if False:
+        print "Stellar locus: [(%.3f, %.3f), (%.3f, %.3f)]" % (xy[0][0], xy[0][1], xy[1][0], xy[1][1])
+
     principalColor = ""
     if usePrincipalColor and filterNames[k1] == 'g' and filterNames[k2] == 'r' and filterNames[k3] == 'i':
         pc = -0.227*mags[k1] + 0.792*mags[k2] - 0.567*mags[k3] + 0.050
         principalColor = "w"
-        delta = pc[good][stellar]
+        delta = pc[stellar]
     elif usePrincipalColor and filterNames[k1] == 'r' and filterNames[k2] == 'i' and filterNames[k3] == 'z':
         pc = -0.270*mags[k1] + 0.800*mags[k2] - 0.534*mags[k3] + 0.054
         principalColor = "y"
-        delta = pc[good][stellar]
+        delta = pc[stellar]
     else:
-        xy = []
-        try:
-            stellarLocusEnds[0][0]  # both x and y are provided
-            stellarLocusEnds[0][0]  # both x and y are provided
-            xy = stellarLocusEnds
-            stellarLocusEnds = (xy[0][0], xy[1][0])
-        except TypeError:
-            dxx = 0.1*abs(stellarLocusEnds[1] - stellarLocusEnds[0])
-            for xx in stellarLocusEnds:
-                delta = col23[stellar][abs(col12[stellar] - xx) < dxx]
-                try:
-                    yy = afwMath.makeStatistics(np.array(delta, dtype="float64"), afwMath.MEDIAN).getValue()
-                except pexExcept.LsstCppException:
-                    yy = np.nan
-
-                if False:
-                    yy = np.median(delta)
-                    sig = robustStd(delta)
-                    yy = np.median(delta[abs(delta - yy) < 2*sig])
-
-                if not plotRaDec:
-                    if False:
-                        axes.plot([xx - dxx, xx - dxx], [-2, 2], "k:")
-                        axes.plot([xx + dxx, xx + dxx], [-2, 2], "k:")
-                    elif locusLtype:
-                        axes.axvline(xx, color="blue", ls=":")
-
-                xy.append((xx, yy))
-
-        print "Stellar locus: [(%.3f, %.3f), (%.3f, %.3f)]" % (xy[0][0], xy[0][1], xy[1][0], xy[1][1])
-
         theta = math.atan2(xy[1][1] - xy[0][1], xy[1][0] - xy[0][0])
         c, s = math.cos(theta), math.sin(theta)
 
@@ -2455,14 +2622,14 @@ def plotStellarLocus(axes, mags, k1, k2, k3, stellar, filterNames, stellarLocusE
         xp =   x*c + y*s
         yp = - x*s + y*c
 
-        if locusLtype and not plotRaDec:
-            axes.plot([xy[0][0], xy[1][0]], [xy[0][1], xy[1][1]], locusLtype)
-            #print xy
-
         delta = yp
 
+    if locusLtype and not plotRaDec:
+        axes.plot([xy[0][0], xy[1][0]], [xy[0][1], xy[1][1]], locusLtype)
+
+
     delta = np.array(delta, dtype="float64")
-    blue = np.logical_and(x > stellarLocusEnds[0], x < stellarLocusEnds[1])
+    blue = np.logical_and(col12 > stellarLocusEnds[0], col12 < stellarLocusEnds[1])[stellar]
     try:
         stats = afwMath.makeStatistics(delta[blue], afwMath.STDEVCLIP | afwMath.MEANCLIP)
         mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
@@ -2470,18 +2637,24 @@ def plotStellarLocus(axes, mags, k1, k2, k3, stellar, filterNames, stellarLocusE
         mean, stdev = float("NaN"), float("NaN")
 
     #print "%g +- %g" % (mean, stdev)
-    axes.text(0.75, 0.85, r"$%s \pm %.3f$" % \
+    axes.text(xy[0][0], 0.5*(xy[0][1] + xy[1][1]) + 0.25, r"$%s \pm %.3f$" % \
                   ("%s = " % principalColor if principalColor else "", stdev), fontsize="larger")
 
-def plotCC(data, dataKeys=None, magType="psf", SG="sg", fig=None, *args, **kwargs):
-    """Plot (data[1].magType - data[2].magType) v. (data[2].magType - data[3].magType) mags (e.g. "psf")
-where data is a dict. This can be used to plot 3-colour diagrams or to compare 3 epochs.  If you provide
-dataKeys, then its values will be used to index data; if it's None then sorted(data.keys()) is used.
+#-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-If selectObjId is provided, it's a function that returns True or False for each object. E.g.
-    sel = makeSelectCcd(ccd=2)
-    plotCC(..., selectObjId=makeSelectCcd(2), ...)
-the ids are taken from the idN'th dataset (e.g. 2 to use data[2].id); per ccd/visit labels come from idColorN.
+def plotCC(data, select1, select2, select3, magType="psf", SG="sg", select4=None,
+           verbose=False, fig=None, *args, **kwargs):
+    """
+Plot (data[select1].magType - data[select2].magType) v. (data[select1].magType - data[select3].magType)
+where data[selectN] means, "the objects in data for which selectN(ids) returns True".  E.g.
+    plotCC(data, makeSelectVisit(902030), makeSelectVisit(902032), makeSelectVisit(902034), "psf", ...)
+(let's write data[selectN].magType as magN)
+
+This can be used to plot 3-colour diagrams or to compare 3 epochs.
+
+If select4 is provided, compare (mag1 - mag2) with (mag3 - mag4)
+If both select1 and select3 are the same band and select2 and select4 are the same (different) band, plot
+   (mag1 - mag2) - (mag3 - mag4) against mag1
 
 If title is provided it's used as a plot title; if it starts + the usual title is prepended and if it's
 None no title is provided; if it starts "T:" the label will be written at the top of the plot
@@ -2498,19 +2671,90 @@ If non-None, [xy]{min,max} are used to set the plot limits
 
     fig = getMpFigure(fig)
 
+    allIds = data.cat.get("id")
+    selections = {1: select1(data, allIds),
+                  2: select2(data, allIds),
+                  3: select3(data, allIds),
+                  }
+    if select4 is not None:
+        selections[4] = select4(data, allIds)
+    dataKeys = sorted(selections.keys())
+
+    cats = dict([(k, data.cat[v]) for k,v in selections.items()])
+
+    empty = []
+    for i, d in cats.items():
+        if len(d) == 0:
+            empty.append(str(i))
+
+    if empty:
+        raise RuntimeError("No objects were found with selection%s %s" % ("s" if len(empty) > 1 else "",
+                                                                          ", ".join(empty)))
+    #
+    # See if we've done this match before
+    #
+    if data.matches:
+        if set(selections.keys()) != set(data.matches[0].keys()):
+            data.matches = None
+        else:
+            dselections = data.matches[0]
+            for k in selections.keys():
+                if not (selections[k] == dselections[k]).all():
+                    data.matches = None
+                    break
+
+    if data.matches:
+        matched = data.matches[1]
+    else:
+        if verbose:
+            print "Matching selected sources"
+        matchRadius = 2                     # arcsec
+        mat = afwTable.matchRaDec(cats[1], cats[2], matchRadius*afwGeom.arcseconds)
+        cat12=zipMatchList(mat)
+        mat = afwTable.matchRaDec(cat12, cats[3], matchRadius*afwGeom.arcseconds)
+        cat123 = zipMatchList(mat)
+        if select4 is None:
+            matched = Data(cat=cat123)
+        else:
+            mat = afwTable.matchRaDec(cat123, cats[4], matchRadius*afwGeom.arcseconds)
+            matched = Data(cat=zipMatchList(mat))
+        
+        data.matches = selections, matched
+
+    filterNames = [None]
+    visitNames = [None]
+    for k in sorted(cats.keys()):
+        dataId = idsToDataIds(data, allIds[selections[k]][0:2])[0]
+        for k, v in dataId.items():
+            if isinstance(v, np.int32):
+                dataId[k] = int(v)
+        visitNames.append(dataId["visit"])
+        filterNames.append(afwImage.Filter(data.butler.get(dtName("calexp", True), **dataId)).getName())
+
+    datasetName = ", ".join([data.mapperInfo.dataIdToTitle(
+                idsToDataIds(data, allIds[selections[i]])) for i in dataKeys])
+
     subplots = makeSubplots(fig, nx=len(magType), ny=len(SG))
-    matched = None
     j = -1
     for _magType in magType:
         for _sg in SG:
             axes = subplots.next(); j += 1
+            
+            if len(SG) == 1 and len(magType) == 1:
+                showXlabel = "bottom"
+                showYlabel = "left"
+            else:
+                showXlabel = \
+                    "top"    if False and j//len(SG) == 0      else \
+                    "bottom" if j//len(SG) == len(magType) - 1 else None
+                showYlabel = \
+                    "left"  if j//len(SG) == len(magType)//2 and _sg == SG[0] else \
+                    "right" if j//len(SG) == len(magType)//2 and _sg == SG[len(SG)-1] else None
 
-            _, matched = _plotCCImpl(data, dataKeys, _magType, _sg, fig=axes, matched=matched,
-                                     title="T:+" if j == 0 else None,
-                                     showXlabel= \
-                                         "top"    if j//len(SG) == 0                else \
-                                         "bottom" if j//len(SG) == len(magType) - 1 else None,
-                                     showYlabel="left" if (j%len(SG) == 0) else "right",
+            _, matched = _plotCCImpl(data, matched, dataKeys, _magType, filterNames, visitNames, _sg,
+                                     verbose=verbose, fig=axes,
+                                     title="T:+" if j == 0 else None, datasetName=datasetName,
+                                     showXlabel=showXlabel, showYlabel=showYlabel,
                                      *args, **kwargs
                                      )
                                      
@@ -2518,13 +2762,17 @@ If non-None, [xy]{min,max} are used to set the plot limits
 
     return fig
 
-def _plotCCImpl(data, dataKeys, magType, SG, magmax=None, magmin=None, fig=None, show=True, matched=None,
-           idN=None, idColorN=None, selectObjId=None, matchRadius=2, plotRaDec=False,
-           showStatistics=False, show_r_xy=True, colorCcds=False, colorVisits=False,
-           usePrincipalColor=True, stellarLocusEnds=[], adjustLocus=False, locusLtype="b:", 
-           xmin=None, xmax=None, ymin=None, ymax=None,
-           showXlabel="bottom", showYlabel="left", title="+",
-           markersize=1, alpha=1.0, color="red", frames=[0], wcss=[]):
+def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, fig=None, show=True,
+                magmax=None, magmin=None, 
+                verbose=False,
+                idN=None, idColorN=None, selectObjId=None, matchRadius=2, plotRaDec=False,
+                showStatistics=False, show_r_xy=True, colorCcds=False, colorVisits=False,
+                usePrincipalColor=True, stellarLocusEnds=[],
+                adjustLocus=False, locusLtype="b:",
+                xmin=None, xmax=None, ymin=None, ymax=None,
+                showXlabel="bottom", showYlabel="left",
+                datasetName="", title="+",
+                markersize=1, alpha=1.0, color="red", frames=[0], wcss=[]):
 
     subplot = isinstance(fig, pyplot.Axes)
     if subplot:
@@ -2535,50 +2783,38 @@ def _plotCCImpl(data, dataKeys, magType, SG, magmax=None, magmin=None, fig=None,
         
         axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
 
-    if dataKeys is None:
-        dataKeys = sorted(data.keys())
-
-    for k in dataKeys:
-        try:
-            data[k].cat
-        except KeyError:
-            raise RuntimeError("Data ID %s is not present in data[]" % k)
-        except AttributeError:
-            raise RuntimeError("Please call data[%s].getMagsByVisit, then try again" % k)
-
     if idN is None:
         idN = dataKeys[0]
     if idColorN is None:
         idColorN = idN
 
-    if not matched:
-        mat = afwTable.matchRaDec(data[dataKeys[0]].cat, data[dataKeys[1]].cat, matchRadius*afwGeom.arcseconds)
-        for k in dataKeys[2:]:
-            mat = afwTable.matchRaDec(zipMatchList(mat), data[k].cat, matchRadius*afwGeom.arcseconds)
-        matched = Data(cat=zipMatchList(mat))
-
     suffixes = ["_2" + i*"_1" for i in range(len(dataKeys) - 1, -1, -1)]
     suffixes[0] = suffixes[0][2:]       # first name has no "_2".  Grrr
     suffixes = dict(zip(dataKeys, suffixes))
 
-    good = None
+    if len(dataKeys) == 3:
+        k1, k2, k3 = dataKeys
+    else:
+        k1, k2, k3, k4 = dataKeys
+
+    # are we looking at e.g. (g-r)_1 - (g-r)_2?  If so, plot against magnitude
+    deltaColor = len(dataKeys) > 3 and \
+        filterNames[k1] != filterNames[k2] and \
+        (filterNames[k1], filterNames[k2]) == (filterNames[k3], filterNames[k4])
+
+    mag1 = matched.getMagsByType(magType, suffix=suffixes[1])
+    good = True
+
     for suffix in suffixes.values():
         for name in ["flags.pixel.edge",
                      "flags.pixel.bad",
                      #"flags.pixel.interpolated.center",
                      "flags.pixel.saturated.center",]:
-            _flg = np.logical_not(matched.cat.get(name + suffix))
-            if good is None:
-                good = _flg
-            else:
-                good = np.logical_and(good, _flg)
+            good = np.logical_and(good, np.logical_not(matched.cat.get(name + suffix)))
 
     good = np.logical_and(good, sum([matched.cat.get("deblend.nchild%s" % s) for s in suffixes.values()]) == 0)
     good = np.logical_and(good, matched.cat.get("parent") == 0)
 
-    if selectObjId:
-        good = np.logical_and(good, selectObjId(data, matched.cat.get("id%s" % suffixes[idN])))
-        
     centroidStr = "centroid.sdss%s" % suffixes[idN]
     xc = matched.cat.get("%s.x" % centroidStr)[good]
     yc = matched.cat.get("%s.y" % centroidStr)[good]
@@ -2591,10 +2827,13 @@ def _plotCCImpl(data, dataKeys, magType, SG, magmax=None, magmin=None, fig=None,
 
     good = good[good]
 
-    if magmin is not None:
-        good = np.logical_and(good, mags[idN] > magmin)
-    if magmax is not None:
-        good = np.logical_and(good, mags[idN] < magmax)
+    if not deltaColor:
+        if magmin is not None:
+            good = np.logical_and(good, mags[idN] > magmin)
+        if magmax is not None:
+            good = np.logical_and(good, mags[idN] < magmax)
+
+    good = good[good]
 
     for k, s in suffixes.items():
         mags[k] = mags[k][good]
@@ -2612,15 +2851,16 @@ def _plotCCImpl(data, dataKeys, magType, SG, magmax=None, magmin=None, fig=None,
         xvec, yvec = ra, dec
     else:
         if len(dataKeys) == 3:
-            k1, k2, k3 = dataKeys
-
             xvec = mags[k1] - mags[k2]
             yvec = mags[k2] - mags[k3]
         else:
-            k1, k2, k3, k4 = dataKeys
             xvec = mags[k1] - mags[k2]
             yvec = mags[k3] - mags[k4]
 
+            if deltaColor:
+                show_r_xy = False
+                yvec -= xvec
+                xvec = mags[k1]
     try:
         alpha.keys()
     except AttributeError:
@@ -2630,15 +2870,10 @@ def _plotCCImpl(data, dataKeys, magType, SG, magmax=None, magmin=None, fig=None,
 
     ccds = np.array([data.mapperInfo.splitId(_id, asDict=True)["ccd"] for _id in idsForColor])
     visits = np.array([data.mapperInfo.splitId(_id, asDict=True)["visit"] for _id in idsForColor])
-
-    filterNames, visitNames = {}, {}
-    for k in data.keys():
-        filterNames[k] = data.mapperInfo.canonicalFiltername(data[k].dataId[0]["filter"])
-        visitNames[k] = data[k].dataId[0]["visit"]
     #
     # Are we dealing with multi-band or multi-epoch data?
     #
-    multiEpoch = True if len(set(filterNames.values())) == 1 else False
+    multiEpoch = False if len(set(filterNames)) == len(filterNames) else True
 
     nobj = 0
     for c, l, ptype, markersize, color in [("g", nonStellar, "h", markersize, color),
@@ -2682,7 +2917,8 @@ def _plotCCImpl(data, dataKeys, magType, SG, magmax=None, magmin=None, fig=None,
     #axes.plot((0, 30), (0, 0), "b-")
 
     if stellarLocusEnds and "s" in SG.lower():
-        plotStellarLocus(axes, mags, k1, k2, k3, stellar, filterNames, stellarLocusEnds, locusLtype, plotRaDec)
+        plotStellarLocus(axes, mags, k1, k2, k3, stellar, filterNames,
+                         stellarLocusEnds, locusLtype, usePrincipalColor, plotRaDec)
         
     if plotRaDec:
         if xmin is not None and xmax is not None:
@@ -2696,16 +2932,24 @@ def _plotCCImpl(data, dataKeys, magType, SG, magmax=None, magmin=None, fig=None,
         axes.set_xlim(-1 if xmin is None else xmin, 2 if xmax is None else xmax)
         axes.set_ylim(-1 if ymin is None else ymin, 2 if ymax is None else ymax)
 
+    if xmax is not None and xmin is not None and ymax is not None and ymin is not None and \
+            abs(xmax - xmin) == abs(ymax - ymin):
+        axes.set_aspect('equal')
+        
     if showStatistics:
         mean, stdev = [], []
         delta = []
         for v in (xvec, yvec,):
+            l = True
             if "g" not in SG.lower():
-                v = v[stellar]
+                l = stellar
             if "s" not in SG.lower():
-                v = v[nonStellar]
+                l = nonStellar
 
-            delta.append(np.array(v, dtype="float64"))
+            if deltaColor:
+                l = np.logical_and(l, np.logical_and(xvec >= magmin, xvec < magmax))
+
+            delta.append(np.array(v[l], dtype="float64"))
             try:
                 stats = afwMath.makeStatistics(delta[-1], afwMath.STDEVCLIP | afwMath.MEANCLIP)
                 mean.append(stats.getValue(afwMath.MEANCLIP))
@@ -2715,46 +2959,54 @@ def _plotCCImpl(data, dataKeys, magType, SG, magmax=None, magmin=None, fig=None,
         #
         # now the covariance
         #
-        delta = (delta[0] - mean[0])*(delta[1] - mean[1])
-        try:
-            stdev.append(afwMath.makeStatistics(delta, afwMath.MEANCLIP).getValue())
-        except:
-            stdev.append(np.nan)
+        if deltaColor:
+            if mean is not None:
+                for m in (magmin, magmax,):
+                    axes.axvline(m, linestyle=":", color="black")
 
-        ax = afwGeom.ellipses.Axes(afwGeom.ellipses.Quadrupole(stdev[0]**2, stdev[1]**2, stdev[2]))
-        theta, A, B = ax.getTheta(), ax.getA(), ax.getB()
-        if show_r_xy:
-            r_xy = stdev[2]/(stdev[0]*stdev[1]) # Pearson's correlation coefficient
-
-        if True:
-            from matplotlib.patches import Ellipse
-            sig1, sig2 = 1.5151729039613389, 2.4859755240637766 # 68.3% and 95.4% contours
-            for nSig in [sig1, sig2]:
-                ell = Ellipse(xy=mean, width=2*nSig*A, height=2*nSig*B, angle=np.rad2deg(theta), zorder=10)
-                axes.add_artist(ell)
-                ell.set_clip_box(axes.bbox)
-                if not True:
-                    ell.set_fill(False)
-                else:
-                    ell.set_alpha(0.2)
-                    ell.set_facecolor("black")
+            msg = r"$%.3f \pm %.3f$" % (mean[1], stdev[1])
         else:
-            _a = np.linspace(0, 2*np.pi, 100)
-            ct, st = np.cos(theta), np.sin(theta)
-            _x, _y = A*np.cos(_a), B*np.sin(_a)
-            axes.plot(mean[0] + _x*ct - _y*st, mean[1] + _x*st + _y*ct, "k")
-        #
-        # Done with covariance
-        #
-        msg = r"$%.3f, %.3f \pm %.3f, %.3f$" % (mean[0], mean[1], stdev[0], stdev[1])
-        if show_r_xy:
-            msg += r" $r_{xy}=%.2f$" % r_xy
+            delta = (delta[0] - mean[0])*(delta[1] - mean[1])
+            try:
+                stdev.append(afwMath.makeStatistics(delta, afwMath.MEANCLIP).getValue())
+            except:
+                stdev.append(np.nan)
 
-        axes.text(0.5, 0.85, msg, fontsize="larger", ha="center", transform = axes.transAxes)
+            ax = afwGeom.ellipses.Axes(afwGeom.ellipses.Quadrupole(stdev[0]**2, stdev[1]**2, stdev[2]))
+            theta, A, B = ax.getTheta(), ax.getA(), ax.getB()
+            if show_r_xy:
+                r_xy = stdev[2]/(stdev[0]*stdev[1]) # Pearson's correlation coefficient
 
-        axes.plot(mean[0], mean[1], "k+", markersize=10)
+            if True:
+                from matplotlib.patches import Ellipse
+                sig1, sig2 = 1.5151729039613389, 2.4859755240637766 # 68.3% and 95.4% contours
+                for nSig in [sig1, sig2]:
+                    ell = Ellipse(xy=mean, width=2*nSig*A, height=2*nSig*B, angle=np.rad2deg(theta), zorder=10)
+                    axes.add_artist(ell)
+                    ell.set_clip_box(axes.bbox)
+                    if not True:
+                        ell.set_fill(False)
+                    else:
+                        ell.set_alpha(0.2)
+                        ell.set_facecolor("black")
+            else:
+                _a = np.linspace(0, 2*np.pi, 100)
+                ct, st = np.cos(theta), np.sin(theta)
+                _x, _y = A*np.cos(_a), B*np.sin(_a)
+                axes.plot(mean[0] + _x*ct - _y*st, mean[1] + _x*st + _y*ct, "k")
+            #
+            # Done with covariance
+            #
+            msg = "$%.3f, %.3f$\n$\\pm %.3f, %.3f$" % (mean[0], mean[1], stdev[0], stdev[1])
+            axes.plot(mean[0], mean[1], "k+", markersize=10)
+
+        axes.text(0.5, 0.70 if show_r_xy else 0.85, msg,
+                  fontsize="larger", ha="center", transform = axes.transAxes)
+
         axes.axvline(0, color="black", ls=":")
         axes.axhline(0, color="black", ls=":")
+    else:
+        show_r_xy = False
 
     if plotRaDec:
         xlabel = r"$\alpha$"
@@ -2766,13 +3018,27 @@ def _plotCCImpl(data, dataKeys, magType, SG, magmax=None, magmin=None, fig=None,
             lk1, lk2, lk3, lk4 = k1, k2, k3, k4
 
         if multiEpoch:
-            xlabel = "%s - %s" % (visitNames[lk1], visitNames[lk2])
-            ylabel = "%s - %s" % (visitNames[lk3], visitNames[lk4])
+            if deltaColor:
+                xlabel = "%s (%s)" % (filterNames[lk1], visitNames[lk1])
+                ylabel = r"$\Delta %s - %s$  [(%s-%s) - (%s-%s)]" % (filterNames[lk1], filterNames[lk2],
+                                                                     visitNames[lk1], visitNames[lk2],
+                                                                     visitNames[lk3], visitNames[lk4])
+            else:
+                xlabel = ("%s" % filterNames[lk1]) if filterNames[lk1] == filterNames[lk2] else \
+                    ("%s - %s" % (filterNames[lk1], filterNames[lk2]))
+                ylabel = ("%s" % filterNames[lk3]) if filterNames[lk3] == filterNames[lk4] else \
+                    ("%s - %s" % (filterNames[lk3], filterNames[lk4]))
+
+                xlabel += " [%s - %s]" % (visitNames[lk1], visitNames[lk2])
+                ylabel += " [%s - %s]" % (visitNames[lk3], visitNames[lk4])
+
         else:
             xlabel = "%s - %s" % (filterNames[lk1], filterNames[lk2])
             ylabel = "%s - %s" % (filterNames[lk3], filterNames[lk4])
         
-    axes.text(0.15, 0.1, magType, fontsize="larger", ha="center", transform = axes.transAxes)
+    axes.text(0.05, 0.1, magType + (r"  $r_{xy}=%.2f$" % r_xy if show_r_xy else ""),
+              #fontsize="larger",
+              ha="left", transform = axes.transAxes)
     if idN != idColorN:
         axes.text(0.80, 0.1, "legend: %s" % idColorN,
                   fontsize="larger", ha="center", transform = axes.transAxes)
@@ -2791,7 +3057,7 @@ def _plotCCImpl(data, dataKeys, magType, SG, magmax=None, magmin=None, fig=None,
         else:
             titlePos = "axes"
             
-        if magmax is not None:
+        if not deltaColor and magmax is not None:
             if magmin is not None:
                 title += " [%g < %s < %g]" % (magmin,
                                               data.mapperInfo.canonicalFiltername(filterNames[idN]), magmax)
@@ -2800,7 +3066,7 @@ def _plotCCImpl(data, dataKeys, magType, SG, magmax=None, magmin=None, fig=None,
 
         title += " %d objects" % nobj
 
-        title = re.sub(r"^\+\s*", data[idN].name + " ", title)
+        title = re.sub(r"^\+\s*", datasetName + "\n", title)
         if titlePos == "axes":
             axes.set_title(title)
         else:
@@ -2821,7 +3087,7 @@ def _plotCCImpl(data, dataKeys, magType, SG, magmax=None, magmin=None, fig=None,
     canonicalIds = ids[idN]
     if len(canonicalIds):
         did = data.mapperInfo.splitId(canonicalIds[0], asDict=True); del did["objId"]
-        md = data[idN].getDataset("calexp_md", did)[0]
+        md = data.getDataset("calexp_md", did)[0]
         xc += md.get("LTV1")
         yc += md.get("LTV2")
 
@@ -2843,32 +3109,47 @@ def _plotCCImpl(data, dataKeys, magType, SG, magmax=None, magmin=None, fig=None,
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-def plotSizes(data, magType="psf",
+def plotSizes(data, magType="psf", selectObjId=None,
               xmin=None, xmax=None, ymin=None, ymax=None,
-              title="+", markersize=1, fig=None):
+              title="+", markersize=1, fig=None, frames=[0]):
+    """
+If selectObjId is provided, it's a function that returns True or False for each object. E.g.
+    sel = makeSelectCcd(ccd=2)
+    plotSizes(..., selectObjId=utils.makeSelectCcd(2), ...)
+"""
+    
     try:
-        data.flags
+        data.cat
     except AttributeError:
         raise RuntimeError("Please call da.getMagsByVisit, then try again")
 
-    bad = np.bitwise_or(data.flags["INTERP_CENTER"], data.flags["EDGE"])
+    bad = reduce(lambda x, y: np.logical_or(x, data.cat.get(y)),
+                 ["flags.pixel.edge",
+                  "flags.pixel.bad",
+                  #"flags.pixel.interpolated.center",
+                  "flags.pixel.saturated.center",],
+                 False)
     good = np.logical_not(bad)
-
+    if selectObjId:
+        ids = data.cat.get("id")
+        good = np.logical_and(good, selectObjId(data, data.cat.get("id")))
+        ids = ids[good]
+        
     fig = getMpFigure(fig)
     axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
 
-    stellar = data.stellar[good] > 0.99
+    stellar = data.cat.get("classification.extendedness")[good] < 0.5
     nonStellar = np.logical_not(stellar)
 
     mag = data.getMagsByType(magType, good)
-    size = np.empty(len(data.shape[0]))
 
+    Ixx = data.cat.get("shape.sdss.xx")[good]
+    Ixy = data.cat.get("shape.sdss.xy")[good]
+    Iyy = data.cat.get("shape.sdss.yy")[good]
+
+    size = np.empty(len(Ixx))
     for i in range(len(size)):
-        Ixx = data.shape[0][i]
-        Ixy = data.shape[1][i]
-        Iyy = data.shape[2][i]
-        
-        q = afwGeom.ellipses.Quadrupole(Ixx, Iyy, Ixy)
+        q = afwGeom.ellipses.Quadrupole(Ixx[i], Iyy[i], Ixy[i])
         a = afwGeom.ellipses.Axes(q) # convert to (a, b, theta)
 
         size[i] = math.sqrt(a.getA()*a.getB())
@@ -2877,14 +3158,29 @@ def plotSizes(data, magType="psf",
     color2 = "green"
     axes.plot(mag[nonStellar], size[nonStellar], "o", markersize=markersize, markeredgewidth=0, color=color)
     axes.plot(mag[stellar], size[stellar], "o", markersize=markersize, markeredgewidth=0, color=color2)
-    axes.plot(mag[bad], size[bad], "+", markersize=markersize, markeredgewidth=0, color="red")
+    #axes.plot(mag[bad], size[bad], "+", markersize=markersize, markeredgewidth=0, color="red")
     #axes.plot((0, 30), (0, 0), "b-")
 
     axes.set_xlim(14 if xmin is None else xmin, 26 if xmax is None else xmax)
     axes.set_ylim(0.0 if ymin is None else ymin, 10 if ymax is None else ymax)
     axes.set_xlabel(magType)
     axes.set_ylabel(r"$\sqrt{a b}$ (pixels)", fontsize="larger")
-    axes.set_title(re.sub(r"^\+\s*", data.name + " ", title))
+    name = data.name if selectObjId is None else \
+        data.mapperInfo.dataIdToTitle(idsToDataIds(data, ids), data._rerun)
+    axes.set_title(re.sub(r"^\+\s*", name + " ", title))
+
+    global eventHandlers
+    flags = {}
+    try:
+        x = data.cat.getX()[good] # + md.get("LTV1")
+        y = data.cat.getY()[good] # + md.get("LTV2")
+    except pexExcept.LsstCppException, e:
+        if not re.search(r"pex::exceptions::LogicErrorException", e.message.getType()):
+            raise e
+        x = np.zeros_like(mag)
+        y = np.zeros_like(mag)
+        
+    eventHandlers[fig] = EventHandler(data, axes, mag, size, ids, x, y, flags, frames=frames)
 
     fig.show()
 
@@ -3019,9 +3315,9 @@ def getCanonicalFilterName(filterName):
 
 def plotCalibration(data, plotBand=0.05, magType='psf', magmin=14, maglim=20, eventHandler=False,
                     selectObjId=None, showCamera=False, correctRadial=False, plotRadial=False,
-                    showJacobian=False, correctJacobian=False, useDistortion=False,
-                    xmin=None, xmax=None, ymin=None, ymax=None,
-                    markersize=2, alpha=1.0, title="+", showMedians=False,
+                    showJacobian=False, correctJacobian=False, useDistortion=False, showZP=False,
+                    xmin=None, xmax=None, ymin=None, ymax=None, meanDelta=0.0,
+                    markersize=2, alpha=1.0, title="+", showMedians=False, overlay=True,
                     frame=None, ctype=None, ds9Size=None, fig=None):
     """Plot (instrumental - reference) v. reference magnitudes given a Data object.
 
@@ -3032,11 +3328,15 @@ If selectObjId is provided, it's a function that returns True or False for each 
 
 Use the matplotlib Figure object fig; if none is provided it'll be created and saved in data (and if it's true, a new one will be created)
 
+If showZP is True, the data plotted is the per-CCD zeropoint
+
 if eventHandler is true, make the points in the plot live
     
 If plotBand is provided, draw lines at +- plotBand
 
 If title is provided it's used as a plot title; if it starts + the usual title is prepended
+
+If overlay is true, overlay the CCDs' boundaries and IDs
 """
     if not data.matchedCalibs:
         raise RuntimeError("You need to call the Data.getCalibObjects method before calling this routine")
@@ -3047,6 +3347,10 @@ If title is provided it's used as a plot title; if it starts + the usual title i
     referenceSuffix="_1"
     good = np.logical_and(data.matchedCalibs["stargal" + referenceSuffix],
                           np.logical_not(data.matchedCalibs["flags.pixel.saturated.center" + sourceSuffix]))
+    good = np.logical_and(good,
+                          np.logical_not(data.matchedCalibs["flags.pixel.edge" + sourceSuffix]))
+    if selectObjId:
+        good = np.logical_and(good, selectObjId(data, data.matchedCalibs.get("id")))
     magTypeName = "sinc" if magType == "ap" else "deconvolvedPsf" if magType == "inst" else magType
     flux = data.matchedCalibs.get("flux.%s%s" % (magTypeName, sourceSuffix))[good]
     
@@ -3117,19 +3421,25 @@ If title is provided it's used as a plot title; if it starts + the usual title i
     if showJacobian:
         delta = jacobian
         title = "+ Jacobian"
+    elif showZP:
+        delta = zp
+        title += " Zero Points"
+        if correctJacobian:
+            delta += 2.5*np.log10(jacobian)
+
     else:
         delta = refmag - instmag
 
     try:
-        stats = afwMath.makeStatistics(delta[np.logical_and(refmag > magmin, refmag < maglim)],
+        stats = afwMath.makeStatistics(delta[np.logical_and(refmag >= magmin, refmag <= maglim)] - meanDelta,
                                        afwMath.STDEVCLIP | afwMath.MEANCLIP)
-        mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
+        mean, stdev = stats.getValue(afwMath.MEANCLIP) + meanDelta, stats.getValue(afwMath.STDEVCLIP)
     except Exception, e:
         print "Failed to estimate mean: %s" % e
         mean, stdev = float("NaN"), float("NaN")
         
     if showCamera or plotRadial:
-        inRange = np.logical_and(refmag > magmin, refmag < maglim)
+        inRange = np.logical_and(refmag >= magmin, refmag <= maglim)
 
         if plotRadial:
             r = np.hypot(xmm, ymm)
@@ -3152,6 +3462,9 @@ If title is provided it's used as a plot title; if it starts + the usual title i
             axes.set_ylabel("Y (mm)")
             
             title += " %s" % magType
+
+            if overlay:
+                overlayCcds(camera, axes) 
     else:
         axes.plot(refmag, delta, "k.", markersize=markersize, alpha=alpha, markeredgewidth=0)
 
@@ -3182,7 +3495,9 @@ If title is provided it's used as a plot title; if it starts + the usual title i
 
     fig.text(0.2, 0.85, r"$%.3f \pm %.3f$" % (mean, stdev), fontsize="larger")
 
-    name = data.name if selectObjId is None else data.mapperInfo.dataIdToTitle(idsToDataIds(data, ids))
+    name = data.name if selectObjId is None else \
+        data.mapperInfo.dataIdToTitle(idsToDataIds(data, ids), data._rerun)
+
     axes.set_title(re.sub(r"^\+\s*", name + " ", title))
     #
     # Make "i" print the object's ID, p pan ds9, etc.
@@ -3326,6 +3641,67 @@ Stars are green; galaxies are red based on our processing
                     ctype = ds9.BLUE
 
             ds9.dot(ptype, x1, y1, ctype=ctype)
+
+def plotZeroPoints(data, selectObjId=None,
+                   correctJacobian=False,
+                   ymin=None, ymax=None, title="+", markersize=1, fig=None):
+    """Plot the per-CCD zeropoints (only for visit == visit if non-None)
+
+If selectObjId is provided, it's a function that returns True or False for each CCD. E.g.
+    plotZeroPoints(..., selectObjId=makeSelectVisit(visit=902040), ...)   
+
+    """
+    fig = getMpFigure(fig)
+
+    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
+
+    dataSets = data.dataSets
+    if selectObjId:
+        dataSets = [did for did in dataSets if selectObjId(data, did)]
+    #
+    # Get focal-plane positions ("mm" -- for HSC they are actually in units of 15 micron pixels)
+    #
+    camera = data.butler.get("camera")
+    dist = camera.getDistortion()
+
+    xmm = np.empty(len(dataSets)); ymm = np.empty_like(xmm)
+    zp = np.empty_like(xmm); jacobian = np.empty_like(xmm)
+    for i, did in enumerate(dataSets):
+        calexp_md = data.butler.get(dtName("calexp", True), **did)
+        w, h = calexp_md.get("NAXIS1"), calexp_md.get("NAXIS2")
+
+        ccd = cameraGeomUtils.findCcd(camera, cameraGeom.Id(did["ccd"]))
+        xmm[i], ymm[i] = ccd.getPositionFromPixel(afwGeom.PointD(0.5*w, 0.5*h)).getMm()
+
+        calib = afwImage.Calib(calexp_md)
+        zp[i] = calib.getMagnitude(1.0)
+
+        jacobian[i] = dist.computeQuadrupoleTransform(afwGeom.PointD(xmm[i], ymm[i]),
+                                                      False).computeDeterminant()
+
+    if correctJacobian:
+        zp += 2.5*np.log10(jacobian)
+        title += " (Jacobian corr from Distort)"
+
+    if len(xmm) == 0:
+        raise RuntimeError("I'm afraid that I have no points to plot")
+
+    sc = axes.scatter(xmm, ymm, c=zp, norm=pyplot.Normalize(ymin, ymax),
+                      cmap=pyplot.cm.rainbow, marker="o", s=10*markersize, edgecolors="none")
+    fig.colorbar(sc)
+    axes.set_aspect('equal')
+
+    name = data.name if selectObjId is None else data.mapperInfo.dataIdToTitle(dataSets, data._rerun)
+    axes.set_title(re.sub(r"^\+\s*", "Zeropoints " + name + " ", title))
+    
+    #
+    # Make "z" print the z-axis (zp)
+    #
+    global eventHandlers
+    eventHandlers[fig] = EventHandler(data, axes, xmm, ymm, zp)
+    fig.show()
+
+    return fig
 
 def showPsfs(data, psfs, frame=None):
     mos = ds9Utils.Mosaic()
@@ -3618,6 +3994,11 @@ def showSourceSet(sourceSet, exp=None, wcs=None, xy0=None, raDec=None, magmin=No
     If nSource > 0, only show the nSource objects with the brightest psf flux
     If mask, it's a set of bitplane names (e.g. INTERP) which must be set to display the source"""
     
+    try:
+        sourceSet.getColumnView()
+    except:
+        sourceSet = sourceSet.copy(True)
+
     if mask:
         bmask = 0L
         for name in mask:
@@ -3652,9 +4033,16 @@ def showSourceSet(sourceSet, exp=None, wcs=None, xy0=None, raDec=None, magmin=No
         doNotShow = np.zeros(len(sourceSet))
 
     # modelMags not available?  Use sourceSet.get("multishapelet.combo.flux") ??
-    isStar = (sourceSet.get("classification.extendedness") < 0.5)
+    try:
+        isStar = (sourceSet.get("classification.extendedness") < 0.5)
+        isStar = np.logical_or(isStar, sourceSet.get("flags.pixel.saturated.center"))
+    except KeyError:
+        isStar = True
 
-    isStar = np.logical_or(isStar, sourceSet.get("flags.pixel.saturated.center"))
+    try:
+        sourceSet.get("parent")
+    except:
+        deblend = False
 
     if xy0 is None:
         x0, y0 = exp.getXY0() if exp else [0.0, 0.0]
@@ -4209,11 +4597,65 @@ def getFlux(s, magType="psf"):
     elif magType == "psf":
         return s.getPsfFlux()
     else:
-        raise RuntimeError("Uknown magnitude type %s" % magType)
+        raise RuntimeError("Unknown magnitude type %s" % magType)
+
+def subtractBackground(image, nsigma=5, boxSize=1024, method="fit"):
+    if method == "min":
+        arr = image.getArray().flatten()
+        arr.sort()
+        bkgd = float(arr[len(arr)//100])
+        image -= bkgd
+    elif method == "plane":
+        arr = image[0:1000, 0:1000].getArray().flatten()
+        arr.sort()
+        valLL = float(arr[len(arr)//100])
+
+        arr = image[-1000:-1, -1000:-1].getArray().flatten()
+        arr.sort()
+        valUR = float(arr[len(arr)//100])
+
+        width, height = image.getDimensions()
+        xx = np.arange(width)
+        for y in range(height):
+            image.getArray()[y, xx] -= valLL + 0.5*(y/(height - 1.0) + xx/(width - 1.0))*(valUR - valLL)
+
+        bkgd = None
+    elif method == "fit":
+        sdConfig = SourceDetectionTask.ConfigClass(None)
+        sdConfig.reEstimateBackground = True
+        sdConfig.thresholdPolarity = "both"
+        sdConfig.thresholdType = 'value'
+        stats = afwMath.makeStatistics(image, afwMath.MEANCLIP | afwMath.STDEVCLIP)
+        image -= stats.getValue(afwMath.MEANCLIP)
+        sdConfig.thresholdValue = nsigma*stats.getValue(afwMath.STDEVCLIP)
+
+        sdConfig.background.binSize = boxSize
+        try:
+            sdConfig.background.isNanSafe = True
+        except AttributeError:
+            pass
+        sdConfig.background.undersampleStyle = "REDUCE_INTERP_ORDER"
+
+        sdTask = SourceDetectionTask(None, config=sdConfig)
+
+        try:
+            image.getImage
+        except AttributeError:
+            image = afwImage.makeMaskedImage(image)
+            
+        exp = afwImage.makeExposure(image)
+        bkgd = sdTask.detectFootprints(exp, sigma=1).background
+        del exp
+    else:
+        raise RuntimeError("I don't know how to subtract a background using method %s" % method)
+
+    return bkgd
 
 def writeRgb(images, rgbFile, min=0, max=50, Q=8, bin=1, scales=[1.0, 1.0, 1.0],
+             fixSaturation=False, saveFmt=None,
              subtractBkgd=False, boxSize=1024, nsigma=5):
     """Convert the list of images to a true-colour image, and write it to rgbFile (currently .png or .tiff)
+The order is R, G, B (e.g. i, r, g)
 
 Scale the images by scales, if provided
 
@@ -4221,10 +4663,15 @@ The default stretch is an asinh stretch; Q == 0 corresponds to a linear.  If Q =
 the range of the stretch; as Q increases they still define the slope of the linear portion of the stretch
 
 If bin is specified, it should be an integer > 1;  the output file will be binned by that factor.
+
+If saveFmt is non-None it's taken to be a string with a single %s which will be replaced by "R", "G", and "B"
+when writing the final images to disk
     """
     
     if not afwRgb:
         raise RuntimeError("I was unable to import lsst.afw.extensions.rgb")
+
+    R, G, B = 0, 1, 2
 
     try:
         image = images[:]
@@ -4239,15 +4686,48 @@ If bin is specified, it should be an integer > 1;  the output file will be binne
         raise RuntimeError("Please specify one or three images, not %d" % len(images)) 
 
     for i, image in enumerate(images):
-        copied = False                    # have we made a copy?
         #
-        # Handle Exposures and MaskedImages
+        # Handle Exposures
         #
         try:
             image = image.getMaskedImage()    # maybe it's an Exposure
         except AttributeError:
             pass
 
+        images[i] = image
+
+    if fixSaturation:
+        bctrl = afwMath.BackgroundControl(image.getWidth()//boxSize, image.getHeight()//boxSize)
+
+        brightLevel = 130
+        for i, image in enumerate(images):
+            image = image.clone()
+            images[i] = image
+
+            backobj = afwMath.makeBackground(image.getImage(), bctrl)
+            bkgd = backobj.getImageF(afwMath.Interpolate.AKIMA_SPLINE, afwMath.REDUCE_INTERP_ORDER)
+
+            image.getImage()[:] -= bkgd
+
+            img = image.getImage().getArray()
+            msk = image.getMask().getArray()
+            SAT = image.getMask().getPlaneBitMask(["SAT", "INTRP"])
+
+            msk[np.where(img < brightLevel)] &= ~SAT
+
+            image += bkgd
+
+        saturValue = np.nan if True else 2000
+        afwRgb.replaceSaturatedPixels(images[R], images[G], images[B], 2, saturValue)
+
+    for i, image in enumerate(images):
+        copied = False                    # have we made a copy?
+
+        if fixSaturation:
+            copied = True
+        #
+        # Handle MaskedImages
+        #
         try:
             image = image.getImage()          # maybe it's (now) a MaskedImage
         except AttributeError:
@@ -4259,36 +4739,19 @@ If bin is specified, it should be an integer > 1;  the output file will be binne
 
         if scales[i] != 1.0:
             if not copied:
-                image = image.Factory(image, True)
+                image = image.clone()
                 copied = True
 
-            image *= scales[i]
+            image *= float(scales[i])
 
         if subtractBkgd:
             if not copied:
-                image = image.Factory(image, True)
+                image = image.clone()
                 copied = True
- 
-            sdConfig = SourceDetectionTask.ConfigClass(None)
-            sdConfig.reEstimateBackground = True
-            sdConfig.thresholdPolarity = "both"
-            sdConfig.thresholdType = 'value'
-            stats = afwMath.makeStatistics(image, afwMath.MEANCLIP | afwMath.STDEVCLIP)
-            image -= stats.getValue(afwMath.MEANCLIP)
-            sdConfig.thresholdValue = nsigma*stats.getValue(afwMath.STDEVCLIP)
 
-            sdConfig.background.binSize = boxSize
-            try:
-                sdConfig.background.isNanSafe = True
-            except AttributeError:
-                pass
-            sdConfig.background.undersampleStyle = "REDUCE_INTERP_ORDER"
-
-            sdTask = SourceDetectionTask(None, config=sdConfig)
-
-            exp = afwImage.makeExposure(afwImage.makeMaskedImage(image))
-            sdTask.detectFootprints(exp)
-            del exp
+            if isinstance(subtractBkgd, bool):
+                subtractBkgd = "fit"
+            subtractBackground(image, nsigma, boxSize, subtractBkgd)
 
         images[i] = image
 
@@ -4301,7 +4764,12 @@ If bin is specified, it should be an integer > 1;  the output file will be binne
 
             break            
 
-    afwRgb.RgbImageF(images[0], images[1], images[2], afwRgb.asinhMappingF(min, max - min, Q)).write(rgbFile)
+    afwRgb.RgbImageF(images[R], images[G], images[B], afwRgb.asinhMappingF(min, max - min, Q)).write(rgbFile)
+
+    if saveFmt:
+        images[R].writeFits(saveFmt % "R")
+        images[G].writeFits(saveFmt % "G")
+        images[B].writeFits(saveFmt % "B")
 
 def grayScale(image, rgbFile, min=0, max=50, Q=8, bin=1):
     """Write a grayscale file (currently png or tiff) to rgbFile
@@ -4400,7 +4868,7 @@ def assembleCcdSubaru(dataType, butler, dataId, fixAmpLevels=False):
 
 class EventHandler(object):
     """A class to handle key strokes with matplotlib displays"""
-    def __init__(self, data, axes, xs, ys, ids, x, y, flags, frames=[0], wcss=[], selectWcs=0):
+    def __init__(self, data, axes, xs, ys, ids, x=None, y=None, flags={}, frames=[0], wcss=[], selectWcs=0):
         self.data = data
         self.axes = axes
         self.xs = xs
@@ -4435,19 +4903,28 @@ Options:
    h, H    Print this message
    p, P    Pan to the object in ds9 in all the frames specified to the event handler; 'P' also prints a newline
    i, I    Print info about the object; 'I' also prints a newline
+   z, Z    Print raw "ids" array about the object; 'Z' also prints a newline
 
 If utils.eventCallbacks[ev.key] is defined it'll be called with arguments:
    ev.key, source, maskedImage, frame
 (see utils.kronCallback for an example)
 """,
             return
-        elif ev.key.lower() in ("dip"):
+        elif ev.key.lower() in ("dipz"):
             dist = np.hypot(self.xs - ev.xdata, self.ys - ev.ydata)
             dist[np.where(np.isnan(dist))] = 1e30
             dmin = min(dist)
 
             which = np.where(dist == min(dist))
             objId = self.ids[which][0]
+
+            if ev.key in "zZ":
+                print "\r>>>",
+                print "%.3f %.3f %g%20s\r" % (self.xs[which][0], self.ys[which][0], objId, ""),
+                sys.stdout.flush()
+                if ev.key.isupper():
+                    print ""
+                return
 
             flagsInfo = []
             for k in sorted(self.flags.keys()):
@@ -4509,46 +4986,215 @@ If utils.eventCallbacks[ev.key] is defined it'll be called with arguments:
         else:
             pass
 
-def showPsfResiduals(data, dataId, fluxLim=9e4, sigma=0, frame=0, **kwargs):
-    """Suprime cam specific!"""
-    dataId = dict(visit = dataId[_visit_])
+#-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-    mos = ds9Utils.Mosaic(gutter=4, background=-10)
 
-    for ccd in (8, 9, 5, 4, 3, 6, 7, 2, 1, 0,):
-        dataId["ccd"] = ccd
+#-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-        calexp = data.getDataset("calexp", dataId)[0]
+class PsfModelImage(cameraGeomUtils.GetCcdImage):
+    """A class to return an Image of a given Ccd based on its cameraGeometry"""
+    
+    def __init__(self, butler, bin=10, background=np.nan, verbose=False, stampSize=0, *args, **kwargs):
+        """Initialise
+        gravity  If the image returned by the butler is trimmed (e.g. some of the SuprimeCam CCDs)
+                 Specify how to fit the image into the available space; N => align top, W => align left
+        background  The value of any pixels that lie outside the CCDs
+        """
+        super(PsfModelImage, self).__init__(*args)
+        self.butler = butler
+        self.verbose = verbose
+        self.kwargs = kwargs
+        self.bin = bin
+        self.stampSize = stampSize
+        self.imageIsBinned = True       # i.e. images returned by getImage are already binned
 
-        ss = [s for s in data.getSources(dataId)[0] if
-              s.getPsfFlux() > fluxLim and not getFlagForDetection(s, "SATUR") and
-              abs(2.5*math.log10(s.getPsfFlux()/s.getApFlux())) < 0.05]
-        im = maUtils.showPsfResiduals(calexp, ss, frame=None, **kwargs)
-        if sigma > 0:
-            gaussFunc = afwMath.GaussianFunction1D(sigma)
-            kernel = afwMath.SeparableKernel(int(5*sigma), int(5*sigma), gaussFunc, gaussFunc)
-            cim = im.getImage().Factory(im.getImage(), True)
-            afwMath.convolve(cim, im.getImage(), kernel)
+        self.isRaw = False
+        
+        self.gravity = None
+        self.background = background
+
+    def getImage(self, ccd, amp=None, imageFactory=None):
+        """Return an image of the specified amp in the specified ccd"""
+
+        ccdNum = ccd.getId().getSerial()
+
+        try:
+            if self.kwargs.get("ccd") is not None and self.kwargs.get("ccd") != ccdNum:
+                raise RuntimeError
+
+            dataId = self.kwargs
+            if dataId.has_key("ccd"):
+                dataId = self.kwargs.copy()
+                del dataId["ccd"]
+
+            bbox = afwGeom.Box2I(afwGeom.Point2I(), afwGeom.Extent2I(1,1))
+            psf = self.butler.get("calexp_sub", bbox=bbox,
+                                  ccd=ccd.getId().getSerial(), **self.kwargs).getPsf()
+
+            w, h =  ccd.getAllPixels(True).getDimensions()
+            binnedW, binnedH = w//self.bin, h/self.bin
+            if self.stampSize:
+                psfW, psfH = self.stampSize, self.stampSize
+            else:
+                psfW, psfH = psf.computeImage(afwGeom.PointD(0, 0)).getDimensions()
+
+            nx = binnedW/psfW
+            while nx*psfW > binnedW:
+                if nx == 1:
+                    break
+                nx -= 1
+            mos = maUtils.showPsfMosaic((w, h), psf, nx=nx,
+                                        showCenter=False, showEllipticity=False, showFwhm=False,
+                                        stampSize=self.stampSize)
+            mos.gutter = 0
+            im = mos.makeMosaic(mode=nx)
+        except Exception, e:
+            if self.verbose and str(e):
+                print e
+
+            im = afwImage.ImageF(*ccd.getAllPixels(self.isTrimmed).getDimensions())
+            if self.bin:
+                im = afwMath.binImage(im, self.bin)
+
+        return im
+
+        
+def showPsfModelImage(butler, visit, bin=20, stampSize=0, frame=0, verbose=False, title=None):
+    """Show a mosaic of PSF mosaics"""
+    cameraImage = cameraGeomUtils.showCamera(butler.get("camera"),
+                                    PsfModelImage(butler, visit=visit, verbose=verbose,
+                                                  stampSize=stampSize, bin=bin),
+                                    frame=frame, bin=bin, title=title)
+    if frame is not None:
+        xy0 = afwGeom.ExtentI(cameraImage.getXY0())
+
+        if butler.get("camera").getId().getName() == "HSC":
+            ds9.dot("o", 0/bin - xy0[0], -136/bin - xy0[1], size=18280/bin,
+                    frame=frame, ctype=ds9.RED)
+
+    return cameraImage
+
+#-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+class ResidualImage(cameraGeomUtils.GetCcdImage):
+    """A class to return an Image of a given Ccd based on its cameraGeometry"""
+    
+    def __init__(self, butler, magMin=None, magLim=30, magType="psf", apCorr=1.0, showPsfStars=False,
+                 bin=10, background=np.nan, sigma=0, verbose=False, *args, **kwargs):
+        """Initialise
+        gravity  If the image returned by the butler is trimmed (e.g. some of the SuprimeCam CCDs)
+                 Specify how to fit the image into the available space; N => align top, W => align left
+        background  The value of any pixels that lie outside the CCDs
+        """
+        super(ResidualImage, self).__init__(*args)
+        self.butler = butler
+        self.verbose = verbose
+        self.kwargs = kwargs
+        self.sigma = sigma
+        self.bin = bin
+        self.magMin = magMin
+        self.magLim = magLim
+        self.magType = magType
+        self.imageIsBinned = True       # i.e. images returned by getImage are already binned
+        self.apCorr = apCorr
+        self.showPsfStars = showPsfStars
+
+        self.isRaw = False
+        
+        self.gravity = None
+        self.background = background
+
+    def getImage(self, ccd, amp=None, imageFactory=None):
+        """Return an image of the specified amp in the specified ccd"""
+
+        ccdNum = ccd.getId().getSerial()
+
+        try:
+            if self.kwargs.get("ccd") is not None and not ccdNum in self.kwargs.get("ccd"):
+                raise RuntimeError
+
+            dataId = self.kwargs
+            if dataId.has_key("ccd"):
+                dataId = self.kwargs.copy()
+                del dataId["ccd"]
+
+            calexp = self.butler.get("calexp", ccd=ccdNum, immediate=True, **dataId)
+        except Exception, e:
+            if self.verbose and str(e):
+                print e
+
+            ccdImage = afwImage.ImageF(*ccd.getAllPixels(self.isTrimmed).getDimensions())
+            if self.bin:
+                ccdImage = afwMath.binImage(ccdImage, self.bin)
+
+            return ccdImage
+
+        ss = self.butler.get("src",  ccd=ccdNum, **dataId)
+        
+        calib = calexp.getCalib()
+        if calib.getFluxMag0()[0] > 0.0:
+            with afwImageUtils.CalibNoThrow():
+                psfMag = np.array(calib.getMagnitude(ss.getPsfFlux()))
+        else:
+            print >> sys.stderr, "CCD %d has fluxMag0 <= 0.0; showing all stars" % ccdNum
+            psfMag = np.zeros(len(ss)) + 0.9999*self.magLim
+
+        good = np.logical_and(psfMag < self.magLim, np.logical_not(ss.get("flags.pixel.saturated.any")))
+        if self.magMin is not None:
+            good = np.logical_and(good, psfMag > self.magMin)
+        isStar = ss.get("classification.extendedness") < 0.5
+        good = np.logical_and(good, isStar)
+        good = np.logical_and(good, ss.get("deblend.nchild") == 0)
+        if self.showPsfStars:
+            good = np.logical_and(good, ss.get("calib.psf.used"))
+
+        im = maUtils.showPsfResiduals(calexp, ss[good], scale=self.bin,
+                                      magType=self.magType, apCorr=self.apCorr, frame=None).getImage()
+
+        if self.sigma > 0:
+            gaussFunc = afwMath.GaussianFunction1D(self.sigma)
+            kernel = afwMath.SeparableKernel(int(5*self.sigma), int(5*self.sigma), gaussFunc, gaussFunc)
+            cim = im.clone()
+            afwMath.convolve(cim, im, kernel)
             im = cim
 
-        mos.append(im, "%d" % ccd)
+        # showPsfResiduals pads the image to allow psfs that hang over the edge
+        psfWidth, psfHeight = calexp.getPsf().getLocalKernel().getDimensions()
+        im = im[afwGeom.BoxI(afwGeom.PointI(psfWidth//2, psfHeight//2),
+                             afwGeom.ExtentI(calexp.getWidth()//self.bin, calexp.getHeight()//self.bin))]
 
-    return mos.makeMosaic(frame=frame, title="%s %s" % (data.name.split()[-1], data.name.split()[0][-5:-1]), mode=5)
+        return im
+    
+
+def showPsfResiduals(data, dataId, magMin=None, magLim=23, magType="psf", showPsfStars=False, bin=10, sigma=0, frame=0, verbose=False):
+    """Show the residuals resulting from subtracting PSFs from an image (the background
+    is scaled down by bin)"""
+    return cameraGeomUtils.showCamera(data.butler.get("camera"),
+                                      ResidualImage(data.butler, bin=bin, sigma=sigma, verbose=verbose,
+                                                    magMin=magMin, magLim=magLim, magType=magType,
+                                                    showPsfStars=showPsfStars, **dataId),
+                                      bin=bin, frame=frame)
 
 def showStackedPsfResiduals(data=None, dataId={}, exposure=None, sourceSet=None, sigma=None,
-                            magType="psf", magMin=14, magMax=22, dmag=0.5, gutter=4,
-                            normalize=True, frame=None):
+                            magType="psf", magMin=14, magMax=22, dmag=0.5, gutter=4, title="+",
+                            referencePsf=0, normalizeReferenceFlux=False,
+                            normalize=True, frame0=None):
     """Stack PSF residuals binned by magnitude"""
 
     if not exposure or not sourceSet:
         if not (data and dataId):
             raise RuntimeError("Please specify Data and dataId or an exposure and sourceSet")
-        if not exposure:
-            exposure = data.getDataset("calexp", dataId)[0]
+        if exposure:
+            exposures = [exposure]
+        else:
+            exposures = data.getDataset("calexp", dataId)
                 
-        if not sourceSet:
-            sourceSet = data.getSources(dataId)[0]
+        if sourceSet:
+            sourceSets = [sourceSet]
+        else:
+            sourceSets = data.getSources(dataId) # should make a single sourceSet here
 
+    exposure = exposures[0]
     mimIn = exposure.getMaskedImage()
     mimIn = mimIn.Factory(mimIn, True)  # make a copy to subtract from
 
@@ -4566,48 +5212,63 @@ def showStackedPsfResiduals(data=None, dataId={}, exposure=None, sourceSet=None,
 
     residualImages = []
     for i in range(nbin):
-        residualImages.append([Image(psfWidth, psfHeight), Image(psfWidth, psfHeight),
-                               magMin + (i + 0.5)*dmag, 0])
+        residualImages.append([afwImage.vectorImageF(), afwImage.vectorImageF(), magMin + (i + 0.5)*dmag, 0])
 
-    for s in sourceSet:
-        x, y = s.getX(), s.getY()
-        
-        try:
-            flux = getFlux(s, magType)
-            mag = exposure.getCalib().getMagnitude(flux)
+    for i, sourceSet in enumerate(sourceSets):
+        exposure = exposures[i]
+        mimIn = exposure.getMaskedImage()[:]
+        psf = exposure.getPsf()
 
-            if not (magMin <= mag <= magMax):
+        for s in sourceSet:
+            x, y = s.getX(), s.getY()
+
+            try:
+                flux = getFlux(s, magType)
+                mag = exposure.getCalib().getMagnitude(flux)
+
+                if not (magMin <= mag <= magMax):
+                    continue
+
+                if s.get("flags.pixel.saturated.center") or \
+                        abs(2.5*math.log10(s.getPsfFlux()/s.getApFlux())) > 0.05:
+                    continue
+
+                bbox = afwGeom.BoxI(afwGeom.PointI(int(x) - psfWidth//2, int(y) - psfHeight//2),
+                                    afwGeom.ExtentI(psfWidth, psfHeight))
+                dx, dy = x - int(x), y - int(y) # offset from centre of subimage
+
+                residualImages[bin(mag)][0].push_back(afwMath.offsetImage(Image(mimIn.getImage(),
+                                                                                bbox, afwImage.PARENT),
+                                                                          -dx, -dy))
+                flux = np.nan           # i.e. fit the amplitude
+                chi2 = measAlg.subtractPsf(psf, mimIn, x, y, flux)
+            except (pexExcept.LsstCppException, ValueError), e:
                 continue
 
-            if getFlagForDetection(s, "SATUR") or \
-                    abs(2.5*math.log10(s.getPsfFlux()/s.getApFlux())) > 0.05:
-                continue
+            expIm = Image(mimIn.getImage(), bbox, afwImage.PARENT)
+            expIm = afwMath.offsetImage(expIm, -dx, -dy)
 
-            bbox = afwGeom.BoxI(afwGeom.PointI(int(x) - psfWidth//2, int(y) - psfHeight//2),
-                                afwGeom.ExtentI(psfWidth, psfHeight))
-            dx, dy = x - int(x), y - int(y) # offset from centre of subimage
-
-            residualImages[bin(mag)][0] += afwMath.offsetImage(Image(mimIn.getImage(),
-                                                                     bbox, afwImage.PARENT), -dx, -dy)
-            flux = np.nan
-            chi2 = measAlg.subtractPsf(psf, mimIn, x, y, flux)
-        except (pexExcept.LsstCppException, ValueError), e:
-            continue
-
-        expIm = Image(mimIn.getImage(), bbox, afwImage.PARENT)
-        expIm = afwMath.offsetImage(expIm, -dx, -dy)
-
-        residualImages[bin(mag)][1] += expIm
-        residualImages[bin(mag)][3] += 1
+            residualImages[bin(mag)][1].push_back(expIm)
+            residualImages[bin(mag)][3] += 1
         
     objects = ds9Utils.Mosaic(gutter=gutter)
     residuals = ds9Utils.Mosaic(gutter=gutter)
 
-    for obj, res, mag, n in residualImages:
+    sctrl = afwMath.StatisticsControl()
+    for i, vals in enumerate(residualImages):
+        obj, res, mag, n = vals
+        try:
+            obj = afwMath.statisticsStack(obj, afwMath.MEANCLIP, sctrl)
+            res = afwMath.statisticsStack(res, afwMath.MEANCLIP, sctrl)
+        except:
+            obj, res = Image(psfWidth, psfHeight), Image(psfWidth, psfHeight)
+
         if normalize and n > 0:
             peak = afwMath.makeStatistics(obj, afwMath.MAX).getValue()
             obj /= peak
             res /= peak
+
+        residualImages[i] = (obj, res, mag, n,)
 
         if sigma > 0:
             gaussFunc = afwMath.GaussianFunction1D(sigma)
@@ -4619,12 +5280,38 @@ def showStackedPsfResiduals(data=None, dataId={}, exposure=None, sourceSet=None,
         lab = "%.2f %d" % (mag, n) if n else ""
         objects.append(obj, lab)
         residuals.append(res, lab)
-        
-    title = str(exposure.getDetector().getId())
+    #
+    # Now subtract the brightest star from all the others
+    #
+    starResiduals = ds9Utils.Mosaic(gutter=gutter)
+    referencePsfNo = referencePsf
+    referencePsf = objects.images[referencePsf].clone()
+    if normalizeReferenceFlux:
+        referencePsf /= float(referencePsf.getArray().sum())
+
+    for i, val in enumerate(residualImages):
+        obj, _, mag, n = val
+        res = obj.clone()
+
+        if res.getArray().sum() > 0:
+            if i == referencePsfNo:
+                X, Y = np.meshgrid(range(res.getWidth()), range(res.getHeight()))
+                res.getArray()[:] = 2e-3*np.where((X + Y)%2 == 1, 1, -1)
+            else:
+                if normalizeReferenceFlux:
+                    res.getArray()[:] -= referencePsf.getArray()*res.getArray().sum()
+                else:
+                    res -= referencePsf
+
+        lab = "%.2f %d" % (mag, n) if n else ""
+        starResiduals.append(res, lab)
+
+    title = re.sub(r"^\+\s*", " " + str(exposure.getDetector().getId()), title)
     mosaics = []
-    nx = 2
-    mosaics.append(objects.makeMosaic(mode=nx, title=title, frame=frame))
-    mosaics.append(residuals.makeMosaic(mode=nx, title=title, frame=None if frame is None else frame+1))
+    nx = int(1/dmag + 0.5)
+    mosaics.append(residuals.makeMosaic(    mode=nx, title=title, frame=frame0))
+    mosaics.append(starResiduals.makeMosaic(mode=nx, title=title, frame=None if frame0 is None else frame0+1))
+    mosaics.append(objects.makeMosaic(      mode=nx, title=title, frame=None if frame0 is None else frame0+2))
     mosaics.append([(mag, n) for obj, res, mag, n in residualImages])
 
     return mosaics
@@ -4634,8 +5321,7 @@ def showStackedPsfResidualsCamera(data, dataId, frame=0, overlay=False, normaliz
     Show the stackedPsfResiduals laid out in true camera positions (unless overlay is True, in which case the
     chip are simply added
 
-    Position of CCDs in Suprime cam specific!
-
+    Position of CCDs in Suprime cam specific! (See rewrite of showPsfResiduals)
     """
 
     subGutter, gutter = 4, 2
@@ -4651,7 +5337,7 @@ def showStackedPsfResidualsCamera(data, dataId, frame=0, overlay=False, normaliz
 
         try:
             object, resid, labels = showStackedPsfResiduals(data, dataId, normalize=not overlay and normalize,
-                                                            gutter=subGutter, frame=None, **kwargs)
+                                                            gutter=subGutter, frame0=None, **kwargs)
         except (RuntimeError, TypeError), e:
             print "Failed to return residuals for %s: %s" % (dataId, e)
             continue
@@ -4703,6 +5389,51 @@ def showStackedPsfResidualsCamera(data, dataId, frame=0, overlay=False, normaliz
                 ds9.dot(lab, x, y, frame=frame)
 
     return im
+
+
+def comparePsfModels(da1, da2, dataId, nx=3, stampSize=0):
+    """Compare the PSF models from da1 and da2, returning a mosaic of the difference"""
+    dataIds = da1.expandDataId(dataId)
+
+    n = 0
+    ims = {}
+    onePixel = afwGeom.BoxI(afwGeom.PointI(0, 0), afwGeom.PointI(1, 1))
+    dims = da1.butler.get("calexp", **dataIds[0]).getDimensions()
+    for did in dataIds:
+        for da in (da1, da2):
+            try:
+                psf = da.butler.get("calexp_sub", bbox=onePixel, **did).getPsf()
+            except Exception, e:
+                print "comparePsfModels reading %s: %s", (did, e)
+                ims[da] = None          # continue the outer loop
+                continue
+            try:
+                ims[da] = maUtils.showPsfMosaic(dims, psf, stampSize=stampSize, nx=nx).makeMosaic(mode=nx)
+            except Exception, e:
+                print "comparePsfModels, %s: %s", (did, e)
+                ims[da] = None          # continue the outer loop
+                continue
+
+        if ims[da] == None:
+            continue
+            
+        if n == 0:
+            res = ims[da1].clone(); res[:] = 0
+            im1 = ims[da1].clone()
+            im2 = ims[da2].clone()
+        else:
+            im1 += ims[da1]
+            im2 += ims[da2]
+
+        ims[da1] -= ims[da2]
+        res += ims[da1]
+        n += 1
+
+    res /= n
+    im1 /= n
+    im2 /= n
+
+    return res, [im1, im2]
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
@@ -4918,8 +5649,8 @@ def findMissedSatur(data, maglim=15, deltaMin=-0.4, deltaMax=-0.06, frame=None, 
     #
     # OK, we've got our bad objects
     #
-    x = (data.cat.get("centroid.sdss.x")[missed] + 0.5).astype(int)
-    y = (data.cat.get("centroid.sdss.y")[missed] + 0.5).astype(int)
+    x = (data.cat.getX()[missed] + 0.5).astype(int)
+    y = (data.cat.getY()[missed] + 0.5).astype(int)
     nchild = data.cat.get("deblend.nchild")[missed]
 
     psf = psf[missed]
@@ -4950,3 +5681,459 @@ def findMissedSatur(data, maglim=15, deltaMin=-0.4, deltaMax=-0.06, frame=None, 
                                                                int(raw[x[i], y[i]]))
                 if frame is not None:
                     ds9.dot("+", x[i], y[i], size=4, frame=frame, ctype=ds9.RED)
+
+#-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+def plotImageCrossSection(im, dir='-', topBottom=False, fig=1, ymin=None, ymax=None, title=None):
+    w, h = im.getDimensions()
+    try:
+        im = im.getMaskedImage()
+    except AttributeError:
+        pass
+
+    try:
+        im = im.getImage()
+    except AttributeError:
+        pass
+
+    vals2 = None
+    if dir == '-':
+        if topBottom:
+            vals1 = np.empty(w); vals2 = np.empty(w)
+            r10, r11 = int(0.1*h), int(0.2*h)
+            r20, r21 = int(0.8*h), int(0.9*h)
+            for x in range(w):
+
+                vals1[x] = afwMath.makeStatistics(im[x:x+1, r10:r11], afwMath.MEANCLIP).getValue()
+                vals2[x] = afwMath.makeStatistics(im[x:x+1, r20:r21], afwMath.MEANCLIP).getValue()
+
+            label1 = "Rows %d..%d" % (r10, r11)
+            label2 = "Rows %d..%d" % (r20, r21)
+        else:
+            vals1 = np.empty(w)
+            for x in range(w):
+                vals1[x] = afwMath.makeStatistics(im[x:x+1, :], afwMath.MEANCLIP).getValue()
+    elif dir == '|':
+        vals1 = np.empty(h)
+        for y in range(h):
+            vals1[y] = afwMath.makeStatistics(im[:, y:y+1], afwMath.MEANCLIP).getValue()
+    else:
+        raise RuntimeError("Direction %s is not yet implemented" % dir)
+
+    fig = getMpFigure(fig)
+
+    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
+    axes.plot(vals1, label=label1)
+    if vals2.all() is not None:
+        vals2 *= vals1[100]/vals2[100]
+        axes.plot(vals2, color='red', label="%s scaled to bottom" % label2)
+        axes.legend(loc="upper left")
+        
+    axes.set_xlim(-0.02*len(vals1), 1.02*len(vals1))
+    axes.set_ylim(ymin, ymax)
+    axes.set_xlabel("column" if dir == '-' else "row")
+    axes.set_ylabel("DN")
+    if title:
+        axes.set_title(title)
+
+    fig.show()
+
+    return fig
+
+    
+def standardEllipticity(ss, calexp, magLim=100, frame=0):
+    n = 0
+    sIxx, sIyy, sIxy = 0.0, 0.0, 0.0
+    for s in ss[ss.get("calib.psf.used")]:
+        Q = s.getShape()                # a afwGeom.ellipses.Quadrupole
+
+        sIxx += Q.getIxx()
+        sIyy += Q.getIyy()
+        sIxy += Q.getIxy()
+        n += 1
+        
+    sIxx /= n
+    sIyy /= n
+    sIxy /= n
+
+    Qstar = afwGeom.ellipses.Quadrupole(sIxx, sIyy, sIxy)
+    print "Qstar =", afwGeom.ellipses.Axes(Qstar)
+
+    calib = calexp.getCalib()
+    if calib and magLim is not None:
+        with afwImageUtils.CalibNoThrow():
+            modelMag = calib.getMagnitude(ss.getModelFlux())
+    else:
+        modelMag = np.ones_like(ss.getModelFlux())
+        magLim = modelMag + 1
+
+    rms_standard = 0.7/0.200
+    Izz_standard = math.pow(rms_standard, 2)
+
+    scale = 20                           # scale for plotting ellipses
+    ds9.erase(frame=frame)
+    with ds9.Buffering():
+        for s in ss[np.less(modelMag, magLim)]:
+            Q = s.getShape()                # a afwGeom.ellipses.Quadrupole
+
+            if \
+                    Q.getIxx() < Qstar.getIxx() or \
+                    Q.getIyy() < Qstar.getIyy():
+                Ixx, Iyy, Ixy = 0, 0, 0
+            else:
+                Ixx = Q.getIxx() - Qstar.getIxx()
+                Iyy = Q.getIyy() - Qstar.getIyy()
+                Ixy = Q.getIxy() - Qstar.getIxy()
+
+            Qstandard = afwGeom.ellipses.Quadrupole(Ixx + Izz_standard, Iyy + Izz_standard, Ixy)
+
+            #Q.scale(scale/Q.getDeterminantRadius())
+            Qstandard.scale(scale/Qstandard.getDeterminantRadius())
+
+            ds9.dot(Q, *s.getCentroid(), ctype=ds9.RED, frame=frame)
+            ds9.dot(Qstandard, *s.getCentroid(), ctype=ds9.GREEN, frame=frame)
+
+        
+        
+def showApcorr(data,  ymin=None, ymax=None, markersize=1, fig=None, **dataId):
+    """Show the aperture corrections for a given detector"""
+    
+    fig = getMpFigure(fig)
+
+    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
+
+    ss = data.butler.get("src", **dataId)
+    xmm = ss.get("focalplane.x")
+    ymm = ss.get("focalplane.y")
+    apcorr = ss.get("correctfluxes.apcorr")
+        
+    sc = axes.scatter(xmm, ymm, c=apcorr, norm=pyplot.Normalize(ymin, ymax),
+                      cmap=pyplot.cm.rainbow, marker="o", s=10*markersize,
+                      edgecolors="none")   
+    fig.colorbar(sc)
+    axes.set_aspect('equal')
+
+    psfStar = ss.get("calib.psf.used")
+    axes.plot(xmm[psfStar], ymm[psfStar], "*", color="black", markerfacecolor="none")
+    
+    axes.set_xlabel("X (mm)")
+    axes.set_ylabel("Y (mm)")
+    axes.set_title("Aperture correction %s" % data.mapperInfo.dataIdToTitle([dataId]))
+    
+    fig.show()
+    return fig
+
+
+#-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+def getVignetting(X, Y):
+    vig = np.array([1.00, 1.00,  0.74, 0.03]) # vignetting
+    xz =  np.array([0,    0.115, 0.76, 0.90]) # distance from boresight, deg
+    xz /= 0.16865/3600                         # convert to pixels
+
+    r = np.hypot(X, Y)
+    vignet = np.where(r < xz[1], vig[0], vig[1] + (r - xz[1])*(vig[2] - vig[1])/(xz[2] - xz[1]))
+
+    return vignet
+
+def correctVignettingCallback(im, ccd=None, butler=None):
+    """A callback function that subtracts the bias and trims a raw image"""
+
+    if not ccd:        
+        ccd = cameraGeom.cast_Ccd(im.getDetector())
+
+    if True:
+        im = cameraGeomUtils.trimRawCallback(im, ccd, butler)
+
+    width, height = im.getDimensions()
+
+    fxy = []
+    if False:
+        for xy in [(0,         0),
+                   (width - 1, height - 1), 
+                   ]:
+            fxy.append(ccd.getPositionFromPixel(afwGeom.PointD(*xy)).getPixels(1.0))
+
+        X, Y = np.meshgrid(fxy[0][0] + (fxy[1][0] - fxy[0][0])/width* np.arange(width),
+                           fxy[0][1] + (fxy[1][1] - fxy[0][1])/height*np.arange(height))
+        im.getImage().getArray()[:] /= getVignetting(X, Y)
+    else:
+        vim = afwImage.ImageF(2,2)
+        for iy, y in enumerate([0.25, 0.75]):
+            for ix, x in enumerate([0.25, 0.75]):
+                fx, fy = ccd.getPositionFromPixel(afwGeom.PointD(x*width, y*height)).getPixels(1.0)
+
+                vim[ix, iy] = float(getVignetting([fx], [fy])[0])
+
+        backobj = afwMath.BackgroundMI(im.getBBox(), afwImage.makeMaskedImage(vim))
+        im.getImage()[:] /= backobj.getImageF("LINEAR")
+
+    print "Correcting vignetting for", ccd.getId().getName(),  ccd.getId().getSerial()
+
+    return im
+
+def flatfieldCallback(im, ccd=None, butler=None):
+    """A callback function that subtracts the bias and trims a raw image, then flattens it"""
+
+    if not ccd:
+        ccd = cameraGeom.cast_Ccd(im.getDetector())
+
+    if hasattr(im, "getMaskedImage"):
+        im = im.getMaskedImage()
+
+    if hasattr(im, "convertF"):
+        im = im.convertF()
+
+    if ccd.getId().getSerial() != 90:
+        #raise RuntimeError("Skipping")
+        pass
+
+    im = cameraGeomUtils.trimRawCallback(im, ccd, butler)
+    calibDir="/home/astro/hsc/hsc/HSC/CALIB_RHL/FLAT/2013-06-16/HSC-I/domeflat"
+    fileName = os.path.join(calibDir, "FLAT-%03d.fits" % (ccd.getId().getSerial()))
+    print fileName
+    flat = afwImage.ImageF(fileName)
+    im /= flat
+
+    return im
+
+#-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+def makeVignettingImage(im, correctJacobian=True):
+    ccd = cameraGeom.cast_Ccd(im.getDetector())
+
+    width, height = im.getDimensions()
+
+    fxy = []
+    for xy in [(0,         0),
+               (width - 1, height - 1), 
+               ]:
+        fxy.append(ccd.getPositionFromPixel(afwGeom.PointD(*xy)).getPixels(1.0))
+
+    X, Y = np.meshgrid(fxy[0][0] + (fxy[1][0] - fxy[0][0])/width* np.arange(width),
+                       fxy[0][1] + (fxy[1][1] - fxy[0][1])/height*np.arange(height))
+
+    im.getMaskedImage().getImage().getArray()[:] = getVignetting(X, Y)
+
+    if correctJacobian:
+        dist = ccd.getDistortion()
+
+        jim = np.empty((height, width)) # n.b. numpy index order
+        jY = np.arange(height)/float(height - 1)
+
+        jacobian = [0, 0]
+        for x in range(width):
+            for i, y in enumerate((0, height - 1)):
+                jacobian[i] = dist.computeQuadrupoleTransform(
+                    ccd.getPositionFromPixel(afwGeom.PointD(x, y)).getPixels(1.0), False).computeDeterminant()
+
+            jim[:, x] = jacobian[0] + jY*(jacobian[1] - jacobian[0])
+
+        im.getMaskedImage().getImage().getArray()[:] *= jim
+                    
+def makeNewFlats(butler, modelVignetting=True, correctJacobian=True, data=None, 
+                 calibDir="/home/astro/hsc/hsc/HSC/CALIB_RHL/FLAT/2013-06-16/HSC-I/domeflat", visit=903000):
+
+    if data:
+        zps = dict(set(zip(data.mapperInfo.splitId(data.matchedCalibs.get("id"), asDict=True)["ccd"],
+                           data.zp)))
+        mean = np.mean(np.array(zps.values()))
+        zps = dict([(k, 10**(-0.4*(v - mean))) for k, v in zps.items()])
+
+        if False:
+            zps[0]  *= 0.93
+            zps[18] *= 1.08
+            zps[43] *= 1.03
+            zps[75] *= 1.06
+    else:
+        zps = {}
+
+    for ccd in range(112):
+        if not zps.has_key(ccd):
+            zps[ccd] = 1.0
+
+    zps[104] *= 0.50                    # determined by looking at images
+    zps[105] *= 0.92
+    zps[106] *= 0.70
+    zps[107] *= 0.83
+    zps[108] *= 0.84
+    zps[109] *= 0.63
+    zps[110] *= 0.92
+    zps[111] *= 0.70
+
+    camera = butler.get("camera")
+
+    for ccd in range(112):
+        if False and ccd not in range(104, 112):
+            continue
+
+        print ccd
+        fileName = os.path.join(calibDir, "FLAT-%03d.fits" % (ccd))
+        flat = afwImage.ExposureF(fileName)
+        flat.setDetector(cameraGeomUtils.findCcd(camera, ccd))
+
+        if modelVignetting:
+            makeVignettingImage(flat, correctJacobian)
+
+        if data:
+            flat.getMaskedImage().getImage()[:] /= zps[ccd]
+
+        flat.writeFits(fileName)
+
+#-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+def assembleTiles(images):
+    """Assemble a list of tiles according to their XY0 values"""
+    bigBBox = afwGeom.BoxI()
+
+    for im in images:
+        bigBBox.include(im.getBBox(afwImage.PARENT))
+
+    bigIm = afwImage.MaskedImageF(bigBBox)
+    for im in images:
+        if True:
+            sub = bigIm.Factory(bigIm, im.getBBox(afwImage.PARENT), afwImage.PARENT)
+            sub <<= im.getMaskedImage()
+            del sub
+        else:
+            bigIm[im.getBBox(afwImage.PARENT)] = im
+
+    return bigIm
+
+#-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+def readPatches(butler, tract=0, patches={}, pps=None):
+    if pps is None:
+        pps=["%d,%d" % (i , j) for i in range(1, 8) for j in range(1, 8)]
+
+    for pp in pps:
+        for f in "gri":
+            patches.update([("%s-%s" % (pp, f), butler.get("deepCoadd", filter='HSC-%s' % f.upper(),
+                                                          tract=tract, patch=pp))])
+
+    pps = set([k[0:3] for k in patches.keys() if re.search(r"^.,.-.$", k)])
+    patches.update([(f, assembleTiles([patches["%s-%s" % (pp, f)] for pp in pps])) for f in "gri"])
+
+    return patches
+
+#-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+def patchNucleus(images, pp, threshold=2000, name=""):
+    for f in "gri":
+        mi = images["%s-%s" % (pp, f)].getMaskedImage()
+        SAT = mi.getMask().getPlaneBitMask(["SAT", "INTRP"])
+        fs = afwDetect.FootprintSet(mi.getMask(), afwDetect.Threshold(SAT, afwDetect.Threshold.BITMASK))
+        for foot in fs.getFootprints():
+            if foot.getNpix() > 15000 and len(foot.getSpans()) > 100:
+                print "Adjusting Footprint at", foot.getCentroid(), f, name
+                xv, yv = [], []
+                for s in foot.getSpans():
+                    y = s.getY()
+                    for x in range(s.getX0(), s.getX1() + 1):
+                        xv.append(x)
+                        yv.append(y)
+
+                xv = np.array(xv); yv = np.array(yv)
+                yv -= mi.getY0();  xv -= mi.getX0()
+
+                tooLow = np.where(mi.getImage().getArray()[yv, xv] < threshold)[0]
+                mi.getMask().getArray()[yv[tooLow], xv[tooLow]] &= ~SAT
+
+        #ds9.mtv(mi, title=f); import pdb; pdb.set_trace() #return
+
+def readM31Images(butler, images={}, pps=None):
+    if pps is None:
+        pps=["%d,%d" % (i , j) for i in range(1, 8) for j in range(1, 8)]
+
+    for pp in pps:
+        for f in "gri":
+            if False:                   # old and tested
+                images.update([("%s-%s" % (pp, f), afwImage.ExposureF("HSC-%s/0/%s.fits" % (f.upper(), pp)))])
+            else:                       # better to use the butler
+                images.update([("%s-%s" % (pp, f), butler.get("deepCoadd", filter='HSC-%s' % f.upper(),
+                                                              tract=0, patch=pp))])
+
+
+    # Patch saturation for nuclei of M31/M32
+    for pp, threshold in (["4,2", 1300],
+                          ["4,4", 1500]): # 1000 OK, 2000 bad
+        if pp in pps:
+            patchNucleus(images, pp, threshold, name=pp)
+
+    pps = set([k[0:3] for k in images.keys() if re.search(r"^.,.-.$", k)])
+    images.update([(f, assembleTiles([images["%s-%s" % (pp, f)] for pp in pps])) for f in "gri"])
+
+    return images
+
+def hackM31Sky(fileFmt="sat-16-%s.fits", outfile="fixed.png", *args, **kwargs):
+    """Hack up the M31 sky levels"""
+    images = {}
+    images.update([(f, afwImage.MaskedImageF(fileFmt % f)) for f in "RGB"])
+
+    sim=afwImage.MaskedImageF(5,5)
+
+    im = images["B"]
+    sim[0:3,0:3]=10; sim[3:,0:3]=35; sim[0:3,3:]=24; sim[3:,3:]=35
+    sim[0:3,0:3] -= 0
+    sim[0:3,0:3] -= 2
+    sim[3:,3:] -= 2
+    sim[0, 0] += 2
+    sim[4, 0] -= 13
+    sim[0,1] += 2
+    sim[1,2] += 2
+    sim[0,3] -= 2
+    sim[4,0:4] += 10
+    sim[0,3] -= 2
+    sim[4,1] -= 6
+    sim[1,4] -= 3
+    sim[1,1] += 2
+    sim[4,1] += 2
+    backobj = afwMath.BackgroundMI(im.getBBox(), sim); im -= backobj.getImageF("LINEAR")
+
+    im = images["G"]
+    sim[0:3,0:3]=8; sim[3:,0:3]=8; sim[0:3,3:]=14; sim[3:,3:]=8
+    sim[0:3,0:3] -= 2
+    sim[0:3,0:3] -= 2
+    sim[3:,3:] -= 2
+    sim[4, 0] -= 8
+    sim[0,2] += 2
+    sim[3,3] += 3
+    sim[3,2] += 10
+    sim[4,1] += 4
+    sim[0,4] += 5
+    sim[4,1] -= 3
+    sim[1,4] -= 2
+    sim[1,1] += 2
+    sim[3,0] += 5
+    sim[4,0] += 7
+    backobj = afwMath.BackgroundMI(im.getBBox(), sim); im -= backobj.getImageF("LINEAR")
+
+    im = images["R"]
+    sim[0:3,0:3]=7; sim[3:,0:3]=17; sim[0:3,3:]=1; sim[3:,3:]=5;
+    sim[:, 0] += 8
+    sim[3, 0] += 10
+    sim[3, 1] += 3
+    sim[4, 0] -= 5
+    sim[0:3,0:3] -= 2
+    sim[0:2,0:3] -= 2
+    sim[2:,3:] += 2
+    sim[0,1] += 2
+    sim[1,1] += 2
+    sim[1,1] += 2
+    sim[4,1] += 10
+    sim[4,1] -= 6
+    sim[1,4] -= 3
+    sim[1,1] += 2
+    sim[3,3] += 2
+    sim[1,1] -= 2
+    sim[2,1] += 5
+    sim[2,0] += 3
+
+    sim[2,4] += 5
+    sim[2,3] += 7
+    sim[3,3] += 7
+    sim[4,2] += 5
+    backobj = afwMath.BackgroundMI(im.getBBox(), sim); im -= backobj.getImageF("LINEAR")
+
+    writeRgb([images["R"], images["G"], images["B"]], outfile, *args, **kwargs)
+    
