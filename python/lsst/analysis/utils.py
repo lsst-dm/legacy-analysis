@@ -6137,3 +6137,38 @@ def hackM31Sky(fileFmt="sat-16-%s.fits", outfile="fixed.png", *args, **kwargs):
 
     writeRgb([images["R"], images["G"], images["B"]], outfile, *args, **kwargs)
     
+import lsst.meas.algorithms as measAlg
+import lsst.pex.config as pexConfig
+#import lsst.meas.algorithms.defects as defects
+
+def trimRemoveCrCallback(im, ccd, butler, subtractBackground=False):
+    im = cameraGeomUtils.trimRawCallback(im, ccd, butler, True)
+
+    if subtractBackground:
+        bctrl = afwMath.BackgroundControl(2, 5)
+        for a in ccd:
+            aim = im[a.getAllPixels()]
+            backobj = afwMath.makeBackground(aim, bctrl)
+            bkgd = backobj.getImageF(afwMath.Interpolate.AKIMA_SPLINE, afwMath.REDUCE_INTERP_ORDER)
+
+            aim[:] -= bkgd
+
+    FWHM = 5                   # pixels
+    psf = measAlg.DoubleGaussianPsf(29, 29, FWHM/(2*math.sqrt(2*math.log(2))))
+
+    stats = afwMath.makeStatistics(im, afwMath.MEANCLIP | afwMath.STDEVCLIP)
+    background = stats.getValue(afwMath.MEANCLIP)
+
+    if hasattr(im, "getImage"):
+        mi = im
+    else:
+        mi = afwImage.makeMaskedImage(im)
+        mi.getVariance()[:] = stats.getValue(afwMath.STDEVCLIP)**2
+
+    crConfig = measAlg.FindCosmicRaysConfig()
+    crConfig.nCrPixelMax = 100000
+    crs = measAlg.findCosmicRays(mi, psf, background, pexConfig.makePolicy(crConfig))
+    if not False:
+        print "CCD %03d %5d CRs" % (ccd.getId().getSerial(), len(crs))
+
+    return im
