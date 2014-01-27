@@ -45,13 +45,11 @@ except ImportError:
     class LsstSimMapper(object): pass
 
 try:
-    from lsst.obs.hscSim.hscSimMapper import HscSimMapper
-    HscMapper = HscSimMapper
+    from lsst.obs.hsc.hscMapper import HscMapper
     _raw_ = "raw"
     _visit_ = "visit"
 except ImportError:
     class HscMapper(object): pass
-    class HscSimMapper(object): pass
 
 try:
     from lsst.obs.suprimecam.suprimecamMapper import SuprimecamMapper
@@ -855,11 +853,15 @@ def makeMapperInfo(butler):
             SubaruMapperInfoMit.Mapper = Mapper
             SubaruMapperInfo._Colorterm.setColorterms(colortermsData, "MIT")
 
+    from lsst.obs.hsc.colorterms import colortermsData
+
     class HscMapperInfo(SubaruMapperInfo):
         def __init__(self, Mapper):
             SubaruMapperInfo.__init__(self, None)
             HscMapperInfo.Mapper = Mapper
 
+            HscMapperInfo._Colorterm.setColorterms(colortermsData, "Hamamatsu")
+            
         @staticmethod
         def exposureToStr(exposure):
             try:
@@ -873,7 +875,7 @@ def makeMapperInfo(butler):
         @staticmethod
         def splitId(oid, asDict=False):
             """Split an ObjectId (maybe an numpy array) into visit, ccd, and objId.
-            See obs/subaru/python/lsst/obs/hscSim/hscSimMapper.py"""
+            See obs/subaru/python/lsst/obs/hscSim/hscMapper.py"""
             oid = np.array(oid, dtype='int64')
             objId = np.bitwise_and(oid, 0xffffffff) # Should be the same value as was set by apps code
             oid = np.right_shift(oid, 32).astype('int32')
@@ -905,8 +907,8 @@ def makeMapperInfo(butler):
         return SubaruMapperInfo(SuprimecamMapper)
     elif isinstance(butler.mapper, SuprimecamMapperMit):
         return SubaruMapperInfoMit(SuprimecamMapperMit)
-    elif isinstance(butler.mapper, (HscSimMapper, HscMapper,)):
-        return HscMapperInfo(HscSimMapper)
+    elif isinstance(butler.mapper, HscMapper):
+        return HscMapperInfo(HscMapper)
     else:
         raise RuntimeError("Impossible mapper")
 
@@ -1021,7 +1023,7 @@ class Data(object):
 
         self.matchedCalibs = None
         self.ZP0 = 31
-        self.zp = None
+        self.zp = []
 
         self.name = "??"
         self.astrom = None
@@ -1268,7 +1270,11 @@ ccd may be a list"""
                 print "Reading %s         \r" % did,
                 sys.stdout.flush()
 
-            catInfo = _appendToCatalog(self, did, catInfo, extraApFlux=extraApFlux)
+            try:
+                catInfo = _appendToCatalog(self, did, catInfo, extraApFlux=extraApFlux)
+            except Exception, e:
+                print e
+                import pdb; pdb.set_trace() 
         if verbose:
             print
 
@@ -1372,17 +1378,37 @@ Plotted symbols are:
         if verbose:
             print
 
+        matchedCalibs_old, zp_old = self.matchedCalibs, self.zp
         self.matchedCalibs = sum([len(m) for m in _matched])*[None]
-        self.zp = np.empty(len(self.matchedCalibs))
+        self.zp = np.empty(len(zp_old) + len(self.matchedCalibs))
 
+        self.zp[0:len(zp_old)] = zp_old
+
+        zstart = len(zp_old)
         start = 0
         for i, m in enumerate(_matched):
             end = start + len(m)
+            zend = zstart + len(m)
             self.matchedCalibs[start:end] = m
-            self.zp[start:end] = _zp[i]*np.ones(end - start)
-            start = end
+            self.zp[zstart:zend] = _zp[i]*np.ones(end - start)
+            start, zstart = end, zend
 
         self.matchedCalibs = zipMatchList(self.matchedCalibs, swap=True)
+        if matchedCalibs_old:
+            if True:                                               # work around a bug
+                matchedCalibs_new = afwTable.SourceCatalog(matchedCalibs_old.getSchema())
+                matchedCalibs_new.reserve(len(matchedCalibs_old) + len(self.matchedCalibs))
+                
+                for s in matchedCalibs_old:
+                    matchedCalibs_new.append(s)
+
+                for s in self.matchedCalibs:
+                    matchedCalibs_new.append(s)
+
+                self.matchedCalibs = matchedCalibs_new.copy(deep=True) # make contiguous
+            else:
+                matchedCalibs_old.extend(self.matchedCalibs, afwTable.SchemaMapper(matchedCalibs_old.getSchema()))
+                self.matchedCalibs = matchedCalibs_old.copy(deep=True) # make contiguous
 
     def _getCalibObjectsImpl(self, dataId, displayType, frame, maglim=None,
                              showGalaxies=False, verbose=False, allSources=False):
@@ -1391,6 +1417,7 @@ Plotted symbols are:
         imageSize = calexp_md.get("NAXIS1"), calexp_md.get("NAXIS2")
         xy0 = (calexp_md.get("CRVAL1A"), calexp_md.get("CRVAL2A"),)
         filterName = afwImage.Filter(calexp_md).getName()
+            
         calib = afwImage.Calib(calexp_md)
 
         if not self.astrom:
@@ -1398,9 +1425,12 @@ Plotted symbols are:
             astromConfig.catalogMatchDist = 10
             self.astrom = measAstrom.Astrometry(astromConfig)
 
+        ct = self.mapperInfo.getColorterm(filterName)
+        primaryFilterName = ct.primary if ct else filterName
+
         if allSources:
             sources = self.butler.get(dtName("src"), **dataId)
-            cat = self.astrom.getReferenceSourcesForWcs(wcs, imageSize, filterName, pixelMargin=50,
+            cat = self.astrom.getReferenceSourcesForWcs(wcs, imageSize, primaryFilterName, pixelMargin=50,
                                                         trim=True, allFluxes=True)
             if frame is not None and displayType == "src":
                 showSourceSet(sources, xy0=xy0, raDec=False, frame=frame)
@@ -1782,13 +1812,13 @@ def zipMatchList(matchList, suffixes=None, swap=False, verbose=True):
             for f in requiredFields: # must be first and in this order --- #2154
                 scm.addMapping(sch.find(f).getKey())
 
-        for schEl in [sch.find(n) for n in sch.getNames()]: # just "sch" should work, but there's "getBit" bug...
+        for schEl in sch:
             inField = schEl.getField()
             name = inField.getName()
             if name == "id" or name not in requiredFields:
                 key = schEl.getKey()
                 try:
-                    outputField = type(inField)(name + suffix, inField.getDoc())
+                    outputField = inField.copyRenamed(name + suffix)
                 except pexExcept.LsstCppException, e:
                     print >> sys.stderr, "Mapping %s: %s" % (inField.getName(), e)
                     continue
@@ -1954,7 +1984,7 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     """
     fig = getMpFigure(fig)
 
-    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
+    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80))
 
     try:
         data.cat
@@ -2167,7 +2197,7 @@ If non-None, [xy]{min,max} are used to set the plot limits
     """
     fig = getMpFigure(fig)
 
-    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
+    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80))
 
     try:
         data.cat
@@ -2245,7 +2275,7 @@ If non-None, [xy]{min,max} are used to set the plot limits
     """
     fig = getMpFigure(fig)
 
-    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
+    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80))
 
     try:
         data.cat
@@ -2379,6 +2409,9 @@ where data[selectN] means, "the objects in data for which selectN(ids) returns T
 
     plotCM(data, makeSelectVisit(902030), makeSelectVisit(902032)...)
 
+If a select "function" is actually an int, it is interpreted as makeSelectVisit(selectN) -- i.e.
+as a visit IDs
+
 The magnitude limits for the box used to calculate statistics are magmin..maglim
 
 If title is provided it's used as a plot title; if it starts + the usual title is prepended
@@ -2393,11 +2426,19 @@ If non-None, [xy]{min,max} are used to set the plot limits
 
     fig = getMpFigure(fig)
 
-    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
+    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80))
     #
+    selections = {1: select1,
+                  2: select2,
+                  }
+
     allIds = data.cat.get("id")
-    selections = {1: select1(data, allIds),
-                  2: select2(data, allIds)}
+    for k, v in selections.items():
+        if isinstance(v, int):
+            selections[k] = makeSelectVisit(v)
+
+        selections[k] = selections[k](data, allIds)
+
     cats = dict([(k, data.cat[v]) for k,v in selections.items()])
     #
     # See if we've done this match before
@@ -2651,13 +2692,16 @@ def plotCC(data, select1, select2, select3, magType="psf", SG="sg", select4=None
 Plot (data[select1].magType - data[select2].magType) v. (data[select1].magType - data[select3].magType)
 where data[selectN] means, "the objects in data for which selectN(ids) returns True".  E.g.
     plotCC(data, makeSelectVisit(902030), makeSelectVisit(902032), makeSelectVisit(902034), "psf", ...)
-(let's write data[selectN].magType as magN)
+(let's write data[selectN].magType as magN).
 
 This can be used to plot 3-colour diagrams or to compare 3 epochs.
 
 If select4 is provided, compare (mag1 - mag2) with (mag3 - mag4)
 If both select1 and select3 are the same band and select2 and select4 are the same (different) band, plot
    (mag1 - mag2) - (mag3 - mag4) against mag1
+
+If a select "function" is actually an int, it is interpreted as makeSelectVisit(selectN) -- i.e.
+as a visit IDs
 
 If title is provided it's used as a plot title; if it starts + the usual title is prepended and if it's
 None no title is provided; if it starts "T:" the label will be written at the top of the plot
@@ -2674,13 +2718,20 @@ If non-None, [xy]{min,max} are used to set the plot limits
 
     fig = getMpFigure(fig)
 
-    allIds = data.cat.get("id")
-    selections = {1: select1(data, allIds),
-                  2: select2(data, allIds),
-                  3: select3(data, allIds),
+    selections = {1: select1,
+                  2: select2,
+                  3: select3
                   }
     if select4 is not None:
-        selections[4] = select4(data, allIds)
+        selections[4] = select4
+
+    allIds = data.cat.get("id")
+    for k, v in selections.items():
+        if isinstance(v, int):
+            selections[k] = makeSelectVisit(v)
+
+        selections[k] = selections[k](data, allIds)
+
     dataKeys = sorted(selections.keys())
 
     cats = dict([(k, data.cat[v]) for k,v in selections.items()])
@@ -2784,7 +2835,7 @@ def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, f
     else:
         fig = getMpFigure(fig)
         
-        axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
+        axes = fig.add_axes((0.1, 0.1, 0.85, 0.80))
 
     if idN is None:
         idN = dataKeys[0]
@@ -3139,7 +3190,7 @@ If selectObjId is provided, it's a function that returns True or False for each 
         ids = ids[good]
         
     fig = getMpFigure(fig)
-    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
+    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80))
 
     stellar = data.cat.get("classification.extendedness")[good] < 0.5
     nonStellar = np.logical_not(stellar)
@@ -3321,7 +3372,7 @@ def plotCalibration(data, plotBand=0.05, magType='psf', magmin=14, maglim=20, ev
                     showJacobian=False, correctJacobian=False, useDistortion=False, showZP=False,
                     xmin=None, xmax=None, ymin=None, ymax=None, meanDelta=0.0,
                     markersize=2, alpha=1.0, title="+", showMedians=False, overlay=True,
-                    frame=None, ctype=None, ds9Size=None, fig=None):
+                    mtv=True, frame=None, ctype=None, ds9Size=None, fig=None):
     """Plot (instrumental - reference) v. reference magnitudes given a Data object.
 
 The Data must have been initialised with a call to the getCalibObjects method
@@ -3340,11 +3391,11 @@ If plotBand is provided, draw lines at +- plotBand
 If title is provided it's used as a plot title; if it starts + the usual title is prepended
 
 If overlay is true, overlay the CCDs' boundaries and IDs
+
+If frame is not None plot the objects in ds9 (if mtv is True as well, display the calexp first)
 """
     if not data.matchedCalibs:
         raise RuntimeError("You need to call the Data.getCalibObjects method before calling this routine")
-
-    fig = getMpFigure(fig)
 
     sourceSuffix = "_2"
     referenceSuffix="_1"
@@ -3370,7 +3421,7 @@ If overlay is true, overlay the CCDs' boundaries and IDs
         ccd = cameraGeomUtils.findCcd(camera, cameraGeom.Id(ccdId))
         xmm[i], ymm[i] = ccd.getPositionFromPixel(afwGeom.PointD(xc[i], yc[i])).getMm()
 
-    if correctJacobian:
+    if correctJacobian or showJacobian:
         if useDistortion:
             title += " (Jacobian corr from Distort)"
             jacobian = np.empty_like(xmm)
@@ -3381,12 +3432,25 @@ If overlay is true, overlay the CCDs' boundaries and IDs
             title += " (Jacobian corr)"
             jacobian = data.matchedCalibs.get("jacobian%s" % sourceSuffix)[good]
 
+        if correctJacobian:
+            perChipJacobian = True      # set the average Jacobian to 1.0 for every CCD
+            
+        if perChipJacobian:
+            ccdId = data.mapperInfo.splitId(ids, True)["ccd"]
+            for _id in set(ccdId):
+                thisCcd = np.where(ccdId == _id)
+                jacobian[thisCcd] /= np.median(jacobian[thisCcd])
+
         flux *= jacobian
 
     zp = data.zp[good]
     instmag = zp - 2.5*np.log10(flux)
 
     if frame is not None:
+        if mtv:
+            ccdId = data.mapperInfo.splitId(ids[0], True)
+            ds9.mtv(data.butler.get(dtName("calexp"), visit=ccdId["visit"], ccd=ccdId["ccd"]), frame=frame)
+
         kwargs = {}
         if ctype:
             kwargs["ctype"] = ctype
@@ -3397,9 +3461,13 @@ If overlay is true, overlay the CCDs' boundaries and IDs
                 if instmag[i] < 21:        # XXXXXXXX
                     ds9.dot("o", xc[i], yc[i], frame=frame, **kwargs)
 
-    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
-    
-    refmag = getRefmag(data, data.matchedCalibs, getCanonicalFilterName(data.dataId[0]["filter"]),
+    fig = getMpFigure(fig)
+    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80))
+
+    did = data.mapperInfo.splitId(ids[0], True)
+    refmag = getRefmag(data, data.matchedCalibs,
+                       getCanonicalFilterName(data.butler.queryMetadata('raw', 'filter',
+                                                                        visit=did['visit'])[0]),
                        referenceSuffix=referenceSuffix)[good]
 
     if correctRadial:               # apply a radial correction
@@ -3551,7 +3619,7 @@ If plotBand is provided, draw lines at +- plotBand
                 s = m.second
                 ds9.dot("o", s.getX(), s.getY(), frame=frame, **kwargs)
 
-    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
+    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80))
 
     refmag = np.array([-2.5*math.log10(s.first.getPsfFlux()) for s in mstars if s.first and s.second])
 
@@ -3656,7 +3724,7 @@ If selectObjId is provided, it's a function that returns True or False for each 
     """
     fig = getMpFigure(fig)
 
-    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
+    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80))
 
     dataSets = data.dataSets
     if selectObjId:
@@ -4515,7 +4583,7 @@ def plotObject(exp, xc, yc, dir="-", hlen=10, findPeak=0, frame=None, fig=None):
         ds9.line([(x0, y0), (x1, y1)], frame=frame)
     
     fig = getMpFigure(fig)
-    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
+    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80))
 
     axes.plot(z, I, "o", color="b")
     axes.plot(z, 0.5*maxVal + 0*I, "r--")
@@ -4890,6 +4958,9 @@ class EventHandler(object):
             except TypeError:
                 frames = [frames]
             
+        if not wcss:
+            wcss = [None]*len(frames)
+
         self.frames = frames
         self.wcss = wcss
 
@@ -4899,6 +4970,9 @@ class EventHandler(object):
         if ev.inaxes != self.axes:
             return
         
+        if not ev.key:
+            return
+
         if ev.key.lower() == 'h':
             print """
 Options:
@@ -4988,9 +5062,6 @@ If utils.eventCallbacks[ev.key] is defined it'll be called with arguments:
                 ds9.cmdBuffer.flush()
         else:
             pass
-
-#-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
@@ -5725,7 +5796,7 @@ def plotImageCrossSection(im, dir='-', topBottom=False, fig=1, ymin=None, ymax=N
 
     fig = getMpFigure(fig)
 
-    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
+    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80))
     axes.plot(vals1, label=label1)
     if vals2.all() is not None:
         vals2 *= vals1[100]/vals2[100]
@@ -5803,7 +5874,7 @@ def showApcorr(data,  ymin=None, ymax=None, markersize=1, fig=None, **dataId):
     
     fig = getMpFigure(fig)
 
-    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
+    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80))
 
     ss = data.butler.get("src", **dataId)
     xmm = ss.get("focalplane.x")
@@ -5826,163 +5897,58 @@ def showApcorr(data,  ymin=None, ymax=None, markersize=1, fig=None, **dataId):
     fig.show()
     return fig
 
+#-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+def medianFilterImage(img, nx, ny=None, verbose=False):
+    if nx%1 == 0:
+        nx += 1
+    if ny:
+        if ny%1 == 0:
+            ny += 1
+    else:
+        ny = nx
+
+    w, h = img.getDimensions()
+
+    mimg = img.clone()
+
+    imga = img.getArray()
+    mimga = mimg.getArray()
+    sim = afwImage.ImageF(nx, ny); sima = sim.getArray() # permits me to mtv it
+
+    for y in range(nx//2, h - nx//2):
+        if verbose:
+            print "%d\r" % y,; sys.stdout.flush()
+        for x in range(ny//2, w - ny//2):
+            sima[:] = imga[y - ny//2:y + ny//2, x - nx//2:x + nx//2]
+            mimga[y, x] = np.median(sima[np.where(np.isfinite(sima))])
+
+            if False:
+                ds9.mtv(sim)
+
+    return mimg
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-def getVignetting(X, Y):
-    vig = np.array([1.00, 1.00,  0.74, 0.03]) # vignetting
-    xz =  np.array([0,    0.115, 0.76, 0.90]) # distance from boresight, deg
-    xz /= 0.16865/3600                         # convert to pixels
+def addBackgroundCallback(im, ccd=None, butler=None, imageSource=None):
+    """A callback function that adds the background back into a calexp"""
 
-    r = np.hypot(X, Y)
-    vignet = np.where(r < xz[1], vig[0], vig[1] + (r - xz[1])*(vig[2] - vig[1])/(xz[2] - xz[1]))
-
-    return vignet
-
-def correctVignettingCallback(im, ccd=None, butler=None):
-    """A callback function that subtracts the bias and trims a raw image"""
-
-    if not ccd:        
-        ccd = cameraGeom.cast_Ccd(im.getDetector())
-
-    if True:
-        im = cameraGeomUtils.trimRawCallback(im, ccd, butler)
-
-    width, height = im.getDimensions()
-
-    fxy = []
-    if False:
-        for xy in [(0,         0),
-                   (width - 1, height - 1), 
-                   ]:
-            fxy.append(ccd.getPositionFromPixel(afwGeom.PointD(*xy)).getPixels(1.0))
-
-        X, Y = np.meshgrid(fxy[0][0] + (fxy[1][0] - fxy[0][0])/width* np.arange(width),
-                           fxy[0][1] + (fxy[1][1] - fxy[0][1])/height*np.arange(height))
-        im.getImage().getArray()[:] /= getVignetting(X, Y)
-    else:
-        vim = afwImage.ImageF(2,2)
-        for iy, y in enumerate([0.25, 0.75]):
-            for ix, x in enumerate([0.25, 0.75]):
-                fx, fy = ccd.getPositionFromPixel(afwGeom.PointD(x*width, y*height)).getPixels(1.0)
-
-                vim[ix, iy] = float(getVignetting([fx], [fy])[0])
-
-        backobj = afwMath.BackgroundMI(im.getBBox(), afwImage.makeMaskedImage(vim))
-        im.getImage()[:] /= backobj.getImageF("LINEAR")
-
-    print "Correcting vignetting for", ccd.getId().getName(),  ccd.getId().getSerial()
-
-    return im
-
-def flatfieldCallback(im, ccd=None, butler=None):
-    """A callback function that subtracts the bias and trims a raw image, then flattens it"""
+    assert butler
 
     if not ccd:
         ccd = cameraGeom.cast_Ccd(im.getDetector())
 
-    if hasattr(im, "getMaskedImage"):
-        im = im.getMaskedImage()
+    bkgd = butler.get("calexpBackground", ccd=ccd.getId().getSerial(), **imageSource.kwargs)
 
-    if hasattr(im, "convertF"):
-        im = im.convertF()
-
-    if ccd.getId().getSerial() != 90:
-        #raise RuntimeError("Skipping")
-        pass
-
-    im = cameraGeomUtils.trimRawCallback(im, ccd, butler)
-    calibDir="/home/astro/hsc/hsc/HSC/CALIB_RHL/FLAT/2013-06-16/HSC-I/domeflat"
-    fileName = os.path.join(calibDir, "FLAT-%03d.fits" % (ccd.getId().getSerial()))
-    print fileName
-    flat = afwImage.ImageF(fileName)
-    im /= flat
+    im += bkgd.getImage()
 
     return im
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-
-def makeVignettingImage(im, correctJacobian=True):
-    ccd = cameraGeom.cast_Ccd(im.getDetector())
-
-    width, height = im.getDimensions()
-
-    fxy = []
-    for xy in [(0,         0),
-               (width - 1, height - 1), 
-               ]:
-        fxy.append(ccd.getPositionFromPixel(afwGeom.PointD(*xy)).getPixels(1.0))
-
-    X, Y = np.meshgrid(fxy[0][0] + (fxy[1][0] - fxy[0][0])/width* np.arange(width),
-                       fxy[0][1] + (fxy[1][1] - fxy[0][1])/height*np.arange(height))
-
-    im.getMaskedImage().getImage().getArray()[:] = getVignetting(X, Y)
-
-    if correctJacobian:
-        dist = ccd.getDistortion()
-
-        jim = np.empty((height, width)) # n.b. numpy index order
-        jY = np.arange(height)/float(height - 1)
-
-        jacobian = [0, 0]
-        for x in range(width):
-            for i, y in enumerate((0, height - 1)):
-                jacobian[i] = dist.computeQuadrupoleTransform(
-                    ccd.getPositionFromPixel(afwGeom.PointD(x, y)).getPixels(1.0), False).computeDeterminant()
-
-            jim[:, x] = jacobian[0] + jY*(jacobian[1] - jacobian[0])
-
-        im.getMaskedImage().getImage().getArray()[:] *= jim
-                    
-def makeNewFlats(butler, modelVignetting=True, correctJacobian=True, data=None, 
-                 calibDir="/home/astro/hsc/hsc/HSC/CALIB_RHL/FLAT/2013-06-16/HSC-I/domeflat", visit=903000):
-
-    if data:
-        zps = dict(set(zip(data.mapperInfo.splitId(data.matchedCalibs.get("id"), asDict=True)["ccd"],
-                           data.zp)))
-        mean = np.mean(np.array(zps.values()))
-        zps = dict([(k, 10**(-0.4*(v - mean))) for k, v in zps.items()])
-
-        if False:
-            zps[0]  *= 0.93
-            zps[18] *= 1.08
-            zps[43] *= 1.03
-            zps[75] *= 1.06
-    else:
-        zps = {}
-
-    for ccd in range(112):
-        if not zps.has_key(ccd):
-            zps[ccd] = 1.0
-
-    zps[104] *= 0.50                    # determined by looking at images
-    zps[105] *= 0.92
-    zps[106] *= 0.70
-    zps[107] *= 0.83
-    zps[108] *= 0.84
-    zps[109] *= 0.63
-    zps[110] *= 0.92
-    zps[111] *= 0.70
-
-    camera = butler.get("camera")
-
-    for ccd in range(112):
-        if False and ccd not in range(104, 112):
-            continue
-
-        print ccd
-        fileName = os.path.join(calibDir, "FLAT-%03d.fits" % (ccd))
-        flat = afwImage.ExposureF(fileName)
-        flat.setDetector(cameraGeomUtils.findCcd(camera, ccd))
-
-        if modelVignetting:
-            makeVignettingImage(flat, correctJacobian)
-
-        if data:
-            flat.getMaskedImage().getImage()[:] /= zps[ccd]
-
-        flat.writeFits(fileName)
-
+#
+# makeVignettingImage getVignetting correctVignettingCallback
+# are now in lsst/obs/subaru/ccdTesting.py
+#
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 def assembleTiles(images):
@@ -6144,8 +6110,17 @@ import lsst.meas.algorithms as measAlg
 import lsst.pex.config as pexConfig
 #import lsst.meas.algorithms.defects as defects
 
-def trimRemoveCrCallback(im, ccd, butler, subtractBackground=False):
-    im = cameraGeomUtils.trimRawCallback(im, ccd, butler, True)
+def trimRemoveCrCallback(im, ccd=None, butler=None, imageSource=None, subtractBackground=False):
+    if hasattr(im, "convertF"):
+        im = im.convertF()
+        
+    im = cameraGeomUtils.trimRawCallback(im, ccd, butler, imageSource=imageSource, subtractBackground=True)
+    if True:                            # XXX
+        return im
+
+    if False:
+        defects = afwDetect.FootprintSet(im, afwDetect.Threshold(10, afwDetect.Threshold.STDEV, False), "SAT")
+        del defects
 
     if subtractBackground:
         bctrl = afwMath.BackgroundControl(2, 5)
@@ -6170,6 +6145,7 @@ def trimRemoveCrCallback(im, ccd, butler, subtractBackground=False):
 
     crConfig = measAlg.FindCosmicRaysConfig()
     crConfig.nCrPixelMax = 100000
+    crConfig.nCrPixelMax *= 10
     crs = measAlg.findCosmicRays(mi, psf, background, pexConfig.makePolicy(crConfig))
     if not False:
         print "CCD %03d %5d CRs" % (ccd.getId().getSerial(), len(crs))
