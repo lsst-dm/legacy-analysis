@@ -2887,8 +2887,6 @@ def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, f
         if magmax is not None:
             good = np.logical_and(good, mags[idN] < magmax)
 
-    good = good[good]
-
     for k, s in suffixes.items():
         mags[k] = mags[k][good]
 
