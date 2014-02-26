@@ -5167,7 +5167,8 @@ class ResidualImage(cameraGeomUtils.GetCcdImage):
     """A class to return an Image of a given Ccd based on its cameraGeometry"""
     
     def __init__(self, butler, magMin=None, magLim=30, magType="psf", apCorr=1.0, showPsfStars=False,
-                 bin=10, background=np.nan, sigma=0, verbose=False, *args, **kwargs):
+                 showPsfModels=True,
+                 bin=10, stampSize=0, background=np.nan, sigma=0, verbose=False, *args, **kwargs):
         """Initialise
         gravity  If the image returned by the butler is trimmed (e.g. some of the SuprimeCam CCDs)
                  Specify how to fit the image into the available space; N => align top, W => align left
@@ -5185,7 +5186,8 @@ class ResidualImage(cameraGeomUtils.GetCcdImage):
         self.imageIsBinned = True       # i.e. images returned by getImage are already binned
         self.apCorr = apCorr
         self.showPsfStars = showPsfStars
-
+        self.showPsfModels = showPsfModels
+        self.stampSize = stampSize
         self.isRaw = False
         
         self.gravity = None
@@ -5225,8 +5227,11 @@ class ResidualImage(cameraGeomUtils.GetCcdImage):
         else:
             print >> sys.stderr, "CCD %d has fluxMag0 <= 0.0; showing all stars" % ccdNum
             psfMag = np.zeros(len(ss)) + 0.9999*self.magLim
+        psfWidth, psfHeight = calexp.getPsf().getLocalKernel().getDimensions()
 
-        good = np.logical_and(psfMag < self.magLim, np.logical_not(ss.get("flags.pixel.saturated.any")))
+        good = np.logical_not(ss.get("flags.pixel.saturated.any"))
+        if self.magLim is not None:
+            good = np.logical_and(psfMag < self.magLim, good)
         if self.magMin is not None:
             good = np.logical_and(good, psfMag > self.magMin)
         isStar = ss.get("classification.extendedness") < 0.5
@@ -5235,8 +5240,21 @@ class ResidualImage(cameraGeomUtils.GetCcdImage):
         if self.showPsfStars:
             good = np.logical_and(good, ss.get("calib.psf.used"))
 
-        im = maUtils.showPsfResiduals(calexp, ss[good], scale=self.bin,
-                                      magType=self.magType, apCorr=self.apCorr, frame=None).getImage()
+        if self.showPsfModels:
+            stampSize = self.stampSize
+
+            w, h = calexp.getWidth()//self.bin, calexp.getHeight()//self.bin
+            nx, ny = w//(stampSize if stampSize else psfWidth), h//(stampSize if stampSize else psfHeight)
+            if nx == 1:
+                nx += 1
+            return maUtils.showPsfMosaic(calexp, nx=nx, ny=ny,
+                                         showCenter=True, showEllipticity=False, showFwhm=True,
+                                         stampSize=stampSize, frame=None, title=None).makeMosaic(mode=nx)
+        else:
+            im = maUtils.showPsfResiduals(calexp, ss[good], scale=self.bin,
+                                          magType=self.magType,
+                                          #apCorr=self.apCorr,
+                                          frame=None).getImage()
 
         if self.sigma > 0:
             gaussFunc = afwMath.GaussianFunction1D(self.sigma)
@@ -5246,21 +5264,32 @@ class ResidualImage(cameraGeomUtils.GetCcdImage):
             im = cim
 
         # showPsfResiduals pads the image to allow psfs that hang over the edge
-        psfWidth, psfHeight = calexp.getPsf().getLocalKernel().getDimensions()
         im = im[afwGeom.BoxI(afwGeom.PointI(psfWidth//2, psfHeight//2),
                              afwGeom.ExtentI(calexp.getWidth()//self.bin, calexp.getHeight()//self.bin))]
 
         return im
     
 
-def showPsfResiduals(data, dataId, magMin=None, magLim=23, magType="psf", showPsfStars=False, bin=10, sigma=0, frame=0, verbose=False):
-    """Show the residuals resulting from subtracting PSFs from an image (the background
-    is scaled down by bin)"""
-    return cameraGeomUtils.showCamera(data.butler.get("camera"),
+def showPsfResiduals(data, dataId, magMin=None, magLim=23, magType="psf", showPsfStars=False,
+                     showPsfModels=True, stampSize=0, radius=17920,
+                     onlySerials=[], nJob=0, bin=10, sigma=0, frame=0, verbose=False):
+    """Show the residuals across the camera resulting from subtracting PSFs from an image (the background
+    is scaled down by bin)
+
+    If showPsfModels is True, show the PSF model instead
+    """
+    mos = cameraGeomUtils.showCamera(data.butler.get("camera"),
                                       ResidualImage(data.butler, bin=bin, sigma=sigma, verbose=verbose,
                                                     magMin=magMin, magLim=magLim, magType=magType,
-                                                    showPsfStars=showPsfStars, **dataId),
-                                      bin=bin, frame=frame)
+                                                    showPsfStars=showPsfStars,
+                                                    showPsfModels=showPsfModels, stampSize=stampSize,
+                                                    **dataId),
+                                      onlySerials=onlySerials, nJob=nJob, bin=bin, frame=frame,
+                                      title=data.mapperInfo.dataIdToTitle([dataId]))
+    if frame is not None and radius:
+        ds9.dot("o", -mos.getX0(), -mos.getY0(), size=radius/float(bin), ctype=ds9.RED, frame=frame)
+        
+    return mos
 
 def showStackedPsfResiduals(data=None, dataId={}, exposure=None, sourceSet=None, sigma=None,
                             magType="psf", magMin=14, magMax=22, dmag=0.5, gutter=4, title="+",
