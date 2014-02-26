@@ -1017,6 +1017,9 @@ class Data(object):
         self._rerun = None
         self.butler = None
         self.setButler(*args, **kwargs)
+        if self.butler:
+            mat = re.search(r"/rerun/(.*)", self.butler.mapper.root)
+            self._rerun = mat.group(1)
 
         self.dataId = []
         self.matches = None
