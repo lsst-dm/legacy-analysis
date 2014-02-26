@@ -93,25 +93,37 @@ def plotDeblendFamily(mi, parent, kids, dkids=[],
     tts = []
     stys = []
     xys = []
+    #
+    # Find how large an image we need to display the parent and all the children
+    #
+    imBbox = parent_im.getBBox(afwImage.PARENT)
+    kidImages = {}
+    for kid in kids:
+        kim = footprintToImage(kid.getFootprint(), mi, **aa)
+        kidImages[kid] = kim
+        
+        imBbox.include(kim.getBBox(afwImage.PARENT))
 
     mos = displayUtils.Mosaic(background=background)
-    mos.append(parent_im, '%dP' % utils.butler.mapperInfo.getId(parent))
 
-    for i, kid in enumerate(kids):
-        kim = footprintToImage(kid.getFootprint(), mi, **aa)
-        peak = kid.getFootprint().getPeaks()[0]
-        #
-        # Put the child into the correct place in the parent image
-        #
-        _kim = parent_im.Factory(parent_im.getDimensions())
-        _kim.setXY0(parent_im.getXY0())
+    bbox = afwGeom.Box2I(afwGeom.Point2I(kim.getX0() - imBbox.getMinX(),
+                                         kim.getY0() - imBbox.getMinY()), kim.getDimensions())
 
-        bbox = afwGeom.Box2I(afwGeom.Point2I(kim.getX0() - parent_im.getX0(),
-                                             kim.getY0() - parent_im.getY0()), kim.getDimensions())
-        
-        sim = kim.Factory(_kim, bbox)
-        sim <<= kim
-        mos.append(_kim, '%dC' % utils.butler.mapperInfo.getId(kid)); del _kim
+    kidImages[parent] = parent_im       # not strictly a kid
+
+    for kid in [parent] + kids:
+        kim = kidImages[kid]
+        #
+        # Put the child into the correct place in the parent image.  We have to do this for
+        # the parent too if some of the children extended outside it's BBox
+        #
+        bbox = afwGeom.Box2I(afwGeom.Point2I(kim.getX0() - imBbox.getMinX(),
+                                             kim.getY0() - imBbox.getMinY()), kim.getDimensions())
+
+        _kim = parent_im.Factory(imBbox)
+        _kim[bbox] <<= kim
+        mos.append(_kim, '%d%s' % (mapperInfo.getId(kid), "P" if kid == parent else "C"))
+        del _kim
 
     title = re.sub(r"[{}']", "",
                    str(utils.butler.mapperInfo.getId(parent, None))) # ds9 doesn't handle those chars well
