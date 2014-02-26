@@ -4056,7 +4056,7 @@ def kronEventCallback(key, source, im, frame):
     drawKron(source, im.getXY0(), frame=frame)
 
 def showSourceSet(sourceSet, exp=None, wcs=None, xy0=None, raDec=None, magmin=None, magmax=None, magType="psf",
-                  nSource=-1, SG=False, deblend=True, obeyXY0=True,
+                  nSource=-1, SG=False, deblend=True, obeyXY0=True, mapperInfo=None,
                   mask=None, symb="+", **kwargs):
     """Show a SourceSet on ds9.
 
@@ -4159,10 +4159,14 @@ def showSourceSet(sourceSet, exp=None, wcs=None, xy0=None, raDec=None, magmin=No
             if symb in ("id", "ID"):
                 dx, dy = 0.0, 0.5
 
+                _id = s.getId()
                 if symb == "id":
-                    _symb = data.mapperInfo.splitId(s.getId(), asDict=True)["objId"]
+                    if mapperInfo:
+                        _symb = mapperInfo.splitId(_id, asDict=True)["objId"]
+                    else:
+                        _id = _id & 0xffff # guess wildly
                 else:
-                    _symb = "%d" % s.getId()
+                    _symb = "%d" % _id
                 if deblend:
                     kwargs["ctype"] = ds9.RED if s.get("parent") == 0 else ds9.MAGENTA                    
 

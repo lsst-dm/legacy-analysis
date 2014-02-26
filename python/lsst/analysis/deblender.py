@@ -3,20 +3,26 @@
 Based on Dustin Lang's code in meas_deblender/examples, but heavily rewritten since then, so don't blame him
 
 E.g.
+import lsst.daf.persistence as dafPersist
 import lsst.afw.display.ds9 as ds9
 import lsst.analysis.utils as utils
+import lsst.analysis.deblender as deblender
 
-da = utils.Data(dataRoot=os.path.join(os.environ["SUPRIME_DATA_DIR"], "SUPA"),
-                Mapper=utils.SuprimecamMapperMit, rerun="rhl/mit");
-dataId = utils.DataId(visit=24473, ccd=3);
-calexp = da.getDataset("calexp", dataId)[0]
-ss = da.getDataset('src', dataId)[0]
-families = deblender.Families(ss, nChildMin=0)
+butler = dafPersist.Butler(os.path.join(os.environ["SUPRIME_DATA_DIR"], "rerun", "rhl", "realFlats"))
+dataId = dict(visit=905518, ccd=31)
+calexp = butler.get("calexp", **dataId)
+ss = butler.get('src', **dataId)
+families = deblender.Families(ss, butler, nChildMin=0)
 
-frame=1
-ds9.mtv(calexp, title=dataId, frame=frame)
+frame=1            # We'll use 0 for the children
+ds9.mtv(calexp, title="%(visit)s %(ccd)s" % dataId, frame=frame)
 utils.showSourceSet(ss, frame=frame)
-utils.showSourceSet(ss, frame=frame, symb='id', size=2.5, fontFamily="times", ctype=ds9.GREEN)
+utils.showSourceSet(ss, mapperInfo=families.mapperInfo, frame=frame, symb='id', size=1.0, fontFamily="times", ctype=ds9.GREEN)
+#
+# This puts us into a loop waiting on ds9.  Sigh.
+# Use d on an object in frame 1 to show the children in frame 0; q to quit the ds9 interactive loop
+#
+deblender.showBlend(calexp, families, frame=0)
 
 """
 
@@ -58,7 +64,7 @@ def drawEllipses(plt, src, **kwargs):
         plt.gca().add_artist(el)
     return els
 
-def plotDeblendFamily(mi, parent, kids, dkids=[],
+def plotDeblendFamily(mi, parent, kids, mapperInfo, dkids=[],
                       background=-10, symbolSize=2,
                       plotb=False, ellipses=True,
                       arcsinh=True, maskbit=False, frame=0):
@@ -125,8 +131,7 @@ def plotDeblendFamily(mi, parent, kids, dkids=[],
         mos.append(_kim, '%d%s' % (mapperInfo.getId(kid), "P" if kid == parent else "C"))
         del _kim
 
-    title = re.sub(r"[{}']", "",
-                   str(utils.butler.mapperInfo.getId(parent, None))) # ds9 doesn't handle those chars well
+    title = re.sub(r"[{}']", "", str(mapperInfo.getId(parent, None))) # ds9 doesn't handle those chars well
     mosaicImage = mos.makeMosaic(frame=frame, title=title)
     ds9.dot("%s  (%.1f, %1.f)" % (title, parent.getX(), parent.getY()),
             0.5*mosaicImage.getWidth(), 1.03*mosaicImage.getHeight(), frame=frame,
@@ -217,7 +222,7 @@ def footprintToImage(fp, mi=None, mask=False):
     return im
 
 class Families(list):
-    def __init__(self, cat, nChildMin=None):
+    def __init__(self, cat, butler, nChildMin=None):
         '''
         Returns [ (parent0, [child0, child1]), (parent1, [child0, ...]), ...]
         where parents are sorted by ID.  Only objects that are deblended are included (unless nChildMin == 0)
@@ -226,6 +231,7 @@ class Families(list):
         special case, nChildMin == 0 includes all objects, even those that aren't blended
         '''
         self.cat = cat
+        self.mapperInfo = utils.makeMapperInfo(butler)
 
         # parent -> [children] map.
         children = {}
@@ -285,36 +291,35 @@ class Families(list):
                 print >> sys.stderr, "Unable to find object at (%.2f, %.2f)" % (x, y)
                 return None
 
-            objId = utils.butler.mapperInfo.splitId(matched[0][0].getId(), asDict=True)["objId"]
+            objId = self.mapperInfo.splitId(matched[0][0].getId(), asDict=True)["objId"]
 
-        family = [f for f in self if utils.butler.mapperInfo.getId(f[0]) == objId]
+        family = [f for f in self if self.mapperInfo.getId(f[0]) == objId]
         if family:
             return family[0]
 
         for family in self:
             for child in family[1]:
-                if utils.butler.mapperInfo.getId(child) == objId:
+                if self.mapperInfo.getId(child) == objId:
                     return family
 
         return None
 
 # backwards compatibility
     
-def getFamilies(cat, nChildMin=None):
-    return Families(cat, nChildMin)
+def getFamilies(cat, butler, nChildMin=None):
+    return Families(cat, butler, nChildMin)
 
 def findFamily(families, objId):
     """Return the object's family (you may specify either the ID for the parent or a child)"""
 
     return families.find(objId)
 
-def makeDisplayFamily(calexp, families, matchRadius=20):
+def makeDisplayFamily(calexp, families, matchRadius=20, background=-10):
     """Factory function for callback function implementing showBlend"""
     def display_family(k, x, y):
         fam = families.find((x, y), matchRadius=matchRadius)
         if fam:
-            plotDeblendFamily(calexp, *fam, background=1000)
-            #return True
+            plotDeblendFamily(calexp, *fam, mapperInfo=families.mapperInfo, background=background)
 
     return display_family
 
