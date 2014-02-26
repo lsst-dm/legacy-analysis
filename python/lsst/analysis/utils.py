@@ -2695,16 +2695,18 @@ def plotCC(data, select1, select2, select3, magType="psf", SG="sg", select4=None
 Plot (data[select1].magType - data[select2].magType) v. (data[select1].magType - data[select3].magType)
 where data[selectN] means, "the objects in data for which selectN(ids) returns True".  E.g.
     plotCC(data, makeSelectVisit(902030), makeSelectVisit(902032), makeSelectVisit(902034), "psf", ...)
-(let's write data[selectN].magType as magN).
+
+If selectN is an int it's interpreted as makeSelectVisit(selectN), so this is equivalent to
+    plotCC(data, 902030, 902032, 902034, "psf", ...)
+
+(let's write data[selectN].magType as magN).  If provided, idN specifies the data from which selection
+function should to be used for magnitude limits (e.g. idN == 3 => visit 902034 in the example)
 
 This can be used to plot 3-colour diagrams or to compare 3 epochs.
 
 If select4 is provided, compare (mag1 - mag2) with (mag3 - mag4)
 If both select1 and select3 are the same band and select2 and select4 are the same (different) band, plot
    (mag1 - mag2) - (mag3 - mag4) against mag1
-
-If a select "function" is actually an int, it is interpreted as makeSelectVisit(selectN) -- i.e.
-as a visit IDs
 
 If title is provided it's used as a plot title; if it starts + the usual title is prepended and if it's
 None no title is provided; if it starts "T:" the label will be written at the top of the plot
@@ -2830,6 +2832,9 @@ def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, f
                 showXlabel="bottom", showYlabel="left",
                 datasetName="", title="+",
                 markersize=1, alpha=1.0, color="red", frames=[0], wcss=[]):
+    """
+    \param idN   The (1-based) index into the selection functions to use for magnitude limits etc.
+    """
 
     subplot = isinstance(fig, pyplot.Axes)
     if subplot:
@@ -2923,16 +2928,17 @@ def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, f
 
     idsForColor = ids[idColorN]
 
-    ccds = np.array([data.mapperInfo.splitId(_id, asDict=True)["ccd"] for _id in idsForColor])
-    visits = np.array([data.mapperInfo.splitId(_id, asDict=True)["visit"] for _id in idsForColor])
+    splitId = data.mapperInfo.splitId(idsForColor, asDict=True)
+    ccds = splitId["ccd"]
+    visits = splitId["visit"]
     #
     # Are we dealing with multi-band or multi-epoch data?
     #
     multiEpoch = False if len(set(filterNames)) == len(filterNames) else True
 
     nobj = 0
-    for c, l, ptype, markersize, color in [("g", nonStellar, "h", markersize, color),
-                                           ("s", stellar,    "*", markersize, "green",)]:
+    for c, l, ptype, markersize, color in [("g", nonStellar, "h",     markersize, color),
+                                           ("s", stellar,    "*", 1.5*markersize, "green",)]:
         if c not in SG.lower():
             continue
 
@@ -3120,6 +3126,8 @@ def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, f
                 title += " [%s < %g]" % (filterNames[idN], magmax)
 
         title += " %d objects" % nobj
+        if data._rerun:
+            title += " rerun %s" % data._rerun
 
         title = re.sub(r"^\+\s*", datasetName + "\n", title)
         if titlePos == "axes":
