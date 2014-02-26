@@ -228,6 +228,8 @@ def getNameOfSet(vals):
     if not vals:
         return ""
 
+    vals = sorted(list(vals))
+
     def addPairToName(valName, val0, val1, stride=1):
         """Add a pair of values, val0 and val1, to the valName list"""
         if isinstance(val0, str) and isinstance(val1, str):
@@ -241,7 +243,7 @@ def getNameOfSet(vals):
         if sval1 == sval0:
             dvn = str(val0)
         else:
-            dvn = "%s-%s" % (sval0, sval1)
+            dvn = "%s..%s" % (sval0, sval1)
             if stride > 1:
                 dvn += ":%d" % stride
         valName.append(dvn)
@@ -250,6 +252,7 @@ def getNameOfSet(vals):
     #
     if len(vals) <= 1 or not isinstance(vals[0], int):
         stride = 1
+        oval = None
     else:
         stride = vals[1] - vals[0]
         oval = vals[1]
