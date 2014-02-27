@@ -5055,18 +5055,24 @@ If utils.eventCallbacks[ev.key] is defined it'll be called with arguments:
                     calexp = self.data.butler.get(dtName("calexp_sub"), bbox=bbox, **dataId).getMaskedImage()
                 else:
                     import deblender
-                    try:
-                        calexp = deblender.footprintToImage(s.getFootprint())
-                    except:
+
+                    families = deblender.Families(ss, self.data.butler, nChildMin=0)
+                    fam = families.find(oid)
+                    if fam:
                         calexp = self.data.butler.get(dtName("calexp"), **dataId).getMaskedImage()
+                        deblender.plotDeblendFamily(calexp, *fam, background=-1,
+                                                    mapperInfo=self.data.mapperInfo, frame=eventFrame)
+                        calexp = None
+                    else:
                         calexp = deblender.footprintToImage(s.getFootprint(), calexp)
 
-                ds9.mtv(calexp, title=title, frame=eventFrame)
-                ds9.pan(s.getX() - calexp.getX0(), s.getY() - calexp.getY0(), frame=eventFrame)
+                if calexp:
+                    ds9.mtv(calexp, title=title, frame=eventFrame)
+                    ds9.pan(s.getX() - calexp.getX0(), s.getY() - calexp.getY0(), frame=eventFrame)
 
-                callback = eventCallbacks.get(ev.key)
-                if callback:
-                    callback(ev.key, s, calexp, frame=eventFrame)
+                    callback = eventCallbacks.get(ev.key)
+                    if callback:
+                        callback(ev.key, s, calexp, frame=eventFrame)
             elif ev.key == "I":
                 print ""
             elif ev.key in ("p", "P"):
