@@ -2456,8 +2456,9 @@ If non-None, [xy]{min,max} are used to set the plot limits
             data.matches = None
         else:
             dselections = data.matches[0]
-            for k in selections.keys():
-                if not (selections[k] == dselections[k]).all():
+            for k in selections:
+                if len(selections[k]) != len(dselections[k]) or \
+                        not (selections[k] == dselections[k]).all():
                     data.matches = None
                     break
 
@@ -2765,7 +2766,8 @@ If non-None, [xy]{min,max} are used to set the plot limits
         else:
             dselections = data.matches[0]
             for k in selections.keys():
-                if not (selections[k] == dselections[k]).all():
+                if len(selections[k]) != len(dselections[k]) or \
+                        not (selections[k] == dselections[k]).all():
                     data.matches = None
                     break
 
