@@ -69,11 +69,12 @@ def plotDeblendFamily(mi, parent, kids, mapperInfo, dkids=[],
                       plotb=False, ellipses=True,
                       arcsinh=True, maskbit=False, frame=0):
     """Display a deblend on ds9"""
-    
-    try:
-        mi = mi.getMaskedImage()        # maybe it's an Exposure?
-    except AttributeError:
-        pass
+
+    if mi:
+        try:
+            mi = mi.getMaskedImage()        # maybe it's an Exposure?
+        except AttributeError:
+            pass
 
     aa = {}
     if maskbit:
