@@ -2408,7 +2408,7 @@ def makeSelectVisit(visits=None, ccds=None, include=True):
 
 def plotCM(data, select1, select2, magType="psf", maglim=20, magmin=14,
            SG="sg", showMedians=False,
-           xmin=None, xmax=None, ymin=None, ymax=None,
+           xlim=(None, None), ylim=(None, None),
            title="+", markersize=1, color="red", alpha=1.0, frames=[0], verbose=False, fig=None):
     """Plot (data[select1].magType - data[select2].magType) v. data1.magType mags (e.g. "psf")
 where data[selectN] means, "the objects in data for which selectN(ids) returns True".  E.g.
@@ -2575,8 +2575,8 @@ If non-None, [xy]{min,max} are used to set the plot limits
         filterNames.append(afwImage.Filter(data.butler.get(dtName("calexp", True), **dataId)).getName())
     filter1, filter2 = filterNames[1], filterNames[2]
 
-    axes.set_xlim(-1 if xmin is None else xmin, 2 if xmax is None else xmax)
-    axes.set_ylim(24 if ymax is None else ymax, 14 if ymin is None else ymin)
+    axes.set_xlim(-1 if xlim[0] is None else xlim[0], 2  if xlim[1] is None else xlim[1])
+    axes.set_ylim(24 if ylim[0] is None else ylim[0], 14 if ylim[1] is None else ylim[1])
     axes.set_xlabel("(%s - %s)$_{%s}$" % (filter1, filter2, magType))
     axes.set_ylabel("%s$_{%s}$" % (filter1, magType))
 
@@ -2831,7 +2831,7 @@ def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, f
                 showStatistics=False, show_r_xy=True, colorCcds=False, colorVisits=False,
                 usePrincipalColor=True, stellarLocusEnds=[],
                 adjustLocus=False, locusLtype="b:",
-                xmin=None, xmax=None, ymin=None, ymax=None,
+                xlim=(None, None), ylim=(None, None),
                 showXlabel="bottom", showYlabel="left",
                 datasetName="", title="+",
                 markersize=1, alpha=1.0, color="red", frames=[0], wcss=[]):
@@ -2985,19 +2985,17 @@ def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, f
                          stellarLocusEnds, locusLtype, usePrincipalColor, plotRaDec)
         
     if plotRaDec:
-        if xmin is not None and xmax is not None:
-            axes.set_xlim(xmin, xmax)
-        if ymin is not None and ymax is not None:
-            axes.set_ylim(ymin, ymax)
+        axes.set_xlim(xlim)
+        axes.set_ylim(ylim)
     elif multiEpoch:
-        axes.set_xlim(-0.3 if xmin is None else xmin, 0.3 if xmax is None else xmax)
-        axes.set_ylim(-0.3 if ymin is None else ymin, 0.3 if ymax is None else ymax)
+        axes.set_xlim(-0.3 if xlim[0] is None else xlim[0], 0.3 if xlim[1] is None else xlim[1])
+        axes.set_ylim(-0.3 if ylim[0] is None else ylim[0], 0.3 if ylim[1] is None else ylim[1])
     else:
-        axes.set_xlim(-1 if xmin is None else xmin, 2 if xmax is None else xmax)
-        axes.set_ylim(-1 if ymin is None else ymin, 2 if ymax is None else ymax)
+        axes.set_xlim(-1 if xlim[0] is None else xlim[0], 2 if xlim[1] is None else xlim[1])
+        axes.set_ylim(-1 if ylim[0] is None else ylim[0], 2 if ylim[1] is None else ylim[1])
 
-    if xmax is not None and xmin is not None and ymax is not None and ymin is not None and \
-            abs(xmax - xmin) == abs(ymax - ymin):
+    if xlim[1] is not None and xlim[0] is not None and ylim[1] is not None and ylim[0] is not None and \
+            abs(xlim[1] - xlim[0]) == abs(ylim[1] - ylim[0]):
         axes.set_aspect('equal')
         
     if showStatistics:
