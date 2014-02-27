@@ -2406,11 +2406,11 @@ def makeSelectVisit(visits=None, ccds=None, include=True):
 
     return selectVisit
 
-def plotCM(data, select1, select2, magType="psf", maglim=20, magmin=14,
+def plotCM(data, select1, select2, magType="psf", idN=1, maglim=20, magmin=14,
            SG="sg", showMedians=False,
            xlim=(None, None), ylim=(None, None),
            title="+", markersize=1, color="red", alpha=1.0, frames=[0], verbose=False, fig=None):
-    """Plot (data[select1].magType - data[select2].magType) v. data1.magType mags (e.g. "psf")
+    """Plot (data[select1].magType - data[select2].magType) v. data[idN].magType mags (e.g. "psf")
 where data[selectN] means, "the objects in data for which selectN(ids) returns True".  E.g.
 
     plotCM(data, makeSelectVisit(902030), makeSelectVisit(902032)...)
@@ -2437,6 +2437,8 @@ If non-None, [xy]{min,max} are used to set the plot limits
     selections = {1: select1,
                   2: select2,
                   }
+    if idN not in selections:
+        raise RuntimeError("Invalid value of idN %d; must be in %s" % (idN, list(sorted(selections.keys()))))
 
     allIds = data.cat.get("id")
     for k, v in selections.items():
@@ -2484,20 +2486,22 @@ If non-None, [xy]{min,max} are used to set the plot limits
                 bad = np.logical_or(bad, _flg)
 
     good = np.logical_not(bad)
-    stellar = matched.cat.get("stellar_1")
+    stellar = matched.cat.get("stellar_%d" % idN)
     if SG.lower() == 's':
         good = np.logical_and(good, stellar)
     elif SG.lower() == 'g':
         good = np.logical_and(good, np.logical_not(stellar))
 
     ids = matched.cat.get("id")[good]
-    xc = matched.cat.get("centroid.sdss_1.x")[good]
-    yc = matched.cat.get("centroid.sdss_1.y")[good]
+    xc = matched.cat.get("centroid.sdss_%d.x" % idN)[good]
+    yc = matched.cat.get("centroid.sdss_%d.y" % idN)[good]
     stellar = stellar[good]
 
     mag1 = matched.getMagsByType(magType, good, suffix="_1")
     mag2 = matched.getMagsByType(magType, good, suffix="_2")
     delta = np.array(mag1 - mag2, dtype='float64') # float64 is needed by makeStatistics --- why?
+
+    mag = mag1 if idN == 1 else mag2
 
     good = good[good]
 
@@ -2512,20 +2516,20 @@ If non-None, [xy]{min,max} are used to set the plot limits
     nobj = 0
     if "g" in SG.lower():
         nobj += np.sum(nonStellar)
-        axes.plot(delta[nonStellar], mag1[nonStellar], "o",
+        axes.plot(delta[nonStellar], mag[nonStellar], "o",
                   alpha=alpha["g"], markersize=markersize, markeredgewidth=0, color=color, zorder=-1)
     if "s" in SG.lower():
         nobj += np.sum(stellar)
-        axes.plot(delta[stellar], mag1[stellar], "o",
+        axes.plot(delta[stellar], mag[stellar], "o",
                   alpha=alpha["s"], markersize=markersize, markeredgewidth=0, color=color2, zorder=-1)
 
     if showMedians:
         binwidth = 0.5
-        bins = np.arange(np.floor(magmin), np.floor(np.nanmax(mag1)), binwidth)
+        bins = np.arange(np.floor(magmin), np.floor(np.nanmax(mag)), binwidth)
         vals = np.empty_like(bins)
         err = np.empty_like(bins)
         for i in range(len(bins) - 1):
-            inBin = np.logical_and(mag1 > bins[i], mag1 <= bins[i] + binwidth)
+            inBin = np.logical_and(mag > bins[i], mag <= bins[i] + binwidth)
             if SG.lower() == 's':
                 tmp = delta[np.where(np.logical_and(stellar, inBin))]
             else:
@@ -2553,7 +2557,7 @@ If non-None, [xy]{min,max} are used to set the plot limits
         axes.axvline(0.0, color="blue", ls=":")
 
         try:
-            inBin = np.logical_and(mag1 > magmin, mag1 <= maglim)
+            inBin = np.logical_and(mag > magmin, mag <= maglim)
             stats = afwMath.makeStatistics(delta[inBin], afwMath.STDEVCLIP | afwMath.MEANCLIP)
             mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
             print "%-5s %5.2f%% +- %5.2f%%" % (magType, 100*mean, 100*stdev)
@@ -2578,7 +2582,7 @@ If non-None, [xy]{min,max} are used to set the plot limits
     axes.set_xlim(-1 if xlim[0] is None else xlim[0], 2  if xlim[1] is None else xlim[1])
     axes.set_ylim(24 if ylim[0] is None else ylim[0], 14 if ylim[1] is None else ylim[1])
     axes.set_xlabel("(%s - %s)$_{%s}$" % (filter1, filter2, magType))
-    axes.set_ylabel("%s$_{%s}$" % (filter1, magType))
+    axes.set_ylabel("%s$_{%s}$" % (filter1 if idN == 1 else filter2, magType))
 
     title += " %d objects" % nobj
     name = ", ".join([data.mapperInfo.dataIdToTitle(
@@ -2605,7 +2609,7 @@ If non-None, [xy]{min,max} are used to set the plot limits
     if "s" not in SG.lower():
         delta[stellar] = -1000
 
-    eventHandlers[fig] = EventHandler(data, axes, delta, mag1, ids, xc, yc, flags, frames=frames)
+    eventHandlers[fig] = EventHandler(data, axes, delta, mag, ids, xc, yc, flags, frames=frames)
 
     fig.show()
 
