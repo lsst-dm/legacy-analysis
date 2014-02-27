@@ -104,7 +104,7 @@ def plotDeblendFamily(mi, parent, kids, mapperInfo, dkids=[],
     # Find how large an image we need to display the parent and all the children
     #
     imBbox = parent_im.getBBox(afwImage.PARENT)
-    kidImages = {}
+    kidImages, kim = {}, None
     for kid in kids:
         kim = footprintToImage(kid.getFootprint(), mi, **aa)
         kidImages[kid] = kim
@@ -113,6 +113,9 @@ def plotDeblendFamily(mi, parent, kids, mapperInfo, dkids=[],
 
     mos = displayUtils.Mosaic(background=background)
 
+    if not kim:
+        kim = parent_im.clone()
+        
     bbox = afwGeom.Box2I(afwGeom.Point2I(kim.getX0() - imBbox.getMinX(),
                                          kim.getY0() - imBbox.getMinY()), kim.getDimensions())
 
