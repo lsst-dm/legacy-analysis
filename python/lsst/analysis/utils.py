@@ -128,17 +128,23 @@ class Prefix(object):
 def dtName(dType, md=False):
     """Get the name of a given data type (e.g. dtName("src"))"""
     dType_base = re.sub(r"_(filename|md|sub)$", "", dType)
-    if _prefix_ in ("", ) or dType_base in ("camera", "coaddTempExp", "goodSeeingCoadd",):
+
+    if _prefix_ == "forced" and dType_base == "calexp":
+        md = md or re.search(r"_md$", dType)
+        dType = "deepCoadd"
+        dType_base = "deepCoadd"
+
+    if _prefix_ in ("", ) or dType_base in ("camera", "coaddTempExp", "deepCoadd", "goodSeeingCoadd",):
         if md:
             dType += "_md"
         return dType
 
     dTypeOut = None
-    if _prefix_ == "" or dType_base in ("camera", "coaddTempExp", "goodSeeingCoadd",):
+    if _prefix_ == "" or dType_base in ("camera", "coaddTempExp", "deepCoadd", "goodSeeingCoadd",):
         dTypeOut = dType
     elif _prefix_ == "forced":
         if dType == "src":
-            dTypeOut = "forcedsources"
+            dTypeOut = "deepCoadd_forced_src"
         else:
             dTypeOut = dType
 
@@ -232,6 +238,7 @@ def getNameOfSet(vals):
 
     def addPairToName(valName, val0, val1, stride=1):
         """Add a pair of values, val0 and val1, to the valName list"""
+        sval0 = None
         if isinstance(val0, str) and isinstance(val1, str):
             if val0 != val1:
                 pre = os.path.commonprefix([val0, val1])
@@ -240,6 +247,10 @@ def getNameOfSet(vals):
         else:
             sval0 = str(val0)
             sval1 = str(val1)
+
+        if sval0 is None:
+            return ""
+
         if sval1 == sval0:
             dvn = str(val0)
         else:
@@ -304,7 +315,7 @@ def idsToDataIds(data, ids):
     """Convert an array of 64-bit IDs to a list of dataIds
     (e.g. [{'ccd': 43, 'visit': 902040}, {'ccd': 1, 'visit': 902040}, ...])
     """
-    idDict = data.mapperInfo.splitId(ids, True); del(idDict["objId"])
+    idDict = data.mapperInfo.splitId(ids); del(idDict["objId"])
     return map(dict, set(zip(*[zip(len(v)*[k], v) for k, v in idDict.items()])))
 
 def makeMapperInfo(butler):
@@ -318,7 +329,7 @@ def makeMapperInfo(butler):
             return None
 
         def getId(self, src, field="objId"): # can't be static as it calls derived function splitId
-            idDict = self.splitId(src.getId(), asDict=True)
+            idDict = self.splitId(src.getId())
 
             return idDict[field] if field else idDict
 
@@ -443,7 +454,7 @@ def makeMapperInfo(butler):
                                                                             registry=registry)).create()
 
         @staticmethod
-        def splitId(oid, asDict=False):
+        def splitId(oid, asDict=True):
             """Split an ObjectId into visit, raft, sensor, and objId"""
             objId = int((oid & 0xffff) - 1)     # Should be the same value as was set by apps code
             oid >>= 16
@@ -464,7 +475,7 @@ def makeMapperInfo(butler):
 
     #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-    def splitSdssCcdExposureId(oid, hasFilter=True, asDict=False):
+    def splitSdssCcdExposureId(oid, hasFilter=True, asDict=True):
         """Split an ObjectId into run, camcol, [filter], objId
 
     If hasFilter is True, the ObjectId encodes a filtername
@@ -499,7 +510,7 @@ def makeMapperInfo(butler):
             else:
                 return run, camcol, field, objId
 
-    def splitSdssCoaddId(oid, hasFilter=True, asDict=False):
+    def splitSdssCoaddId(oid, hasFilter=True, asDict=True):
         """Split an ObjectId into tract, patch, [filter], objId
 
     If hasFilter is True, the ObjectId encodes a filtername
@@ -554,10 +565,10 @@ def makeMapperInfo(butler):
 
                 if dataType not in ("flat",):
                     fields.append("field")
-            elif _prefix_ in ("goodSeeingCoadd",):
+            elif _prefix_ in ("deepCoadd", "goodSeeingCoadd",):
                 fields = ["patch", "tract", "filter"]
             else:
-                raise RuntimeError("I don't know what fields I need to read %s data" % _prefix_)
+                raise RuntimeError("I don't know which fields I need to read %s data" % _prefix_)
                 pass
 
             return fields
@@ -663,7 +674,7 @@ def makeMapperInfo(butler):
             return butler
 
         @staticmethod
-        def splitId(oid, hasFilter=True, asDict=False):
+        def splitId(oid, hasFilter=True, asDict=True):
             """Split an ObjectId into run, camcol, [filter], field, objId or tract, patch, [filter], objId
 
         If hasFilter is True, the ObjectId encodes a filtername
@@ -689,14 +700,16 @@ def makeMapperInfo(butler):
 
         @staticmethod
         def getFields(dataType):
-            if _prefix_ in ("", "forced"):
+            if _prefix_ in ("",):
                 fields = ["visit", "ccd"]
                 if dataType not in ("flat",):
                     fields.append("filter")
+            elif _prefix_ in ("deepCoadd", "forced",):
+                fields = ["tract", "patch", "filter"]
             elif _prefix_ in ("stack",):
                 fields = ["stack", "patch", "filter"]
             else:
-                raise RuntimeError("I don't know what fields I need to read %s data" % _prefix_)
+                raise RuntimeError("I don't know which fields I need to read %s data" % _prefix_)
 
             return fields
 
@@ -757,6 +770,8 @@ def makeMapperInfo(butler):
                 except TypeError:
                     for v in dataId["visit"]:
                         visits.add(v)
+                except KeyError:
+                    pass
 
             ccds = sorted(list(ccds))
             filters = sorted(list(filters))
@@ -795,7 +810,7 @@ def makeMapperInfo(butler):
             return 0x0
 
         @staticmethod
-        def splitId(oid, asDict=False):
+        def splitId(oid, asDict=True):
             """Split an ObjectId into visit, ccd, and objId.
             See obs/subaru/python/lsst/obs/suprimecam/suprimecamMapper.py"""
             oid = np.array(oid, dtype='int64')
@@ -876,29 +891,96 @@ def makeMapperInfo(butler):
             return "%s %s" % (visit, ccdId)
 
         @staticmethod
-        def splitId(oid, asDict=False):
+        def splitId(oid, asDict=True):
+            """Split an ObjectId into (visit, ccd, objId) or (tract, patch, [filter], objId)
+
+        If hasFilter is True, the ObjectId encodes a filtername
+            """
+
+            if _prefix_ in ("deepCoadd", "forced",):
+                return HscMapperInfo.splitCoaddId(oid, asDict=asDict, hasFilter=True)
+            elif _prefix_ in ("chisqCoadd",):
+                return HscMapperInfo.splitCoaddId(oid, asDict=asDict, hasFilter=False)
+            elif _prefix_ in ("",):
+                return HscMapperInfo.splitExposureId(oid, asDict=asDict)
+            else:
+                raise RuntimeError("Please teach HscMapperInfo how to process splitId on a %s" % _prefix_)
+
+        @staticmethod
+        def splitExposureId(oid, asDict=True):
             """Split an ObjectId (maybe an numpy array) into visit, ccd, and objId.
             See obs/subaru/python/lsst/obs/hscSim/hscMapper.py"""
             oid = np.array(oid, dtype='int64')
-            objId = np.bitwise_and(oid, 0xffffffff) # Should be the same value as was set by apps code
+            objId = np.bitwise_and(oid, 2**32 - 1) # Should be the same value as was set by apps code
             oid = np.right_shift(oid, 32).astype('int32')
 
-            if _prefix_ == "stack":
-                raise RuntimeError("Please teach HscMapperInfo how to process splitId on a %s" % _prefix_)
+            ccd = (oid % 200).astype('int32')
+            oid //= 200
+            visit = oid.astype('int32')
+
+            if visit.size == 1:     # sqlite doesn't like numpy types
+                visit = int(visit)
+                ccd = int(ccd)
+                objId = int(objId)
+
+            if asDict:
+                return dict(visit=visit, ccd=ccd, objId=objId)
             else:
-                ccd = (oid % 200).astype('int32')
-                oid //= 200
-                visit = oid.astype('int32')
+                return visit, ccd, objId
 
-                if visit.size == 1:     # sqlite doesn't like numpy types
-                    visit = int(visit)
-                    ccd = int(ccd)
-                    objId = int(objId)
+        @staticmethod
+        def splitCoaddId(oid, asDict=True, hasFilter=True):
+            """Split an ObjectId (maybe an numpy array) into tract, patch, [filter], and objId.
+            See obs/subaru/python/lsst/obs/hscSim/hscMapper.py"""
+            mapper = HscMapperInfo.Mapper
 
-                if asDict:
-                    return dict(visit=visit, ccd=ccd, objId=objId)
-                else:
-                    return visit, ccd, objId
+            oid = np.array(oid, dtype='int64')
+            objId = np.bitwise_and(oid, 2**mapper._nbit_id - 1)
+            oid >>= mapper._nbit_id
+
+            if hasFilter:
+                filterId = np.bitwise_and(oid, 2**mapper._nbit_filter - 1).astype('int32')
+                oid >>= mapper._nbit_filter
+
+                filterName = np.empty(oid.size, "a6")
+
+                if filterId.size == 1:
+                    filterId = [int(filterId)] # as you can't iterate over a length-1 np array
+                    
+                for fid in set(filterId):
+                    name = afwImage.Filter(int(fid)).getName()
+
+                    filesystemName = "HSC-%s" % name.upper() # name mapper needs
+                    try:
+                        afwImage.Filter(filesystemName)
+                        name = filesystemName
+                    except:
+                        pass
+
+                    filterName[filterId == fid] = name
+            else:
+                filterName = None
+
+            patchY = np.bitwise_and(oid, 2**mapper._nbit_patch - 1).astype('int32')
+            oid >>= mapper._nbit_patch
+            patchX = np.bitwise_and(oid, 2**mapper._nbit_patch - 1).astype('int32')
+            oid >>= mapper._nbit_patch
+            add = np.core.defchararray.add # why isn't this easier to find?
+            patch = add(add(patchX.astype(str), ","), patchY.astype(str))
+            patch.shape = filterName.shape # why do I have to do this?
+
+            tract = oid.astype('int32')
+
+            if oid.size == 1:     # sqlite doesn't like numpy types
+                filterName = str(filterName[0])
+                tract = int(tract)
+                patch = str(patch[0])
+                objId = int(objId)
+
+            if asDict:
+                return {"filter" : filterName, "tract" : tract, "patch" : patch, "objId" : objId}
+            else:
+                return filterName, tract, patch, objId
 
     #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
@@ -1033,6 +1115,8 @@ class Data(object):
 
         self.name = "??"
         self.astrom = None
+
+        self.hasCmodel = None           # did we calculate cmodel quantities?
             
     def setButler(self, dataRoot=None, rerun=None):
         if (self._dataRoot and dataRoot != self._DataRoot) or (self._rerun and self._rerun != rerun):
@@ -1101,9 +1185,15 @@ class Data(object):
 
         dataSets = []
         for did in _dataIdDictOuterProduct(dataId, []):
-            if _prefix_ in ("forced", "goodSeeingCoadd", "stack"): # XXXXXXX
+            if _prefix_ in ("goodSeeingCoadd", "stack"): # XXXXXXX
                 if self.butler.datasetExists(dtName(dataType), **did):
                     dataSets.append(did)
+            elif _prefix_ in ("forced", "deepCoadd",): # XXXXXXX
+                try:
+                    self.butler.get(dtName(dataType), **did)
+                    dataSets.append(did)
+                except Exception as e:
+                    print "RHL", e
             else:
                 for vals in self.butler.queryMetadata(_raw_, _visit_, fields, **fixTypesForButler(did)):
                     _dataId = dict(zip(fields, vals))
@@ -1176,32 +1266,36 @@ raft or sensor may be None (meaning get all)
                 idKey = sch.find("id").getKey()
                 parentKey = sch.find("parent").getKey()
                 extendednessKey = sch.find("classification.extendedness").getKey()
-
-                idMask = self.mapperInfo.idMask(did)
-                if idMask:
-                    for s in cat:
-                        s.set(idKey, s.getId() | idMask)
-                        if s.getParent():
-                            s.set(parentKey, s.getParent() | idMask)
                 
-                if _prefix_ == "forced":
-                    poiKey = sch.find("parentObjectId").getKey()
-                    for s in cat:
-                        s.set(parentKey, s.get(poiKey))
+                if self.hasCmodel is None:
+                    self.hasCmodel = True if len(sch.extract("cmodel*")) > 0 else False
+                    if self.hasCmodel and sum(np.isfinite(cat.get("cmodel.flux"))) == 0:
+                        self.hasCmodel = False
+                        print "cmodel flux is NaN"
 
                 if True:
-                    modelFluxName, corrFac = "flux.kron", 10**(0.4*0.047)
-                    extendedness = np.where(cat.get(modelFluxName)*corrFac/cat.getPsfFlux() > 1.05, 1.0, 0.0)
+                    if self.hasCmodel:
+                        modelFluxName, corrFac = "cmodel.flux", 10**(0.4*0.0)
+                    else:
+                        modelFluxName, corrFac = "flux.kron", 10**(0.4*0.005)
+
+                    extendedness = np.where(cat.get(modelFluxName)*corrFac/cat.getPsfFlux() > 1.04, 1.0, 0.0)
                     extendedness = np.where(np.isfinite(cat.get(modelFluxName)),
                                             extendedness, cat.get(extendednessKey))
+                    cat.get(extendednessKey)[:] = extendedness
+
+                    if False:
+                        cmodel_bad = cat.get("cmodel.flux.flags")
+                        for m in ["initial", "exp", "dev"]:
+                            cmodel_bad = np.logical_or(cmodel_bad, cat.get("cmodel.%s.flux.flags" % m))
+                        cat.get(extendednessKey)[:] = cmodel_bad
+
                     global warnedHackExtendedness
                     if not warnedHackExtendedness:
                         print >> sys.stderr, "Hacking the extendeness value to use %.2f*%s" % \
                             (corrFac, modelFluxName)
                         warnedHackExtendedness = True
-                    for s, e in zip(cat, extendedness):
-                        s.set(extendednessKey, e)
-                    
+                   
             data.append(dataElem)
 
         return data
@@ -1242,6 +1336,8 @@ raft or sensor may be None (meaning get all)
                 cat = self
             if magType == "ap":
                 mags = cat.get("apMag" + suffix)
+            elif magType == "cmodel":
+                mags = cat.get("cmodelMag" + suffix)
             elif magType == "inst":
                 mags = cat.get("instMag" + suffix)
             elif magType == "kron":
@@ -1279,8 +1375,8 @@ ccd may be a list"""
             try:
                 catInfo = _appendToCatalog(self, did, catInfo, extraApFlux=extraApFlux)
             except Exception, e:
-                print e
-                import pdb; pdb.set_trace() 
+                print "RHL 2", e
+                
         if verbose:
             print
 
@@ -1429,6 +1525,9 @@ Plotted symbols are:
         if not self.astrom:
             astromConfig = measAstrom.Astrometry.ConfigClass()
             astromConfig.catalogMatchDist = 10
+            for f1, f2 in [("NB0921", "z",)]:
+                if not f1 in astromConfig.filterMap:
+                    astromConfig.filterMap[f1] = f2
             self.astrom = measAstrom.Astrometry(astromConfig)
 
         ct = self.mapperInfo.getColorterm(filterName)
@@ -1630,11 +1729,8 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
     else:
         sourceSet = data.getDataset("src", dataId)[0]
 
-    if _prefix_ == "forced":            # hack hack --- hscMosaic
-        calib = data.butler.get("wcs", **dataId).getCalib()
-    else:
-        calexp_md = data.butler.get(dtName("calexp", True), **dataId)
-        calib = afwImage.Calib(calexp_md)
+    calexp_md = data.butler.get(dtName("calexp", True), **dataId)
+    calib = afwImage.Calib(calexp_md)
 
     fluxMag0, fluxMag0Err = calib.getFluxMag0()
     if fluxMag0 <= 0.0:
@@ -1644,7 +1740,11 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
 
     #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-    magTypes = ["ap", "inst", "model", "psf", "kron",]
+    magTypes = ["ap", "model", "psf", "kron",]
+    if False:
+        magTypes.append("inst")
+    if data.hasCmodel:
+        magTypes.append("cmodel")
 
     if catInfo is not None:
         cat, scm = catInfo
@@ -1658,7 +1758,7 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
         for f in ["id", "coord", "parent",  # must be first and in this order --- #2154
                   "deblend.nchild",
                   "classification.extendedness",
-                  "multishapelet.combo.devfrac",
+                  "cmodel.fracDev",
                   "flux.kron.radius",
                   "flags.pixel.bad",
                   "flags.pixel.edge",
@@ -1671,7 +1771,10 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
             try:
                 scm.addMapping(sch.find(f).getKey())
             except KeyError, e:
-                print >> sys.stderr, e
+                if f == "cmodel.fracDev" and data.hasCmodel:
+                    pass
+                else:
+                    print >> sys.stderr, e
         for key in [tab.getCentroidKey(), tab.getCentroidErrKey(), tab.getCentroidFlagKey(),
                     tab.getShapeKey(),
                     ]:
@@ -1683,12 +1786,16 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
 
         definePhotoSlots = not False            # add standard photometric slots?
         if definePhotoSlots:
-            for key in [tab.getInstFluxKey(),  tab.getInstFluxErrKey(),  tab.getInstFluxFlagKey(),
-                        tab.getModelFluxKey(), tab.getModelFluxErrKey(), tab.getModelFluxFlagKey(),
-                        tab.getPsfFluxKey(),   tab.getPsfFluxErrKey(),   tab.getPsfFluxFlagKey(),
-                        tab.getApFluxKey(),    tab.getApFluxErrKey(),     tab.getApFluxFlagKey(),
+            for key in [tab.getInstFluxKey,  tab.getInstFluxErrKey,  tab.getInstFluxFlagKey,
+                        tab.getModelFluxKey, tab.getModelFluxErrKey, tab.getModelFluxFlagKey,
+                        tab.getPsfFluxKey,   tab.getPsfFluxErrKey,   tab.getPsfFluxFlagKey,
+                        tab.getApFluxKey,    tab.getApFluxErrKey,    tab.getApFluxFlagKey,
                         ]:
-                scm.addMapping(key)
+                try:
+                    scm.addMapping(key())
+                except Exception, e:
+                    #print "Invalid key:", key
+                    pass
 
         scm.addOutputField(afwTable.Field["Flag"]("stellar", "Is the source stellar?"))
         for x in magTypes:
@@ -1698,6 +1805,8 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
                                                    "The error in the magnitude corresponding to %sFlux" % x))
 
         scm.addOutputField(afwTable.Field["Flag"]("good", "The object is good"))
+        if _prefix_ == "forced":
+            scm.addOutputField(afwTable.Field["F"]("deblend.nchild", "Number of children this object has"))
 
         cat = afwTable.SourceCatalog(scm.getOutputSchema())
         table = cat.table
@@ -1711,10 +1820,15 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
             #
             # Define the slots we were using before
             #
-            table.defineApFlux(tab.getApFluxDefinition())    
-            table.defineInstFlux(tab.getInstFluxDefinition())    
-            table.defineModelFlux(tab.getModelFluxDefinition())    
-            table.definePsfFlux(tab.getPsfFluxDefinition())    
+            for define, get in [(table.defineApFlux,    tab.getApFluxDefinition),
+                                (table.defineInstFlux,  tab.getInstFluxDefinition),
+                                (table.defineModelFlux, tab.getModelFluxDefinition),
+                                (table.definePsfFlux,   tab.getPsfFluxDefinition),]:
+                try:
+                    define(get())
+                except Exception as e:
+                    #print "RHL", e
+                    pass
     #
     # OK, we have the schema sorted out;  time to read and process
     #
@@ -1767,11 +1881,18 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
             try:
                 fluxFieldName =    tab.__getattribute__("get%sFluxDefinition"    % x.title())()
             except AttributeError:          # not available as a slot
-                fluxFieldName = "flux.%s" % x
+                if x == "kron":             # old convention
+                    fluxFieldName = "flux.%s" % x
+                else:
+                    fluxFieldName = "%s.flux" % x
 
             try:
                 tab.getSchema().find(fluxFieldName) # was the flux measured?
             except KeyError, e:
+                if catInfo is None:     # we're reading the first CCD
+                    print >> sys.stderr, e                
+                continue
+            except (Exception, pexExcept.LsstCppException) as e:
                 if catInfo is None:     # we're reading the first CCD
                     print >> sys.stderr, e                
                 continue
@@ -1787,6 +1908,10 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
             mag_magErr = calib.getMagnitude(flux, fluxErr)
             cat.get("%sMag" % x)[oldLen:] = mag_magErr[0]
             cat.get("%sMagErr" % x)[oldLen:] = mag_magErr[1]
+
+    if _prefix_ == "forced":
+        cat["parent"][oldLen:] =         sourceSet["object.parent"]
+        cat["deblend.nchild"][oldLen:] = sourceSet["object.deblend.nchild"]
 
     return cat, scm
 
@@ -1866,6 +1991,13 @@ def zipMatchList(matchList, suffixes=None, swap=False, verbose=True):
                 rec.set(okey, m2.get(key))
 
     return cat
+
+def getFieldSuffixes(dataKeys):
+    """Return a dict mapping a set of dataKeys to the suffixes that zipMatchList will have appended
+to field names"""
+    suffixes = ["_2" + i*"_1" for i in range(len(dataKeys) - 1, -1, -1)]
+    suffixes[0] = suffixes[0][2:]       # first name has no "_2".  Grrr
+    return dict(zip(dataKeys, suffixes))
 
 def getMagsFromSS(ss, dataId, extraApFlux=0.0):
     """Return numpy arrays constructed from SourceSet ss"""
@@ -1966,7 +2098,7 @@ def overlayCcds(camera, axes, names=False):
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 def plotDmag(data, magType1="model", magType2="psf", maglim=20, magmin=14,
-             showMedians=False, sgVal=0.05, criticalFracDeV=0.5,
+             showMedians=False, sgVal=0.05, criticalFracDeV=0.5, alpha=1.0,
              selectObjId=None, colorCcds=False, showCamera=False,
              meanDelta=0.0, adjustMean=False, parents=False,
              xmin=None, xmax=None, ymin=None, ymax=None, overlay=True,
@@ -1976,6 +2108,7 @@ def plotDmag(data, magType1="model", magType2="psf", maglim=20, magmin=14,
 If selectObjId is provided, it's a function that returns True or False for each object. E.g.
     sel = makeSelectCcd(ccd=2)
     plotDmag(..., selectObjId=makeSelectCcd(2), ...)
+(if it's an int, it's interpreted as makeSelectVisit(selectObjId)
 
 The magnitude limit for the "locus" box used to calculate statistics is maglim, and only objects within
 +- sgLim of meanDelta are included in the locus (the axes are also adjusted to include meanDelta in the
@@ -2008,9 +2141,13 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     if parents:
         good = np.logical_and(good, data.cat.get("parent") == 0)
     else:
-        good = np.logical_and(good, data.cat.get("deblend.nchild") == 0)
+        if data.cat.getSchema().extract("deblend.nchild"):
+            good = np.logical_and(good, data.cat.get("deblend.nchild") == 0)
 
     if selectObjId:
+        if isinstance(selectObjId, int):
+            selectObjId = makeSelectVisit(selectObjId)
+        
         good = np.logical_and(good, selectObjId(data, data.cat.get("id")))
 
     mag1 = data.getMagsByType(magType1, good)
@@ -2039,19 +2176,19 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     if "d" in SG.lower() or "e" in SG.lower():           # split by deV/exp?
         SG += "g"
 
-    plotKW = dict(markersize=markersize, markeredgewidth=0, zorder=1)
+    plotKW = dict(markersize=markersize, markeredgewidth=0, zorder=1, alpha=alpha)
     nobj = 0
     if "g" in SG.lower():
         if "d" in SG.lower() or "e" in SG.lower():           # split by deV/exp
             try:
-                fracDeV = data.cat.get("multishapelet.combo.devfrac")[good]
+                fracDeV = data.cat.get("cmodel.fracDev")[good]
             except KeyError:
                 print >> sys.stderr, "No frac_deV is available"
                 fracDeV = np.ones_like(nonStellar)
                 
             deV = fracDeV > criticalFracDeV # it's a deV
 
-            plotKW["alpha"] = 0.5
+            plotKW["alpha"] *= 0.5
             if "d" in SG.lower():
                 tmp = np.logical_and(deV, nonStellar)
                 nobj += tmp.sum()
@@ -2097,14 +2234,13 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
             if overlay:
                 overlayCcds(camera, axes) 
         elif colorCcds:
-            ccdIds = data.mapperInfo.splitId(ids[stellar], True)["ccd"]
+            ccdIds = data.mapperInfo.splitId(ids[stellar])["ccd"]
             sc = axes.scatter(mag1[stellar], delta[stellar], c=ccdIds,
                               cmap=pyplot.cm.rainbow, marker="o", s=5*markersize,
                               edgecolors="none")
             fig.colorbar(sc)
         else:
-            axes.plot(mag1[stellar], delta[stellar], "o", markersize=markersize, markeredgewidth=0,
-                      color=color2, zorder=1)
+            axes.plot(mag1[stellar], delta[stellar], "o", color=color2, **plotKW)
 
     if not showCamera:
         axes.axhline(meanDelta, linestyle=":", color="black")
@@ -2167,8 +2303,8 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
         elif "e" in SG.lower():         # show only exp
             mag1[deV] = -1000
 
-    did = data.mapperInfo.splitId(ids[0], asDict=True); del did["objId"]
-    md = data.getDataset("calexp_md", did)[0]
+    did = data.mapperInfo.splitId(ids[0]); del did["objId"]
+    md = data.get(dtName("calexp", True), did)
 
     global eventHandlers
     flags = {}
@@ -2176,8 +2312,8 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
         for k, v in data.flags.items():
             flags[k] = data.flags[k][good] # needs to be converted to use data.cat
     try:
-        x = data.cat.getX()[good] + md.get("LTV1")
-        y = data.cat.getY()[good] + md.get("LTV2")
+        x = data.cat.getX()[good] + (0 if md is None else md.get("LTV1"))
+        y = data.cat.getY()[good] + (0 if md is None else md.get("LTV2"))
     except pexExcept.LsstCppException, e:
         if not re.search(r"pex::exceptions::LogicErrorException", e.message.getType()):
             raise e
@@ -2221,10 +2357,11 @@ If non-None, [xy]{min,max} are used to set the plot limits
     if parents:
         good = np.logical_and(good, data.cat.get("parent") == 0)
     else:
-        good = np.logical_and(good, data.cat.get("deblend.nchild") == 0)
+        if data.cat.getSchema().extract("deblend.nchild"):
+            good = np.logical_and(good, data.cat.get("deblend.nchild") == 0)
 
     mag1 = data.getMagsByType(magType1, good)
-    fracDeV = data.cat.get("multishapelet.combo.devfrac")[good]
+    fracDeV = data.cat.get("cmodel.fracDev")[good]
     deV = fracDeV > criticalFracDeV
 
     nonStellar = np.logical_not(data.cat.get("stellar"))[good]
@@ -2250,7 +2387,7 @@ If non-None, [xy]{min,max} are used to set the plot limits
     #
     # Make "i" print the object's ID, p pan ds9, etc.
     #
-    did = data.mapperInfo.splitId(ids[0], asDict=True); del did["objId"]
+    did = data.mapperInfo.splitId(ids[0]); del did["objId"]
     md = data.getDataset("calexp_md", did)[0]
 
     global eventHandlers
@@ -2306,7 +2443,7 @@ If non-None, [xy]{min,max} are used to set the plot limits
 
     mag1 = data.getMagsByType(magType1, good)
     radii = data.cat.get("flux.kron.radius")[good]
-    fracDeV = data.cat.get("multishapelet.combo.devfrac")[good]
+    fracDeV = data.cat.get("cmodel.fracDev")[good]
     deV = fracDeV > criticalFracDeV
 
     stellar = data.cat.get("stellar")[good]
@@ -2337,7 +2474,7 @@ If non-None, [xy]{min,max} are used to set the plot limits
     #
     # Make "i" print the object's ID, p pan ds9, etc.
     #
-    did = data.mapperInfo.splitId(ids[0], asDict=True); del did["objId"]
+    did = data.mapperInfo.splitId(ids[0]); del did["objId"]
     md = data.getDataset("calexp_md", did)[0]
 
     global eventHandlers
@@ -2367,7 +2504,7 @@ def makeSelectCcd(ccds, include=True):
             return True
 
         if not isinstance(id, dict):
-            id = data.mapperInfo.splitId(id, asDict=True)
+            id = data.mapperInfo.splitId(id)
         ccd = id["ccd"]
         matches = reduce(lambda m, c: np.logical_or(m, ccd == c), ccds, False)
 
@@ -2391,7 +2528,7 @@ def makeSelectVisit(visits=None, ccds=None, include=True):
             return True
 
         if not isinstance(id, dict):
-            id = data.mapperInfo.splitId(id, asDict=True)
+            id = data.mapperInfo.splitId(id)
 
         if visits[0] is None:
             matches = np.ones_like(id)
@@ -2406,8 +2543,33 @@ def makeSelectVisit(visits=None, ccds=None, include=True):
 
     return selectVisit
 
-def plotCM(data, select1, select2, magType="psf", idN=1, maglim=20, magmin=14,
-           SG="sg", showMedians=False,
+def makeSelectFilter(filterName, include=True):
+    """Select only data in the given filter"""
+    #
+    # Be nice about names like HSC-R, accepting r
+    #
+    filesystemName = "HSC-%s" % filterName.upper() # name mapper needs
+    try:
+        afwImage.Filter(filesystemName)
+        filterName = filesystemName
+    except:
+        pass
+
+    def selectFilter(data, objId, filterName=filterName, include=include):
+        if filterName is None:
+            return True
+
+        if not isinstance(objId, dict):
+            objId = data.mapperInfo.splitId(objId)
+        filter = objId["filter"]
+        matches = (filter == filterName)
+
+        return matches if include else np.logical_not(matches)
+
+    return selectFilter
+
+def plotCM(data, select1, select2, magType="psf", magType2=None, idN=1, maglim=20, magmin=14,           
+           SG="sg", showChildren=True, showIsolated = False, showMedians=False,
            xlim=(None, None), ylim=(None, None),
            title="+", markersize=1, color="red", alpha=1.0, frames=[0], verbose=False, fig=None):
     """Plot (data[select1].magType - data[select2].magType) v. data[idN].magType mags (e.g. "psf")
@@ -2417,6 +2579,9 @@ where data[selectN] means, "the objects in data for which selectN(ids) returns T
 
 If a select "function" is actually an int, it is interpreted as makeSelectVisit(selectN) -- i.e.
 as a visit IDs
+
+If magType2 is provided, select2 must be None and we plot
+    (data[select1].magType - data[select1].magType2) v. data[idN].magType
 
 The magnitude limits for the box used to calculate statistics are magmin..maglim
 
@@ -2446,6 +2611,17 @@ If non-None, [xy]{min,max} are used to set the plot limits
             selections[k] = makeSelectVisit(v)
 
         selections[k] = selections[k](data, allIds)
+    #
+    # We have to take these decisions before matching
+    #
+    if showChildren and data.cat.getSchema().extract("deblend.nchild"):
+        leaf = data.cat.get("deblend.nchild") == 0
+        for k in selections:
+            selections[k] = np.logical_and(selections[k], leaf)
+    if showIsolated:
+        isolated = data.cat.get("parent") == 0
+        for k in selections:
+            selections[k] = np.logical_and(selections[k], isolated)
 
     cats = dict([(k, data.cat[v]) for k,v in selections.items()])
     #
@@ -2473,9 +2649,9 @@ If non-None, [xy]{min,max} are used to set the plot limits
         
         data.matches = selections, matched
 
+    suffixes = {1 : "_1", 2 : "_2"}
     bad = None
-    for i in range(2):
-        suffix = "_%d" % (i + 1)
+    for suffix in suffixes.values():
         for name in ["flags.pixel.edge",
                      "flags.pixel.bad",
                      #"flags.pixel.interpolated.center",
@@ -2487,6 +2663,12 @@ If non-None, [xy]{min,max} are used to set the plot limits
                 bad = np.logical_or(bad, _flg)
 
     good = np.logical_not(bad)
+
+    if False:                            # no parents
+        good = np.logical_and(good, sum([matched.cat.get("deblend.nchild%s" % s) for s in suffixes.values()]) == 0)
+    if False:                           # only non-blended objects
+        good = np.logical_and(good, matched.cat.get("parent") == 0)
+                
     stellar = matched.cat.get("stellar_%d" % idN)
     if SG.lower() == 's':
         good = np.logical_and(good, stellar)
@@ -2494,13 +2676,20 @@ If non-None, [xy]{min,max} are used to set the plot limits
         good = np.logical_and(good, np.logical_not(stellar))
 
     ids = matched.cat.get("id")[good]
-    xc = matched.cat.get("centroid.sdss_%d.x" % idN)[good]
-    yc = matched.cat.get("centroid.sdss_%d.y" % idN)[good]
+    if matched.cat.getSchema().extract("centroid.sdss_%d.x" % idN):
+        xc = matched.cat.get("centroid.sdss_%d.x" % idN)[good]
+        yc = matched.cat.get("centroid.sdss_%d.y" % idN)[good]
+    else:
+        xc = np.empty(0)
+        yc = np.empty_like(xc)
     stellar = stellar[good]
 
-    mag1 = matched.getMagsByType(magType, good, suffix="_1")
-    mag2 = matched.getMagsByType(magType, good, suffix="_2")
+    mag1 = matched.getMagsByType(magType, good, suffixes[1])
+    mag2 = matched.getMagsByType(magType, good, suffixes[2])
     delta = np.array(mag1 - mag2, dtype='float64') # float64 is needed by makeStatistics --- why?
+    if magType2:
+        delta -= (matched.getMagsByType(magType2, good, suffixes[1]) -
+                  matched.getMagsByType(magType2, good, suffixes[2]))
 
     mag = mag1 if idN == 1 else mag2
 
@@ -2521,8 +2710,8 @@ If non-None, [xy]{min,max} are used to set the plot limits
                   alpha=alpha["g"], markersize=markersize, markeredgewidth=0, color=color, zorder=-1)
     if "s" in SG.lower():
         nobj += np.sum(stellar)
-        axes.plot(delta[stellar], mag[stellar], "o",
-                  alpha=alpha["s"], markersize=markersize, markeredgewidth=0, color=color2, zorder=-1)
+        axes.plot(delta[stellar], mag[stellar], "*",
+                  alpha=alpha["s"], markersize=1.5*markersize, markeredgewidth=0, color=color2, zorder=-1)
 
     if showMedians:
         binwidth = 0.5
@@ -2580,9 +2769,18 @@ If non-None, [xy]{min,max} are used to set the plot limits
         filterNames.append(afwImage.Filter(data.butler.get(dtName("calexp", True), **dataId)).getName())
     filter1, filter2 = filterNames[1], filterNames[2]
 
-    axes.set_xlim(-1 if xlim[0] is None else xlim[0], 2  if xlim[1] is None else xlim[1])
+    if magType2:
+        axes.set_xlim(-1.5 if xlim[0] is None else xlim[0], 1.5 if xlim[1] is None else xlim[1])
+    else:
+        axes.set_xlim(-1 if xlim[0] is None else xlim[0], 2  if xlim[1] is None else xlim[1])
     axes.set_ylim(24 if ylim[0] is None else ylim[0], 14 if ylim[1] is None else ylim[1])
-    axes.set_xlabel("(%s - %s)$_{%s}$" % (filter1, filter2, magType))
+
+    xlab = "(%s - %s)$_{%s}$" % (filter1, filter2, magType)
+    if magType2:
+        axes.axvline(0.0, color="black", ls=":")
+        xlab += " - (%s - %s)$_{%s}$" % (filter1, filter2, magType2)
+
+    axes.set_xlabel(xlab)
     axes.set_ylabel("%s$_{%s}$" % (filter1 if idN == 1 else filter2, magType))
 
     title += " %d objects" % nobj
@@ -2599,10 +2797,11 @@ If non-None, [xy]{min,max} are used to set the plot limits
         for k, v in data.flags.items():
             flags[k] = data.flags[k][good] # needs to be converted to use data.cat
 
-    did = data.mapperInfo.splitId(ids[0], asDict=True); del did["objId"]
+    did = data.mapperInfo.splitId(ids[0]); del did["objId"]
     md = data.getDataset("calexp_md", did)[0]
-    xc = xc[good] + md.get("LTV1")
-    yc = yc[good] + md.get("LTV2")
+    if len(xc):
+        xc = xc[good] + md.get("LTV1")
+        yc = yc[good] + md.get("LTV2")
     ids = ids[good]
 
     if "g" not in SG.lower():
@@ -2626,12 +2825,12 @@ def robustStd(y):
     return 0.741*(y[int(0.75*n)] - y[int(0.25*n)])
 
 def plotStellarLocus(axes, mags, k1, k2, k3, stellar, filterNames, stellarLocusEnds=[], locusLtype=False,
-                     usePrincipalColor=False, plotRaDec=False):
+                     usePrincipalColor=False, plotRaDec=False, xvec=None, yvec=None):
     """
     Calculate width of blue end of stellar locus
     """
-    col12 = mags[k1] - mags[k2]
-    col23 = mags[k2] - mags[k3]
+    col12 = mags[k1] - mags[k2] if xvec is None else xvec
+    col23 = mags[k2] - mags[k3] if yvec is None else yvec
 
     #stellarLocusEnds = (0.40, 1.00,)    # the blue and red colour defining the straight part of the locus
     #stellarLocusEnds = (0.50, 1.50,)
@@ -2670,6 +2869,7 @@ def plotStellarLocus(axes, mags, k1, k2, k3, stellar, filterNames, stellarLocusE
         principalColor = "y"
         delta = pc[stellar]
     else:
+        principalColor = "PC"
         theta = math.atan2(xy[1][1] - xy[0][1], xy[1][0] - xy[0][0])
         c, s = math.cos(theta), math.sin(theta)
 
@@ -2697,7 +2897,8 @@ def plotStellarLocus(axes, mags, k1, k2, k3, stellar, filterNames, stellarLocusE
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-def plotCC(data, select1, select2, select3, magType="psf", SG="sg", select4=None,
+def plotCC(data, select1, select2, select3, magType="psf", magTypeForSelection=None, SG="sg", select4=None,
+           showChildren=True, showIsolated=False, pairType=None,
            verbose=False, fig=None, *args, **kwargs):
     """
 Plot (data[select1].magType - data[select2].magType) v. (data[select1].magType - data[select3].magType)
@@ -2722,6 +2923,8 @@ None no title is provided; if it starts "T:" the label will be written at the to
 showXlabel may be "bottom", "top", or None;  showYlabel may be "left", "right", or None.
 
 If non-None, [xy]{min,max} are used to set the plot limits
+
+If pairType is provided, join the points to the corresponding points with magType == pairType
     """
 
     if isinstance(magType, str):
@@ -2744,6 +2947,18 @@ If non-None, [xy]{min,max} are used to set the plot limits
             selections[k] = makeSelectVisit(v)
 
         selections[k] = selections[k](data, allIds)
+
+    #
+    # We have to take these decisions before matching
+    #
+    if showChildren and data.cat.getSchema().extract("deblend.nchild"):
+        leaf = data.cat.get("deblend.nchild") == 0
+        for k in selections:
+            selections[k] = np.logical_and(selections[k], leaf)
+    if showIsolated:
+        isolated = data.cat.get("parent") == 0
+        for k in selections:
+            selections[k] = np.logical_and(selections[k], isolated)
 
     dataKeys = sorted(selections.keys())
 
@@ -2791,16 +3006,27 @@ If non-None, [xy]{min,max} are used to set the plot limits
 
     filterNames = [None]
     visitNames = [None]
+    patchNames = [None]
     for k in sorted(cats.keys()):
         dataId = idsToDataIds(data, allIds[selections[k]][0:2])[0]
         for k, v in dataId.items():
             if isinstance(v, np.int32):
                 dataId[k] = int(v)
-        visitNames.append(dataId["visit"])
+        if "patch" in dataId:
+            patchNames.append(dataId["patch"])
+        if "visit" in dataId:
+            visitNames.append(dataId["visit"])
         filterNames.append(afwImage.Filter(data.butler.get(dtName("calexp", True), **dataId)).getName())
 
     datasetName = ", ".join([data.mapperInfo.dataIdToTitle(
                 idsToDataIds(data, allIds[selections[i]])) for i in dataKeys])
+    if magTypeForSelection is None:
+        magTypeForSelection = magType[0]
+
+    if pairType:
+        magType2 = pairType
+    else:
+        magType2 = None
 
     subplots = makeSubplots(fig, nx=len(magType), ny=len(SG))
     j = -1
@@ -2820,8 +3046,11 @@ If non-None, [xy]{min,max} are used to set the plot limits
                     "right" if j//len(SG) == len(magType)//2 and _sg == SG[len(SG)-1] else None
 
             _, matched = _plotCCImpl(data, matched, dataKeys, _magType, filterNames, visitNames, _sg,
-                                     verbose=verbose, fig=axes,
-                                     title="T:+" if j == 0 else None, datasetName=datasetName,
+                                     magType2=magType2,
+                                     magTypeForSelection=magTypeForSelection, verbose=verbose, fig=axes,
+                                     title="T:+" if j == 0 else None,
+                                     titleAllObjects=(sorted(SG) in ("gs", ["g", "s"])),
+                                     datasetName=datasetName,
                                      showXlabel=showXlabel, showYlabel=showYlabel,
                                      *args, **kwargs
                                      )
@@ -2831,15 +3060,15 @@ If non-None, [xy]{min,max} are used to set the plot limits
     return fig
 
 def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, fig=None, show=True,
-                magmax=None, magmin=None, 
+                magType2=None, magTypeForSelection=None, magmax=None, magmin=None, 
                 verbose=False,
                 idN=None, idColorN=None, selectObjId=None, matchRadius=2, plotRaDec=False,
-                showStatistics=False, show_r_xy=True, colorCcds=False, colorVisits=False,
-                usePrincipalColor=True, stellarLocusEnds=[],
+                showStatistics=False, show_r_xy=True, colorCcds=False, colorVisits=False, colorPatches=False,
+                usePrincipalColor=True, stellarLocusEnds=[], normalizePatches=False,
                 adjustLocus=False, locusLtype="b:",
                 xlim=(None, None), ylim=(None, None),
                 showXlabel="bottom", showYlabel="left",
-                datasetName="", title="+",
+                datasetName="", title="+", titleAllObjects=True,
                 markersize=1, alpha=1.0, color="red", frames=[0], wcss=[]):
     """
     \param idN   The (1-based) index into the selection functions to use for magnitude limits etc.
@@ -2859,9 +3088,7 @@ def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, f
     if idColorN is None:
         idColorN = idN
 
-    suffixes = ["_2" + i*"_1" for i in range(len(dataKeys) - 1, -1, -1)]
-    suffixes[0] = suffixes[0][2:]       # first name has no "_2".  Grrr
-    suffixes = dict(zip(dataKeys, suffixes))
+    suffixes = getFieldSuffixes(dataKeys)
 
     if len(dataKeys) == 3:
         k1, k2, k3 = dataKeys
@@ -2873,7 +3100,6 @@ def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, f
         filterNames[k1] != filterNames[k2] and \
         (filterNames[k1], filterNames[k2]) == (filterNames[k3], filterNames[k4])
 
-    mag1 = matched.getMagsByType(magType, suffix=suffixes[1])
     good = True
 
     for suffix in suffixes.values():
@@ -2883,29 +3109,42 @@ def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, f
                      "flags.pixel.saturated.center",]:
             good = np.logical_and(good, np.logical_not(matched.cat.get(name + suffix)))
 
-    good = np.logical_and(good, sum([matched.cat.get("deblend.nchild%s" % s) for s in suffixes.values()]) == 0)
-    good = np.logical_and(good, matched.cat.get("parent") == 0)
-
     centroidStr = "centroid.sdss%s" % suffixes[idN]
-    xc = matched.cat.get("%s.x" % centroidStr)[good]
-    yc = matched.cat.get("%s.y" % centroidStr)[good]
+    if matched.cat.getSchema().extract(centroidStr):
+        xc = matched.cat.get("%s.x" % centroidStr)[good]
+        yc = matched.cat.get("%s.y" % centroidStr)[good]
+    else:
+        xc = np.empty(0)
+        yc = np.empty_like(xc)
+
     stellar = matched.cat.get("stellar%s" % suffixes[idN])[good]
 
-    mags, ids = {}, {}
+    mags, mags2, ids = {}, {}, {}
     for k, s in suffixes.items():
-        mags[k] = matched.getMagsByType(magType, good, suffix=s)
+        mags[k]  = matched.getMagsByType(magType,  good, suffix=s)
+        if magType2:
+            mags2[k] = matched.getMagsByType(magType2, good, suffix=s) if magType2 else None
+
         ids[k]  = matched.cat.get("id%s" %s )[good]
+
+        if k == idN:
+            if magTypeForSelection == magType:
+                magsForSelection = mags[k]
+            else:
+                magsForSelection = matched.getMagsByType(magTypeForSelection, good, suffix=s)
 
     good = good[good]
 
     if not deltaColor:
         if magmin is not None:
-            good = np.logical_and(good, mags[idN] > magmin)
+            good = np.logical_and(good, magsForSelection > magmin)
         if magmax is not None:
-            good = np.logical_and(good, mags[idN] < magmax)
+            good = np.logical_and(good, magsForSelection < magmax)
 
     for k, s in suffixes.items():
         mags[k] = mags[k][good]
+        if mags2.get(k) is not None:
+            mags2[k] = mags2[k][good]
 
     stellar = stellar[good]
     nonStellar = np.logical_not(stellar)
@@ -2913,6 +3152,7 @@ def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, f
     for k in ids.keys():
         ids[k] = ids[k][good]
 
+    xvec2 = None
     if plotRaDec:
         ra = np.degrees(matched.cat.get("coord.ra"))[good]
         dec = np.degrees(matched.cat.get("coord.dec"))[good]
@@ -2922,14 +3162,20 @@ def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, f
         if len(dataKeys) == 3:
             xvec = mags[k1] - mags[k2]
             yvec = mags[k2] - mags[k3]
+
+            if mags2.get(k1) is not None:
+                xvec2 = mags2[k1] - mags2[k2]
+                yvec2 = mags2[k2] - mags2[k3]
+                pass
         else:
+            assert mags2.get(k1) is None    # not implemented
             xvec = mags[k1] - mags[k2]
             yvec = mags[k3] - mags[k4]
 
             if deltaColor:
                 show_r_xy = False
                 yvec -= xvec
-                xvec = mags[k1]
+                xvec = mags[idN]
     try:
         alpha.keys()
     except AttributeError:
@@ -2937,9 +3183,13 @@ def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, f
 
     idsForColor = ids[idColorN]
 
-    splitId = data.mapperInfo.splitId(idsForColor, asDict=True)
-    ccds = splitId["ccd"]
-    visits = splitId["visit"]
+    splitId = data.mapperInfo.splitId(idsForColor)
+    if colorCcds:
+        ccds = splitId.get("ccd", [])
+    if colorVisits:
+        visits = splitId.get("visit", [])
+    if colorPatches or normalizePatches:
+        patches = splitId.get("patch", [])
     #
     # Are we dealing with multi-band or multi-epoch data?
     #
@@ -2951,27 +3201,56 @@ def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, f
         if c not in SG.lower():
             continue
 
-        if colorCcds or colorVisits:
+        if normalizePatches:
+            try:
+                cen, hwidth = normalizePatches
+            except TypeError:
+                cen, hwidth = 1.25, 0.4
+
+            for i, patch in enumerate(sorted(set(patches))):
+                tmp = (patch == patches)
+                tmp = np.logical_and(l, tmp)
+
+                main = np.abs(xvec[tmp] - cen < hwidth)
+                if i == 0:
+                    for pm in [-1, 1]:
+                        axes.axvline(cen + pm*hwidth, linestyle=":", color="black")
+                    xmed, ymed = np.median(xvec[tmp][main]), np.median(yvec[tmp][main])
+                else:
+                    xvec[tmp] += xmed - np.median(xvec[tmp][main])
+                    yvec[tmp] += ymed - np.median(yvec[tmp][main]),
+
+        if colorCcds or colorVisits or colorPatches:
             colors = ["red", "green", "blue", "cyan", "magenta", "yellow", "black", "orange", "brown", "gray"]
             
             if colorCcds:
                 for i, ccd in enumerate(sorted(set(ccds))):
                     color = colors[i%len(colors)]
                     tmp = (ccd == ccds)
+                    tmp = np.logical_and(l, tmp)
 
-                    axes.plot(xvec[np.logical_and(l, tmp)],
-                              yvec[np.logical_and(l, tmp)],
+                    axes.plot(xvec[tmp], yvec[tmp],
                               ptype, alpha=alpha[c], markersize=markersize, markeredgewidth=0,
                               markeredgecolor=color, color=color, label=str(ccd))
-            else:
+            elif colorVisits:
                 for i, visit in enumerate(sorted(set(visits))):
                     color = colors[i%len(colors)]
                     tmp = (visit == visits)
+                    tmp = np.logical_and(l, tmp)
 
-                    axes.plot(xvec[np.logical_and(l, tmp)],
+                    axes.plot(xvec[tmp], yvec[tmp],
                               yvec[np.logical_and(l, tmp)],
                               ptype, alpha=alpha[c], markersize=markersize, markeredgewidth=0,
                               color=color, label=str(visit))
+            elif colorPatches:
+                for i, patch in enumerate(sorted(set(patches))):
+                    color = colors[i%len(colors)]
+                    tmp = (patch == patches)
+                    tmp = np.logical_and(l, tmp)
+
+                    axes.plot(xvec[tmp], yvec[tmp],
+                              ptype, alpha=alpha[c], markersize=markersize, markeredgewidth=0,
+                              color=color, label=str(patch))
             if nobj == 0:
                 axes.legend(loc="upper left", numpoints=1,
                             ncol=2, columnspacing=0,
@@ -2981,20 +3260,35 @@ def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, f
         else:
             axes.plot(xvec[l], yvec[l], ptype,
                       alpha=alpha[c], markersize=markersize, markeredgewidth=0, color=color)
+            if xvec2 is not None:
+                #
+                # Join pairs [(_x, _y), (_x2, _y2)]
+                #
+                _x, _y, _x2, _y2 = xvec[l], yvec[l], xvec2[l], yvec2[l]
+                nans = np.nan + np.empty_like(_x)
+
+                axes.plot(np.array([_x, _x2, nans]).flatten(1), np.array([_y, _y2, nans]).flatten(1),
+                          ls=':', color='black', alpha=alpha[c])
 
         nobj += np.sum(l)
 
-    #axes.plot((0, 30), (0, 0), "b-")
-
     if stellarLocusEnds and "s" in SG.lower():
         plotStellarLocus(axes, mags, k1, k2, k3, stellar, filterNames,
-                         stellarLocusEnds, locusLtype, usePrincipalColor, plotRaDec)
+                         stellarLocusEnds, locusLtype, usePrincipalColor, plotRaDec,
+                         xvec=xvec, yvec=yvec)
         
     if plotRaDec:
         axes.set_xlim(xlim)
         axes.set_ylim(ylim)
     elif multiEpoch:
-        axes.set_xlim(-0.3 if xlim[0] is None else xlim[0], 0.3 if xlim[1] is None else xlim[1])
+        if deltaColor:
+            axes.set_xlim(14 if xlim[0] is None else xlim[0], 24 if xlim[1] is None else xlim[1])
+            if magmin is None:
+                magmin = axes.get_xlim()[0]
+            if magmax is None:
+                magmax = axes.get_xlim()[1]
+        else:
+            axes.set_xlim(-0.3 if xlim[0] is None else xlim[0], 0.3 if xlim[1] is None else xlim[1])
         axes.set_ylim(-0.3 if ylim[0] is None else ylim[0], 0.3 if ylim[1] is None else ylim[1])
     else:
         axes.set_xlim(-1 if xlim[0] is None else xlim[0], 2 if xlim[1] is None else xlim[1])
@@ -3019,6 +3313,8 @@ def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, f
 
             delta.append(np.array(v[l], dtype="float64"))
             try:
+                if len(delta[-1]) <= 1:     # this'll crash makeStatistics; #XXXX
+                    raise
                 stats = afwMath.makeStatistics(delta[-1], afwMath.STDEVCLIP | afwMath.MEANCLIP)
                 mean.append(stats.getValue(afwMath.MEANCLIP))
                 stdev.append(stats.getValue(afwMath.STDEVCLIP))
@@ -3032,7 +3328,7 @@ def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, f
                 for m in (magmin, magmax,):
                     axes.axvline(m, linestyle=":", color="black")
 
-            msg = r"$%.3f \pm %.3f$" % (mean[1], stdev[1])
+            msg = r"$%.3f \pm %.3f$" % (mean[1], stdev[1]) # 1: y-axis
         else:
             delta = (delta[0] - mean[0])*(delta[1] - mean[1])
             try:
@@ -3087,7 +3383,7 @@ def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, f
 
         if multiEpoch:
             if deltaColor:
-                xlabel = "%s (%s)" % (filterNames[lk1], visitNames[lk1])
+                xlabel = "%s (%s)" % (filterNames[idN], visitNames[idN])
                 ylabel = r"$\Delta %s - %s$  [(%s-%s) - (%s-%s)]" % (filterNames[lk1], filterNames[lk2],
                                                                      visitNames[lk1], visitNames[lk2],
                                                                      visitNames[lk3], visitNames[lk4])
@@ -3122,19 +3418,25 @@ def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, f
         if re.search(r"^T:", title):
             title = title[2:]
             titlePos = "figure"
+
+            if titleAllObjects:
+                nobj = sum(good)
         else:
             titlePos = "axes"
             
         if not deltaColor and magmax is not None:
             if magmin is not None:
-                title += " [%g < %s < %g]" % (magmin,
-                                              data.mapperInfo.canonicalFiltername(filterNames[idN]), magmax)
+                title += " [$%g < %s_{%s} < %g$]" % (magmin,
+                                                   data.mapperInfo.canonicalFiltername(filterNames[idN]),
+                                                   magTypeForSelection, magmax)
             else:
-                title += " [%s < %g]" % (filterNames[idN], magmax)
+                title += " [$%s_{%s} < %g$]" % (filterNames[idN], magTypeForSelection, magmax)
 
         title += " %d objects" % nobj
         if data._rerun:
             title += " rerun %s" % data._rerun
+        if _prefix_:
+            title += " %s" % _prefix_
 
         title = re.sub(r"^\+\s*", datasetName + "\n", title)
         if titlePos == "axes":
@@ -3156,10 +3458,11 @@ def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, f
 
     canonicalIds = ids[idN]
     if len(canonicalIds):
-        did = data.mapperInfo.splitId(canonicalIds[0], asDict=True); del did["objId"]
+        did = data.mapperInfo.splitId(canonicalIds[0]); del did["objId"]
         md = data.getDataset("calexp_md", did)[0]
-        xc += md.get("LTV1")
-        yc += md.get("LTV2")
+        if len(xc):
+            xc += md.get("LTV1")
+            yc += md.get("LTV2")
 
     if "g" not in SG.lower():
         xvec[nonStellar] = -1000
@@ -3433,7 +3736,7 @@ If frame is not None plot the objects in ds9 (if mtv is True as well, display th
     camera = data.butler.get("camera")
     xmm = np.empty_like(xc); ymm = np.empty_like(yc)
     for i, _id in enumerate(ids):
-        ccdId = data.mapperInfo.splitId(_id, True)["ccd"]
+        ccdId = data.mapperInfo.splitId(_id)["ccd"]
         ccd = cameraGeomUtils.findCcd(camera, cameraGeom.Id(ccdId))
         xmm[i], ymm[i] = ccd.getPositionFromPixel(afwGeom.PointD(xc[i], yc[i])).getMm()
 
@@ -3452,7 +3755,7 @@ If frame is not None plot the objects in ds9 (if mtv is True as well, display th
             perChipJacobian = True      # set the average Jacobian to 1.0 for every CCD
             
         if perChipJacobian:
-            ccdId = data.mapperInfo.splitId(ids, True)["ccd"]
+            ccdId = data.mapperInfo.splitId(ids)["ccd"]
             for _id in set(ccdId):
                 thisCcd = np.where(ccdId == _id)
                 jacobian[thisCcd] /= np.median(jacobian[thisCcd])
@@ -3464,7 +3767,7 @@ If frame is not None plot the objects in ds9 (if mtv is True as well, display th
 
     if frame is not None:
         if mtv:
-            ccdId = data.mapperInfo.splitId(ids[0], True)
+            ccdId = data.mapperInfo.splitId(ids[0])
             ds9.mtv(data.butler.get(dtName("calexp"), visit=ccdId["visit"], ccd=ccdId["ccd"]), frame=frame)
 
         kwargs = {}
@@ -3480,7 +3783,7 @@ If frame is not None plot the objects in ds9 (if mtv is True as well, display th
     fig = getMpFigure(fig)
     axes = fig.add_axes((0.1, 0.1, 0.85, 0.80))
 
-    did = data.mapperInfo.splitId(ids[0], True)
+    did = data.mapperInfo.splitId(ids[0])
     refmag = getRefmag(data, data.matchedCalibs,
                        getCanonicalFilterName(data.butler.queryMetadata('raw', 'filter',
                                                                         visit=did['visit'])[0]),
@@ -3876,6 +4179,24 @@ def findSource(sourceSet, x, y, radius=2):
     else:
         return matches
 
+def findSourcesFromId(data, objId, findCalexp=False):
+    """Find the Source with this (full) objId
+
+If findCalexp is true, also return the calexp
+    """
+
+    did = data.mapperInfo.splitId(objId)
+    oid = did["objId"]; del did["objId"]
+
+    ss = data.butler.get(dtName('src'), **did)
+    s = ss[ss.get("id") == objId][0]
+    if findCalexp:
+        calexp = data.butler.get(dtName("calexp"), **did)
+    else:
+        calexp = None
+
+    return s, calexp
+
 def getRefCatalog(data, dataId):
     """Get the reference catalogue for dataId (a single CCD) as a SourceSet"""
 
@@ -4180,7 +4501,7 @@ def showSourceSet(sourceSet, exp=None, wcs=None, xy0=None, raDec=None, magmin=No
                 _id = s.getId()
                 if symb == "id":
                     if mapperInfo:
-                        _symb = mapperInfo.splitId(_id, asDict=True)["objId"]
+                        _symb = mapperInfo.splitId(_id)["objId"]
                     else:
                         _id = _id & 0xffff # guess wildly
                 else:
@@ -4679,6 +5000,8 @@ def getFlux(s, magType="psf"):
     """Return the desired type of flux"""
     if magType == "ap":
         return s.getApFlux()
+    elif magType == "cmodel":
+        return s.get("cmodel.flux")
     elif magType == "inst":
         return s.getInstFlux()
     elif magType == "kron":
@@ -4996,9 +5319,14 @@ class EventHandler(object):
         if ev.key.lower() == 'h':
             print """
 Options:
-   d, D    Display the object in ds9, frame utils.eventFrame.  If D, show the deblended child
+   d, D, F    Display the object in ds9, frame utils.eventFrame.  If D, show the deblended child, if F
+           show the family
+   a       Zoom the display to show All of the current object
+   1,2,4,8 Zoom the display by 1, 2, 4, or 8
+   b       Show this object in all bands (as matched by the most recent plotCM or plotCC command
+           so to get "true" RGB colour, make sure it was plotCC!)
    h, H    Print this message
-   p, P    Pan to the object in ds9 in all the frames specified to the event handler; 'P' also prints a newline
+   r, R    Make and display a RGB file (R names it from the object)
    i, I    Print info about the object; 'I' also prints a newline
    z, Z    Print raw "ids" array about the object; 'Z' also prints a newline
 
@@ -5007,7 +5335,11 @@ If utils.eventCallbacks[ev.key] is defined it'll be called with arguments:
 (see utils.kronCallback for an example)
 """,
             return
-        elif ev.key.lower() in ("dipz"):
+        elif ev.key in ("a"):
+            ds9.ds9Cmd("zoom to fit", frame=eventFrame)
+        elif ev.key in ("1248"):
+            ds9.zoom(int(ev.key), frame=eventFrame)
+        elif ev.key in ("bdDFiIrRzZ"):
             dist = np.hypot(self.xs - ev.xdata, self.ys - ev.ydata)
             dist[np.where(np.isnan(dist))] = 1e30
             dmin = min(dist)
@@ -5029,17 +5361,41 @@ If utils.eventCallbacks[ev.key] is defined it'll be called with arguments:
                     flagsInfo.append(k)
             flagsInfo = ", ".join(flagsInfo)
 
+            if len(self.x) == 0:
+                x, y = np.nan, np.nan
+            else:
+                x, y = self.x[which][0], self.y[which][0]
+
             print "\r>>>",
             print "%.3f %.3f %s %s (%6.1f, %6.1f)%20s\r" % \
-                (self.xs[which][0], self.ys[which][0], self.data.mapperInfo.splitId(objId), flagsInfo,
-                 self.x[which][0], self.y[which][0], ""),
+                (self.xs[which][0], self.ys[which][0], self.data.mapperInfo.splitId(objId, asDict=False),
+                 flagsInfo, x, y, ""),
             sys.stdout.flush()
 
-            if ev.key in ('d', 'D'):
-                dataId = self.data.mapperInfo.splitId(objId, asDict=True)
+            if ev.key in ("b", "r", "R"):
+
+                if ev.key == "r":
+                    fileName = "obj"
+                elif ev.key == "R":
+                    objIdDict = self.data.mapperInfo.splitId(objId)
+                    if "visit" in objIdDict:
+                        fileName = "%(visit)d-%(ccd)d-%(objId)d" % objIdDict
+                    elif "tract" in objIdDict:
+                        fileName = "%(tract)d-%(patch)s-%(objId)d" % objIdDict
+                else:
+                    fileName = None
+
+                if fileName:
+                    fileName += ".png"
+                    
+                findSourcesAllBands(self.data, objId, frame=eventFrame, fileName=fileName)
+                return
+            elif ev.key in ('d', 'D', 'F'):
+                dataId = self.data.mapperInfo.splitId(objId)
                 title = re.sub(r"[' {}]", "", str(dataId)).replace(",", " ")
                 oid = dataId["objId"]; del dataId["objId"]
                 ss = self.data.butler.get(dtName("src"), **dataId)
+
                 i = int(np.where(objId == ss.get("id"))[0][0])
                 s = ss[i]
 
@@ -5060,12 +5416,16 @@ If utils.eventCallbacks[ev.key] is defined it'll be called with arguments:
                     fam = families.find(oid)
                     if fam:
                         calexp = self.data.butler.get(dtName("calexp"), **dataId).getMaskedImage()
-                        deblender.plotDeblendFamily(calexp, *fam, background=-1,
-                                                    mapperInfo=self.data.mapperInfo, frame=eventFrame)
-                        calexp = None
+                        if ev.key == 'F': # family
+                            deblender.plotDeblendFamily(calexp, *fam, background=-1,
+                                                        mapperInfo=self.data.mapperInfo, frame=eventFrame)
+                            calexp = None
+                        else:
+                            calexp = deblender.footprintToImage(s.getFootprint(), calexp)
                     else:
-                        calexp = deblender.footprintToImage(s.getFootprint(), calexp)
-
+                        kid = [_ for _ in fam[1] if _.getId() == oid]
+                        calexp = deblender.footprintToImage(kid.getFootprint(), calexp)
+                        
                 if calexp:
                     ds9.mtv(calexp, title=title, frame=eventFrame)
                     ds9.pan(s.getX() - calexp.getX0(), s.getY() - calexp.getY0(), frame=eventFrame)
@@ -5073,19 +5433,9 @@ If utils.eventCallbacks[ev.key] is defined it'll be called with arguments:
                     callback = eventCallbacks.get(ev.key)
                     if callback:
                         callback(ev.key, s, calexp, frame=eventFrame)
+
             elif ev.key == "I":
                 print ""
-            elif ev.key in ("p", "P"):
-                x = self.x[which][0]
-                y = self.y[which][0]
-
-                for frame, wcs in zip(self.frames, self.wcss):
-                    if wcs:
-                        raDec = self.wcss[self.selectWcs].pixelToSky(x, y)
-                        ds9.pan(*wcs.skyToPixel(raDec[0], raDec[1]), frame=frame)
-                    else:
-                        ds9.pan(x, y, frame=frame)
-                ds9.cmdBuffer.flush()
         else:
             pass
 
@@ -5751,7 +6101,7 @@ def findMissedSatur(data, maglim=15, deltaMin=-0.4, deltaMax=-0.06, frame=None, 
     psf = data.cat.get('psfMag')
     ap = data.cat.get('apMag')
 
-    sids = data.mapperInfo.splitId(ids, True)
+    sids = data.mapperInfo.splitId(ids)
     dataIdKeys = [k for k in sids.keys() if k != "objId"]
 
     missed = reduce(np.logical_and, [np.logical_not(stellar),
@@ -5785,7 +6135,7 @@ def findMissedSatur(data, maglim=15, deltaMin=-0.4, deltaMax=-0.06, frame=None, 
     psf = psf[missed]
     ap =  ap[missed]
 
-    sids = data.mapperInfo.splitId(ids[missed], True)
+    sids = data.mapperInfo.splitId(ids[missed])
     if len(psf) == 1:                   # => the elements of dids are ints, not arrays
         for k, v in sids.items():
             sids[k] = [v]
@@ -6026,17 +6376,17 @@ def assembleTiles(images):
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-def readPatches(butler, tract=0, patches={}, pps=None):
+def readPatches(butler, tract=0, patches={}, pps=None, filters="gri"):
     if pps is None:
         pps=["%d,%d" % (i , j) for i in range(1, 8) for j in range(1, 8)]
 
     for pp in pps:
-        for f in "gri":
+        for f in filters:
             patches.update([("%s-%s" % (pp, f), butler.get("deepCoadd", filter='HSC-%s' % f.upper(),
                                                           tract=tract, patch=pp))])
 
     pps = set([k[0:3] for k in patches.keys() if re.search(r"^.,.-.$", k)])
-    patches.update([(f, assembleTiles([patches["%s-%s" % (pp, f)] for pp in pps])) for f in "gri"])
+    patches.update([(f, assembleTiles([patches["%s-%s" % (pp, f)] for pp in pps])) for f in filters])
 
     return patches
 
@@ -6379,3 +6729,126 @@ def improveWcs(wcs, matched, sipOrder=3):
     print "bestRms = %g" % bestRms
     return bestWcs
 
+
+def findSourcesAllBands(data, objId, frame=None, fileName=None, showFile=True, doSmooth=False, title=""):
+    """Find all the sources in all bands that are matched to this (full) objId"""
+
+    matched = data.matches[1].cat
+
+    dataKeys = range(1, len(matched.getSchema().extract("id*")) - 1)
+    suffixes = getFieldSuffixes(dataKeys)
+
+    m = None
+    for k in suffixes.values():
+        m = matched[matched.get("id%s" % k) == objId]
+        if m:
+            break        
+    
+    if not m:
+        print "\nFailed to match object %d == %s" % (objId, data.mapperInfo.splitId(objId, asDict=False))
+        return
+    try:
+        nmatch = len(m)
+    except TypeError:
+        nmatch = 1
+
+    if nmatch > 1:
+        ids = []
+        for s in m:
+            ids.append(data.mapperInfo.splitId(s.get("id"), asDict=False))
+        print "\nMatched %d objects: %s" % (nmatch, ", ".join([str(i) for i in ids]))
+        m = m[-1]
+
+    if not title:
+        title=str(data.mapperInfo.splitId(objId, asDict=False)) + \
+            (" (%.4f, %.4f)" % (np.degrees(m.get("coord.ra"))[0], np.degrees(m.get("coord.dec"))[0]))
+
+    import deblender
+    images, sources = [], []
+    bbox = afwGeom.BoxI()
+    for d in dataKeys:
+        doid = m.get("id%s" % suffixes[d])
+        dsrc, calexp = findSourcesFromId(data, doid, findCalexp=(frame != None))
+        sources.append(dsrc)
+
+        if frame is None:
+            continue
+
+        im = deblender.footprintToImage(dsrc.getFootprint(), calexp.getMaskedImage())
+
+        if d == dataKeys[0]:
+            raDec = dsrc.get("coord")
+            xy0 = im.getXY0()
+
+        if False:
+            print "\n" if d == dataKeys[0] else "", calexp.getWcs().skyToPixel(raDec), dsrc.getCentroid()
+        offset = calexp.getWcs().skyToPixel(raDec) - afwGeom.PointD(im.getXY0())
+        im.setXY0(xy0)
+
+        if d == dataKeys[0]:
+            offset0 = offset
+
+        dx, dy = offset0 - offset
+        im = afwMath.offsetImage(im, dx, dy, "bilinear")
+        images.append([im, calexp.getFilter().getName(), calexp.getPsf()])
+
+        bbox.include(im.getBBox(afwImage.PARENT))
+
+    if fileName or frame is not None:
+        for i, ifp in enumerate(images):
+            im, filter, psf = ifp
+            bim = im.Factory(bbox)
+            x0, y0 = im.getXY0() - bbox.getMin()
+            w, h = im.getDimensions()
+
+            assert x0 >= 0
+            assert y0 >= 0
+            bim[x0:x0+w, y0:y0+h] = im
+
+            ifp[0] = bim
+
+        if doSmooth:
+            sigma = np.array([v[2].computeShape().getDeterminantRadius() for v in images])
+            tau = np.sqrt(sigma**2 - sigma.min()**2)
+            for i, ifp in enumerate(images):
+                im, filter, sigma = ifp
+                if tau[i] > 0:
+                    gaussFunc = afwMath.GaussianFunction1D(tau[i])
+                    kernel = afwMath.SeparableKernel(int(5*tau[i]), int(5*tau[i]), gaussFunc, gaussFunc)
+                    cim = im.clone()
+                    afwMath.convolve(cim, im, kernel)
+                    ifp[0] = cim
+
+        if fileName:
+            images = list(reversed([im for im, f, psf in images]))
+            if len(images) == 2:
+                images.append(images[-1])
+
+            imax = max([np.max(i.getArray()) for i in images])
+            writeRgb(images,
+                     fileName, min=0, max=min([5, imax]), Q=8, bin=1, scales=[1.0, 0.5, 1.0],
+                     fixSaturation=False, saveFmt=None,
+                     subtractBkgd=False, boxSize=1024, nsigma=5)
+
+            if showFile:
+                import matplotlib.pyplot as plt
+                import matplotlib.image as mpimg
+                
+                img = mpimg.imread(fileName)
+                plt.figure(1)
+                plt.clf()
+                bbox = images[0].getBBox(afwImage.PARENT)
+                plt.imshow(img, interpolation="nearest",
+                           extent=[bbox.getMinX(), bbox.getMaxX(), bbox.getMinY(), bbox.getMaxY()])
+                plt.ticklabel_format(axis='both', style='plain', useOffset=False)
+                plt.title(title)
+                plt.interactive(1)
+                plt.show()
+        else:
+            mos = ds9Utils.Mosaic()
+            for im, filterName, psf in images:
+                mos.append(im, filterName)
+
+            mos.makeMosaic(frame=frame)
+
+    return sources

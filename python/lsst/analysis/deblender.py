@@ -68,7 +68,11 @@ def plotDeblendFamily(mi, parent, kids, mapperInfo, dkids=[],
                       background=-10, symbolSize=2,
                       plotb=False, ellipses=True,
                       arcsinh=True, maskbit=False, frame=0):
-    """Display a deblend on ds9"""
+    """Display a deblend on ds9
+
+Each child is marked with a + at its centre (green if deblended-as-psf else red)
+all the other peaks in its footprint are marked with x (cyan if deblended-as-psf else magenta)
+    """
 
     if mi:
         try:
@@ -156,7 +160,7 @@ def plotDeblendFamily(mi, parent, kids, mapperInfo, dkids=[],
             ds9.dot("+", src.getX() + x0, src.getY() + y0, frame=frame,
                     size=symbolSize, ctype=centroid_ctype)
             for p in src.getFootprint().getPeaks():
-                ds9.dot("+", p.getFx() + x0, p.getFy() + y0, frame=frame,
+                ds9.dot("x", p.getFx() + x0, p.getFy() + y0, frame=frame,
                         size=0.5*symbolSize if i == 0 else symbolSize,
                         ctype=ds9.YELLOW if i == 0 else peak_ctype)
 
@@ -335,16 +339,20 @@ def showBlend(calexp, families, frame=None, key='d', mtv=False):
 
     old = {}
     try:
-        for k in "hdp":
+        for k in set(list("ha") + [key]):
             old[k] = ds9.setCallback(k)
 
         ds9.setCallback(key, makeDisplayFamily(calexp, families))
         def new_h(*args):
             old['h'](*args)
-            print "   d: show family under the cursor and return to python prompt"
-            print "   p: pan to this point"
+            print "   a: show All the pixels"
+            print "   %s: show family under the cursor and return to python prompt" % key
         ds9.setCallback('h', new_h)
-        ds9.setCallback('p', lambda k, x, y: ds9.pan(x, y, frame=frame))
+        ds9.setCallback('a', lambda k, x, y: ds9.ds9Cmd("zoom to fit", frame=frame))
+        for z in [1, 2, 4, 8]:
+            def _zoom(k, x, y, z=z):
+                ds9.zoom(z, frame=frame)
+            ds9.setCallback('%d' % z, _zoom)
         
         ds9.interact()
     except Exception, e:
