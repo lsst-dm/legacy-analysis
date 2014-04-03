@@ -33,6 +33,12 @@ from lsst.meas.algorithms.detection import SourceDetectionTask
 import lsst.meas.algorithms.utils as maUtils
 
 try:
+    from lsst.meas.mosaic.updateExposure import applyMosaicResultsCatalog
+except ImportError:
+    applyMosaicResultsCatalog = None
+    
+
+try:
     import lsst.meas.extensions.multiShapelet.simpleViewer as msViewer
 except ImportError:
     msViewer = None
@@ -254,9 +260,12 @@ def getNameOfSet(vals):
         if sval1 == sval0:
             dvn = str(val0)
         else:
-            dvn = "%s..%s" % (sval0, sval1)
-            if stride > 1:
-                dvn += ":%d" % stride
+            if val1 == val0 + stride:
+                dvn = "%s^%s" % (sval0, sval1)
+            else:
+                dvn = "%s..%s" % (sval0, sval1)
+                if stride > 1:
+                    dvn += ":%d" % stride
         valName.append(dvn)
     #
     # Find the minimum spacing between values and interpret it as a stride
@@ -285,7 +294,7 @@ def getNameOfSet(vals):
 
     addPairToName(valName, val0, val1, stride)
 
-    return ", ".join(valName)
+    return "^".join(valName)
 
 def getNameOfSRSet(sr, n, omit=[]):
     """Get the name of a set of Sensors or Rafts arranged in an n*n array (with elements of omit missing)"""
@@ -1206,7 +1215,7 @@ class Data(object):
         return self.dataSets
 
     def getDataset(self, dataType, dataId, ids=True, calibrate=False, setMask=None, fixOrientation=None,
-                   fixAmpLevels=False, trim=True):
+                   fixAmpLevels=False, trim=True, immediate=False):
         """Get all the data of the given type (e.g. "psf"); visit may be None (meaning use default);
 raft or sensor may be None (meaning get all)
 """
@@ -1254,7 +1263,8 @@ raft or sensor may be None (meaning get all)
 
         data = []
         for did in dataSets:
-            dataElem = self.butler.get(dtName(dataType), **did)
+            dataElem = self.butler.get(dtName(dataType), flags=afwTable.SOURCE_IO_NO_HEAVY_FOOTPRINTS,
+                                       immediate=immediate, **did)
 
             if dataType == "psf":
                 calexp = self.butler.get(dtName("calexp"), **did)
@@ -1376,6 +1386,8 @@ ccd may be a list"""
                 catInfo = _appendToCatalog(self, did, catInfo, extraApFlux=extraApFlux)
             except Exception, e:
                 print "RHL 2", e
+                import pdb; pdb.set_trace() 
+                catInfo = _appendToCatalog(self, did, catInfo, extraApFlux=extraApFlux)
                 
         if verbose:
             print
@@ -1727,7 +1739,16 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
     if data is None:
         assert sourceSet
     else:
-        sourceSet = data.getDataset("src", dataId)[0]
+        # applyMosaicResultsCatalog needs immediate=True as it uses type(sourceSet)
+        sourceSet = data.getDataset("src", dataId, immediate=True)[0]
+
+    useMeasMosaic = True
+    if useMeasMosaic and applyMosaicResultsCatalog:
+        dataRef = data.butler.dataRef("raw", **dataId)
+        try:
+            sourceSet = applyMosaicResultsCatalog(dataRef, sourceSet).catalog
+        except pexExcept.LsstCppException as e:
+            pass
 
     calexp_md = data.butler.get(dtName("calexp", True), **dataId)
     calib = afwImage.Calib(calexp_md)
@@ -1929,7 +1950,10 @@ def zipMatchList(matchList, suffixes=None, swap=False, verbose=True):
         records = list(reversed(records))
         suffixes = list(reversed(suffixes))
 
-    requiredFields = ["id", "coord", "parent"] # keys that must be first and in this order --- #2154
+    if False:
+        requiredFields = afwTable.SimpleTable.makeMinimalSchema().getNames()
+    else:
+        requiredFields = ["id", "coord"] # keys must be in this order
 
     scm = None                          # the SchemaMapper
     keys_2 = []                         # keys from second list that need to be copied over
@@ -2058,7 +2082,7 @@ def getFluxMag0DB(visit, raft, sensor, db=None):
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 def overlayCcds(camera, axes, names=False):
-    """Overlay camera's CCDs' outlines and serials (or names) using maplotlib axes"""
+    """Overlay camera's CCDs' outlines and serials (or names) using matplotlib axes"""
     for raft in camera:
         raft = cameraGeom.cast_Raft(raft)
         for ccd in raft:
@@ -2097,12 +2121,72 @@ def overlayCcds(camera, axes, names=False):
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
+def getStellar(data, good, selectSG=None, getNonStellar=False):
+    if selectSG is None:
+        stellar = data.cat.get("stellar")[good]
+        junk = np.zeros_like(stellar)   # objects thought to be junk
+    else:
+        ids = data.cat["id"]
+        matchRadius = 1*afwGeom.arcseconds
+
+        if isinstance(selectSG, str):   # name of a table with S/G info
+            sgTable = afwTable.SimpleCatalog.readFits(selectSG)
+            if False:
+                sgTable = sgTable[sgTable["mag.auto"] < 24].copy(True)
+            sgTable["coord.ra"][:]  = np.radians(sgTable["coord.ra"])
+            sgTable["coord.dec"][:] = np.radians(sgTable["coord.dec"])
+
+            if False:
+                pyplot.clf()
+                pyplot.plot(np.degrees(sgTable["coord.ra"]), np.degrees(sgTable["coord.dec"]), "o",
+                            color='blue', markeredgewidth=0, markersize=2, alpha=1)
+                pyplot.plot(np.degrees(data.cat["coord.ra"][good]), np.degrees(data.cat["coord.dec"][good]),
+                            "o", color='red', markeredgewidth=0, markersize=2)
+                #pyplot.gca().set_aspect("equal") # although we ignored cos(dec)
+
+                pyplot.xlim(149.56, 149.58); pyplot.ylim(2.36, 2.38)
+                
+                pyplot.show()
+
+            matchedSG = zipMatchList(afwTable.matchRaDec(sgTable, data.cat[good], matchRadius, False))
+
+            stellar = (matchedSG["mu.class_1"] == 2)
+        else:
+            if isinstance(selectSG, int):
+                selectSG = makeSelectVisit(selectSG)
+
+            dataSG = data.cat[selectSG(data, ids)]
+
+            matchedSG = zipMatchList(afwTable.matchRaDec(dataSG, data.cat[good], matchRadius, False))
+
+            stellar = matchedSG["stellar_1"]
+
+        stellarDict = dict(zip(matchedSG["id_2"], stellar))
+
+        ids = ids[good]
+        stellar = np.zeros(len(ids), dtype=bool)
+        junk = np.zeros_like(stellar)       # objects thought to be junk
+        for i, oid in enumerate(ids):
+            if False and (oid & 0xffff) == 382:
+                mm = afwTable.matchRaDec(sgTable, data.cat[np.logical_and(good, data.cat.get("id")==oid)], 1*afwGeom.arcseconds, False)
+                import pdb; pdb.set_trace() 
+            if oid in stellarDict:
+                stellar[i] = stellarDict[oid]
+            else:
+                junk[i] = True
+
+    if getNonStellar:
+        return stellar, junk, np.logical_and(np.logical_not(stellar), np.logical_not(junk))
+    else:
+        return stellar, junk
+
 def plotDmag(data, magType1="model", magType2="psf", maglim=20, magmin=14,
              showMedians=False, sgVal=0.05, criticalFracDeV=0.5, alpha=1.0,
-             selectObjId=None, colorCcds=False, showCamera=False,
+             selectObjId=None, colorCcds=False, showCamera=False, randomOrder=None,
              meanDelta=0.0, adjustMean=False, parents=False,
-             xmin=None, xmax=None, ymin=None, ymax=None, overlay=True,
-             title="+", markersize=1, SG="sg",  color="red", color2="green", frames=[0], wcss=[], fig=None):
+             xlim=(None, None), ylim=(None, None), overlay=True,
+             title="+", markersize=1, SG="sg", selectSG=None,
+             color="red", color2="green", color3="blue", frames=[0], wcss=[], fig=None):
     """Plot (magType1 - magType2) v. magType1 mags (e.g. "model" and "psf")
 
 If selectObjId is provided, it's a function that returns True or False for each object. E.g.
@@ -2115,11 +2199,19 @@ The magnitude limit for the "locus" box used to calculate statistics is maglim, 
 visible area).  If adjustMean is True, adjust all the CCDs being plotted to have the same mean within
 the "locus" area.
 
+If SG is provided it's a string containing one or more of s(tar) g(alaxy) e(xponential) d(eV); only the
+requested types of object are plotted (if it's None all objects are plotted in the stellar colour). If
+selectSG is provided is specifies a dataId to be used for S/G classification -- it's interpreted the
+same way as selectObjId.
+
+If randomOrder is True, randomize the order in which points are plotted (useful with colorCcds, for which
+it defaults to True)
+
 If title is provided it's used as a plot title; if it starts + the usual title is prepended
 
 If overlay is True, plot the CCDs' outlines and IDs
 
-If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are interpreted relative to meanDelta
+If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are interpreted relative to meanDelta)
     """
     fig = getMpFigure(fig)
 
@@ -2153,15 +2245,30 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     mag1 = data.getMagsByType(magType1, good)
     mag2 = data.getMagsByType(magType2, good)
     delta = np.array(mag1 - mag2, dtype='float64') # float64 is needed by makeStatistics --- why?
+    del mag2
 
-    locus = np.logical_and(np.logical_and(mag1 > magmin, mag1 < maglim), np.abs(delta - meanDelta) < sgVal)
-
-    stellar = data.cat.get("stellar")
-    nonStellar = np.logical_not(stellar)
-    stellar = stellar[good]; nonStellar = nonStellar[good]
     ids = data.cat.get("id")[good]
+    stellar, junk = getStellar(data, good, selectSG)
 
-    if "s" not in SG.lower():
+    plotOrder = np.arange(len(ids))
+
+    if randomOrder is None and colorCcds:
+        randomOrder = True
+
+    if randomOrder:
+        plotOrder = np.random.permutation(plotOrder)
+
+        mag1 = mag1[plotOrder]
+        delta = delta[plotOrder]
+        ids = ids[plotOrder]
+        stellar = stellar[plotOrder]
+        junk = junk[plotOrder]
+
+    # after we may have reordered points...
+    locus = np.logical_and(np.logical_and(mag1 > magmin, mag1 < maglim), np.abs(delta - meanDelta) < sgVal)
+    nonStellar = np.logical_and(np.logical_not(stellar), np.logical_not(junk))
+
+    if SG and "s" not in SG.lower():
         mean = None
     else:
         try:
@@ -2173,22 +2280,21 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     if False:
         axes.plot(mag1[locus], delta[locus], "o", markersize=2*markersize, color="blue")
 
-    if "d" in SG.lower() or "e" in SG.lower():           # split by deV/exp?
+    if SG and ("d" in SG.lower() or "e" in SG.lower()): # split by deV/exp?
         SG += "g"
 
     plotKW = dict(markersize=markersize, markeredgewidth=0, zorder=1, alpha=alpha)
     nobj = 0
-    if "g" in SG.lower():
+    if not colorCcds and SG and "g" in SG.lower():
         if "d" in SG.lower() or "e" in SG.lower():           # split by deV/exp
             try:
-                fracDeV = data.cat.get("cmodel.fracDev")[good]
+                fracDeV = data.cat.get("cmodel.fracDev")[good][plotOrder]
             except KeyError:
                 print >> sys.stderr, "No frac_deV is available"
                 fracDeV = np.ones_like(nonStellar)
                 
             deV = fracDeV > criticalFracDeV # it's a deV
 
-            plotKW["alpha"] *= 0.5
             if "d" in SG.lower():
                 tmp = np.logical_and(deV, nonStellar)
                 nobj += tmp.sum()
@@ -2200,7 +2306,18 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
         else:
             nobj += nonStellar.sum()
             axes.plot(mag1[nonStellar], delta[nonStellar], "o", color=color, **plotKW)
-    if "s" in SG.lower():
+
+    if colorCcds:
+        nobj = len(mag1)
+        ccdIds = data.mapperInfo.splitId(ids)["ccd"]
+        # 2*markersize seems to match axes.plot better than markersize
+        sc = axes.scatter(mag1, delta, c=ccdIds,
+                          cmap=pyplot.cm.rainbow, marker="o", s=2*markersize, edgecolors="none")
+        fig.colorbar(sc)
+    elif not SG:
+        nobj += len(mag1)
+        axes.plot(mag1, delta, "o", color=color2, **plotKW)
+    elif "s" in SG.lower():
         nobj += stellar.sum()
 
         if showCamera:
@@ -2210,8 +2327,8 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
             inRange = np.logical_and(stellar, np.logical_and(mag1 > magmin, mag1 < maglim))
 
             camera = data.butler.get("camera")
-            xc = data.cat.getX()[good][inRange]
-            yc = data.cat.getY()[good][inRange]
+            xc = data.cat.getX()[good][inRange][plotOrder]
+            yc = data.cat.getY()[good][inRange][plotOrder]
 
             xmm = np.empty_like(xc); ymm = np.empty_like(yc)
             for i, _id in enumerate(ids[inRange]):
@@ -2233,15 +2350,13 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
 
             if overlay:
                 overlayCcds(camera, axes) 
-        elif colorCcds:
-            ccdIds = data.mapperInfo.splitId(ids[stellar])["ccd"]
-            sc = axes.scatter(mag1[stellar], delta[stellar], c=ccdIds,
-                              cmap=pyplot.cm.rainbow, marker="o", s=5*markersize,
-                              edgecolors="none")
-            fig.colorbar(sc)
         else:
             axes.plot(mag1[stellar], delta[stellar], "o", color=color2, **plotKW)
 
+    if "j" in SG.lower():
+        nobj += junk.sum() 
+        axes.plot(mag1[junk], delta[junk], "o", color=color3, **plotKW)
+           
     if not showCamera:
         axes.axhline(meanDelta, linestyle=":", color="black")
         if mean is not None:
@@ -2275,9 +2390,10 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
             axes.errorbar(bins + 0.5*binwidth, vals, yerr=err, zorder=3,
                           linestyle="-", marker="o", color="black")
 
-        axes.set_xlim(14 if xmin is None else xmin, 26 if xmax is None else xmax)
-        axes.set_ylim(meanDelta + (0.2 if ymin is None else ymin),
-                      meanDelta + (- 0.8 if ymax is None else ymax))
+        axes.set_xlim(14 if xlim[0] is None else xlim[0],
+                      26 if xlim[1] is None else xlim[1])
+        axes.set_ylim(meanDelta + ( 0.2 if ylim[0] is None else ylim[0]),
+                      meanDelta + (-0.8 if ylim[1] is None else ylim[1]))
         axes.set_xlabel(magType1)
         axes.set_ylabel("%s - %s" % (magType1, magType2))
 
@@ -2291,9 +2407,11 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     #
     # Make "i" print the object's ID, p pan ds9, etc.
     #
-    if "g" not in SG.lower():
+    if SG and "j" not in SG.lower():
+        mag1[junk] = -1000              # we don't want to pick these objects
+    if SG and "g" not in SG.lower():
         mag1[nonStellar] = -1000        # we don't want to pick these objects
-    if "s" not in SG.lower():
+    if SG and "s" not in SG.lower():
         mag1[stellar] = -1000
         if "d" in SG.lower():
             if "e" in SG.lower():       # show deV and /exp
@@ -2312,15 +2430,16 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
         for k, v in data.flags.items():
             flags[k] = data.flags[k][good] # needs to be converted to use data.cat
     try:
-        x = data.cat.getX()[good] + (0 if md is None else md.get("LTV1"))
-        y = data.cat.getY()[good] + (0 if md is None else md.get("LTV2"))
+        x = data.cat.getX()[good][plotOrder] + (0 if md is None else md.get("LTV1"))
+        y = data.cat.getY()[good][plotOrder] + (0 if md is None else md.get("LTV2"))
     except pexExcept.LsstCppException, e:
         if not re.search(r"pex::exceptions::LogicErrorException", e.message.getType()):
             raise e
         x = np.zeros_like(mag1)
         y = np.zeros_like(mag1)
         
-    ids = data.cat.get("id")[good]
+    if False:
+        ids = data.cat.get("id")[good][plotOrder]
     eventHandlers[fig] = EventHandler(data, axes, mag1, delta, ids, x, y, flags, frames=frames, wcss=wcss)
 
     fig.show()
@@ -2493,7 +2612,9 @@ If non-None, [xy]{min,max} are used to set the plot limits
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-def makeSelectCcd(ccds, include=True):
+def makeSelectCcd(ccd, include=True):
+    ccds = ccd                          # we use singular nouns consistently
+
     def selectCcd(data, id, ccds=ccds, include=include):
         try:
             ccds[0]
@@ -2512,7 +2633,9 @@ def makeSelectCcd(ccds, include=True):
 
     return selectCcd
 
-def makeSelectVisit(visits=None, ccds=None, include=True):
+def makeSelectVisit(visit=None, ccd=None, include=True):
+    visits, ccds = visit, ccd           # we use singular nouns consistently
+    
     try:
         visits[0]
     except TypeError:
@@ -2911,7 +3034,7 @@ If selectN is an int it's interpreted as makeSelectVisit(selectN), so this is eq
 (let's write data[selectN].magType as magN).  If provided, idN specifies the data from which selection
 function should to be used for magnitude limits (e.g. idN == 3 => visit 902034 in the example)
 
-This can be used to plot 3-colour diagrams or to compare 3 epochs.
+This can be used to plot 3-colour diagrams or to compare 3 or 4 epochs.
 
 If select4 is provided, compare (mag1 - mag2) with (mag3 - mag4)
 If both select1 and select3 are the same band and select2 and select4 are the same (different) band, plot
@@ -2925,6 +3048,8 @@ showXlabel may be "bottom", "top", or None;  showYlabel may be "left", "right", 
 If non-None, [xy]{min,max} are used to set the plot limits
 
 If pairType is provided, join the points to the corresponding points with magType == pairType
+(e.g. you draw a colour-colour diagram in psf mags, and use pairType to show how different
+it would be in aperture mags)
     """
 
     if isinstance(magType, str):
@@ -3229,34 +3354,37 @@ def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, f
                     tmp = (ccd == ccds)
                     tmp = np.logical_and(l, tmp)
 
-                    axes.plot(xvec[tmp], yvec[tmp],
-                              ptype, alpha=alpha[c], markersize=markersize, markeredgewidth=0,
-                              markeredgecolor=color, color=color, label=str(ccd))
+                    if sum(tmp) > 0:
+                        axes.plot(xvec[tmp], yvec[tmp],
+                                  ptype, alpha=alpha[c], markersize=markersize, markeredgewidth=0,
+                                  markeredgecolor=color, color=color, label=str(ccd))
             elif colorVisits:
                 for i, visit in enumerate(sorted(set(visits))):
                     color = colors[i%len(colors)]
                     tmp = (visit == visits)
                     tmp = np.logical_and(l, tmp)
 
-                    axes.plot(xvec[tmp], yvec[tmp],
-                              yvec[np.logical_and(l, tmp)],
-                              ptype, alpha=alpha[c], markersize=markersize, markeredgewidth=0,
-                              color=color, label=str(visit))
+                    if sum(tmp) > 0:
+                        axes.plot(xvec[tmp], yvec[tmp],
+                                  yvec[np.logical_and(l, tmp)],
+                                  ptype, alpha=alpha[c], markersize=markersize, markeredgewidth=0,
+                                  color=color, label=str(visit))
             elif colorPatches:
                 for i, patch in enumerate(sorted(set(patches))):
                     color = colors[i%len(colors)]
                     tmp = (patch == patches)
                     tmp = np.logical_and(l, tmp)
 
-                    axes.plot(xvec[tmp], yvec[tmp],
-                              ptype, alpha=alpha[c], markersize=markersize, markeredgewidth=0,
-                              color=color, label=str(patch))
+                    if sum(tmp) > 0:
+                        axes.plot(xvec[tmp], yvec[tmp],
+                                  ptype, alpha=alpha[c], markersize=markersize, markeredgewidth=0,
+                                  color=color, label=str(patch))
             if nobj == 0:
                 axes.legend(loc="upper left", numpoints=1,
                             ncol=2, columnspacing=0,
                             markerscale=2,
                             borderpad=0.1, labelspacing=0, handletextpad=0, handlelength=1, borderaxespad=0,
-                            )
+                            ).draggable()
         else:
             axes.plot(xvec[l], yvec[l], ptype,
                       alpha=alpha[c], markersize=markersize, markeredgewidth=0, color=color)
@@ -3561,10 +3689,23 @@ If selectObjId is provided, it's a function that returns True or False for each 
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-def plotDmagHistograms(data, magType1="model", magType2="psf",
-                       nbin=15, magmin=15, magmax=20, dmag=0.5,
-                       xmin=-0.1, xmax=None, color="red", fig=None):
-    """Plot (magType1 - magType2) v. magType2 mags"""
+def plotDmagHistograms(data, magType1="cmodel", magType2="psf", selectObjId=None, selectSG=None,
+                       nbin=15, magmin=15, magmax=20, dmag=0.5, cumulative=False,
+                       xlim=(-0.1, None), SG="sg", color="green", color2="red", fig=None):
+    """Plot (magType1 - magType2) v. magType2 mags
+
+If selectObjId is provided, it's a function that returns True or False for each object. E.g.
+    sel = makeSelectCcd(ccd=2)
+    plotDmag(..., selectObjId=makeSelectCcd(2), ...)
+(if it's an int, it's interpreted as makeSelectVisit(selectObjId)
+
+
+If SG is provided it's a string containing one or both of s(tar) g(alaxy); only the
+requested types of object are plotted (if it's None all objects are plotted in the stellar colour). If
+selectSG is provided is specifies a dataId to be used for S/G classification -- it's interpreted the
+same way as selectObjId.
+
+    """
 
     try:
         data.cat
@@ -3579,13 +3720,19 @@ def plotDmagHistograms(data, magType1="model", magType2="psf",
                  False)
     good = np.logical_not(bad)
 
+    if selectObjId:
+        if isinstance(selectObjId, int):
+            selectObjId = makeSelectVisit(selectObjId)
+        
+        good = np.logical_and(good, selectObjId(data, data.cat.get("id")))
+
     fig = getMpFigure(fig)
 
     mag1 = data.getMagsByType(magType1, good)
     mag2 = data.getMagsByType(magType2, good)
     delta = np.array(mag1 - mag2, dtype='float64') # float64 is needed by makeStatistics --- why?
 
-    stellar = data.cat.get("classification.extendedness")[good] < 0.5
+    stellar, junk, nonStellar = getStellar(data, good, selectSG, getNonStellar=True)
     #
     # Get a characteristic (we hope) Calib object
     #
@@ -3598,53 +3745,71 @@ def plotDmagHistograms(data, magType1="model", magType2="psf",
         calib = calexp.getCalib()
         psf = calexp.getPsf()
         alpha = psf.computeShape().getDeterminantRadius() # psf ~ N(0, alpha^2)
-        print "# alpha = %.3f" % (alpha)
+        if False:
+            print "# alpha = %.3f" % (alpha)
 
+
+    xmin, xmax = xlim
     if xmax is None:
         xmax = -xmin
     binEdge = np.arange(magmin, magmax - dmag/2, dmag)
 
     subplots = makeSubplots(fig, nx=1, ny=len(binEdge))
-    fig.subplots_adjust(wspace=0.001, top=0.875)
+    if False:
+        fig.subplots_adjust(wspace=0.001, top=0.875)
 
     for edge in binEdge:
-        inBin = np.logical_and(np.logical_and(mag1 >= edge, mag1 < edge + dmag), stellar)
-        inBin = np.logical_and(np.logical_and(delta >= xmin, delta < xmax), inBin)
-
-        pp = mag2[inBin]        
-        dd = delta[inBin]
-
-        if len(dd) == 0:
-            continue
-
-        stats = afwMath.makeStatistics(dd, afwMath.STDEVCLIP | afwMath.MEANCLIP)
-        mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
-        
         axes = subplots.next()
-        axes.xaxis.set_major_formatter(pyplot.NullFormatter())
-        axes.yaxis.set_major_formatter(pyplot.NullFormatter())
+        if len(binEdge) > 2:
+            axes.xaxis.set_major_formatter(pyplot.NullFormatter())
+            axes.yaxis.set_major_formatter(pyplot.NullFormatter())
 
-        hist, bins = np.histogram(dd, bins=nbin); hist = np.array(hist, dtype='d')
-        hist /= max(hist)
-        width =  bins[1] - bins[0]
-        center = (bins[:-1] + bins[1:])/2
-        axes.bar(center, hist, align='center', width=width, linewidth=0, color=color)
+        inBin = np.logical_and(np.logical_and(mag1  >= edge, mag1 <  edge + dmag),
+                               np.logical_and(delta >= xmin, delta < xmax))
 
-        axes.axvline(0.0, color="blue", ls=":")
-        axes.axvline(mean, color="green", ls=":")
+        mean = None
+        for stype in SG:
+            _inBin = np.logical_and(inBin, stellar if stype == "s" else nonStellar)
+
+            pp = mag2[_inBin]
+            dd = delta[_inBin]
+
+            if len(dd) == 0:
+                continue
+
+            axes.hist(dd, nbin, (xmin, xmax), alpha=0.5, cumulative=cumulative,
+                      color=color if stype == "s" else color2)
+
+            if stype == "s":
+                stats = afwMath.makeStatistics(dd, afwMath.STDEVCLIP | afwMath.MEANCLIP)
+                mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
+
+        if False:
+            axes.axvline(0.0, color="blue", ls=":")
+            axes.axvline(mean, color="green", ls=":")
 
         axes.set_xlim(xmin, xmax)
-        axes.set_ylim(0, 1.05)
 
         meanMag = edge + 0.5*dmag
-        axes.set_xlabel("%.2f" % meanMag)
-        axes.set_title("%.3f\n$\pm$%.3f" % (mean, stdev), fontsize="smaller") 
-        #
-        # Put out information for intensity-dependent PSFs
-        #
-        print "%.4f %6.2e %.4f %.4f" % (meanMag, calib.getFlux(meanMag), mean, stdev)
+        if len(binEdge) > 1:
+            xlab = "%.2f" % meanMag
+        else:
+            xlab = "%s - %s  (%.1f <= %s < %.1f)" % (magType1, magType2, edge, magType1, edge + dmag)
+            if isinstance(selectSG, int):
+                xlab += " S/G from %d" % selectSG
+        axes.set_xlabel(xlab)
+        if False:
+            if mean is not None:
+                axes.set_title("%.3f\n$\pm$%.3f" % (mean, stdev), fontsize="smaller") 
+            #
+            # Put out information for intensity-dependent PSFs
+            #
+            print "%.4f %6.2e %.4f %.4f" % (meanMag, calib.getFlux(meanMag), mean, stdev)
         
-    fig.suptitle("%s - %s: %s" % (magType1, magType2, data.name))
+    ids = data.cat.get("id")[good]
+    name = data.name if selectObjId is None else \
+        data.mapperInfo.dataIdToTitle(idsToDataIds(data, ids), data._rerun)
+    fig.suptitle("%s - %s: %s" % (magType1, magType2, name))
 
     fig.show()
 
@@ -4179,7 +4344,7 @@ def findSource(sourceSet, x, y, radius=2):
     else:
         return matches
 
-def findSourcesFromId(data, objId, findCalexp=False):
+def findSourceFromId(data, objId, findCalexp=False):
     """Find the Source with this (full) objId
 
 If findCalexp is true, also return the calexp
@@ -4360,6 +4525,36 @@ def getMissed(data, dataId):
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
+def drawCmodel(s, xy0=(0, 0), psf=None, **kwargs):
+    x, y = s.getCentroid()
+    x -= xy0[0]; y -= xy0[1]
+
+    if s.get("cmodel.flux.flags"): # failed; draw an \odot
+        kw = kwargs.copy()
+        kw["size"] = 5; kw["ctype"] = ds9.GREEN
+        ds9.dot('x', x, y, **kw)
+        ds9.dot('o', x, y, **kw)
+        return
+
+    psfShape = psf.computeShape() if psf else None
+
+    for t, ct, ctPSF in [("initial", ds9.YELLOW,  ds9.GREEN),
+                         ("dev",     ds9.MAGENTA, ds9.RED),
+                         ("exp",     ds9.CYAN,    ds9.BLUE),]:
+        shape = s.get("cmodel.%s.ellipse" % t)
+
+        try:
+            ds9.dot(shape, x, y, ctype=ct, silent=True, **kwargs)
+        except:
+            pass
+
+        if psfShape:
+            shape = shape.convolve(psfShape)
+            try:
+                ds9.dot(shape, x, y, ctype=ctPSF, silent=True, **kwargs)
+            except:
+                pass
+
 def drawKron(s, xy0=(0, 0), **kwargs):
     x, y = s.getCentroid()
     x -= xy0[0]; y -= xy0[1]
@@ -4386,12 +4581,59 @@ def drawKron(s, xy0=(0, 0), **kwargs):
         shape.scale(r/shape.getDeterminantRadius())
 
         try:
-            ds9.dot(shape, x, y, ctype=ct, silent=True, **kwargs) # requires a ds9.py >= 2013-01-15
+            ds9.dot(shape, x, y, ctype=ct, silent=True, **kwargs)
         except:
             pass
 
-def kronEventCallback(key, source, im, frame):
-    """Callback for event handlers; e.g. utils.EventHandler.callbacks['d'] = kronEventCallback"""
+def centroidEventCallback(ev, source, im, frame):
+    """Callback for event handlers to plot centroids.
+
+Use as e.g.
+   utils.eventCallbacks['c'] = utils.centroidEventCallback"""
+    isStar = source.get("classification.extendedness") < 0.5
+    isStar = np.logical_or(isStar, source.get("flags.pixel.saturated.center"))
+
+    ctype = (ds9.GREEN if isStar else ds9.RED) if source.get("parent") == 0 else \
+             (ds9.CYAN if isStar else ds9.MAGENTA)                    
+
+    cen = source.getCentroid() - afwGeom.PointD(im.getXY0())
+
+    ds9.dot("+", *cen, frame=frame, ctype=ctype)
+    if not isStar:
+        ds9.dot("o", *cen, frame=frame, ctype=ctype)
+
+def snEventCallback(ev, source, im, frame):
+    """Print the object's signal to noise ratio"""
+    
+    print "S/N %6.2f (PSF) %6.2f (Model)%s\r" % (source.getPsfFlux()/source.getPsfFluxErr(),
+                                                 source.getModelFlux()/source.getModelFluxErr(), 30*" "),
+    sys.stdout.flush()
+
+def flagsEventCallback(ev, source, im, frame):
+    """Print a Source's flags"""
+    print
+    for name in sorted(source.getSchema().extract("*flags*").keys()):
+        val = source.get(name)
+        if val:
+            print "%-30s %s" % (name, val)
+
+def cmodelEventCallback(ev, source, im, frame):
+    """Callback for event handlers to plot Cmodel quantities.
+
+Use as e.g.
+   utils.eventCallbacks['m'] = utils.cmodelEventCallback"""
+    try:
+        psf = im.getPsf()
+    except:
+        psf = None
+        
+    drawCmodel(source, im.getXY0(), frame=frame, psf=psf)
+
+def kronEventCallback(ev, source, im, frame):
+    """Callback for event handlers to plot Kron quantities.
+
+Use as e.g.
+   utils.eventCallbacks['k'] = utils.kronEventCallback"""
     drawKron(source, im.getXY0(), frame=frame)
 
 def showSourceSet(sourceSet, exp=None, wcs=None, xy0=None, raDec=None, magmin=None, magmax=None, magType="psf",
@@ -4461,7 +4703,7 @@ def showSourceSet(sourceSet, exp=None, wcs=None, xy0=None, raDec=None, magmin=No
     if mat:
         symb = "o"
         kwargs["size"] = float(mat.group(1))
-    
+
     with ds9.Buffering():
         for i, s in enumerate(sourceSet):
             if doNotShow[i]:
@@ -4501,10 +4743,9 @@ def showSourceSet(sourceSet, exp=None, wcs=None, xy0=None, raDec=None, magmin=No
                 _id = s.getId()
                 if symb == "id":
                     if mapperInfo:
-                        _symb = mapperInfo.splitId(_id)["objId"]
+                        _id = mapperInfo.splitId(_id)["objId"]
                     else:
                         _id = _id & 0xffff # guess wildly
-                else:
                     _symb = "%d" % _id
                 if deblend:
                     kwargs["ctype"] = ds9.RED if s.get("parent") == 0 else ds9.MAGENTA                    
@@ -5281,7 +5522,19 @@ def assembleCcdSubaru(dataType, butler, dataId, fixAmpLevels=False):
     return exp
 
 class EventHandler(object):
-    """A class to handle key strokes with matplotlib displays"""
+    """A class to handle key strokes with matplotlib displays
+
+If utils.eventCallbacks[ev.key] is defined, it'll be called with arguments:
+   ev, source, maskedImage, frame
+E.g.
+utils.eventCallbacks['k'] = utils.kronEventCallback
+(the value is also allowed to be a list of callbacks which will be called in order)
+
+(If you attach a callback to an active letter such as 'd' it'll be called in addition to the
+pre-defined behaviour)
+    """
+    scaleSources = False
+
     def __init__(self, data, axes, xs, ys, ids, x=None, y=None, flags={}, frames=[0], wcss=[], selectWcs=0):
         self.data = data
         self.axes = axes
@@ -5307,7 +5560,10 @@ class EventHandler(object):
         self.frames = frames
         self.wcss = wcss
 
-        self.cid = self.axes.figure.canvas.mpl_connect('key_press_event', self)
+        canvas = self.axes.figure.canvas
+        canvas.mpl_disconnect(canvas.manager.key_press_handler_id) # remove default bindings
+
+        self.cid = canvas.mpl_connect('key_press_event', self)
 
     def __call__(self, ev):
         if ev.inaxes != self.axes:
@@ -5316,40 +5572,55 @@ class EventHandler(object):
         if not ev.key:
             return
 
+        dist = np.hypot(self.xs - ev.xdata, self.ys - ev.ydata)
+        dist[np.where(np.isnan(dist))] = 1e30
+        dmin = min(dist)
+
+        which = np.where(dist == min(dist))
+        objId = self.ids[which][0]
+
+        dataId = self.data.mapperInfo.splitId(objId)
+        oid = dataId["objId"]; del dataId["objId"]
+        ss = self.data.butler.get(dtName("src"), **dataId)
+
+        self.s = ss[objId == ss.get("id")][0]
+
+        calexp = None
+
         if ev.key.lower() == 'h':
             print """
-Options:
-   d, D, F    Display the object in ds9, frame utils.eventFrame.  If D, show the deblended child, if F
+Live keys:
+   d, D, f Display the object in ds9, frame utils.eventFrame.  If D, show the deblended child, if f
            show the family
    a       Zoom the display to show All of the current object
    1,2,4,8 Zoom the display by 1, 2, 4, or 8
-   b       Show this object in all bands (as matched by the most recent plotCM or plotCC command
-           so to get "true" RGB colour, make sure it was plotCC!)
+   b, B    Show this object in all bands (as matched by the most recent plotCM or plotCC command)
+           B smoothes to constant seeing
    h, H    Print this message
    r, R    Make and display a RGB file (R names it from the object)
+           (as matched by the most recent plotCM or plotCC command
+            so to get "true" RGB colour, make sure it was plotCC!)
    i, I    Print info about the object; 'I' also prints a newline
    z, Z    Print raw "ids" array about the object; 'Z' also prints a newline
 
-If utils.eventCallbacks[ev.key] is defined it'll be called with arguments:
-   ev.key, source, maskedImage, frame
-(see utils.kronCallback for an example)
+Callbacks:"""
+            for k in sorted(eventCallbacks.keys()):
+                doc = eventCallbacks[k].__doc__
+                print "   %-6s %s" % (k, doc.split("\n")[0] if doc else "???")
+
+            print """
+There are also some static values in EventHander which you may set from the command line:
+   EventHandler.scaleSources        Scale sources to peak flux == 1 in bB
 """,
             return
         elif ev.key in ("a"):
             ds9.ds9Cmd("zoom to fit", frame=eventFrame)
         elif ev.key in ("1248"):
             ds9.zoom(int(ev.key), frame=eventFrame)
-        elif ev.key in ("bdDFiIrRzZ"):
-            dist = np.hypot(self.xs - ev.xdata, self.ys - ev.ydata)
-            dist[np.where(np.isnan(dist))] = 1e30
-            dmin = min(dist)
-
-            which = np.where(dist == min(dist))
-            objId = self.ids[which][0]
-
+        elif ev.key in "bBdDfiIrRzZ":
             if ev.key in "zZ":
                 print "\r>>>",
-                print "%.3f %.3f %g%20s\r" % (self.xs[which][0], self.ys[which][0], objId, ""),
+                print "%.3f %.3f %d%40s\r" % (self.xs[which][0], self.ys[which][0], objId, ""),
                 sys.stdout.flush()
                 if ev.key.isupper():
                     print ""
@@ -5363,17 +5634,18 @@ If utils.eventCallbacks[ev.key] is defined it'll be called with arguments:
 
             if len(self.x) == 0:
                 x, y = np.nan, np.nan
+                ra, dec = np.nan, np.nan
             else:
                 x, y = self.x[which][0], self.y[which][0]
+                ra, dec = self.s.getCoord().getPosition()
 
             print "\r>>>",
-            print "%.3f %.3f %s %s (%6.1f, %6.1f)%20s\r" % \
+            print "%.3f %.3f %s %s (%6.1f, %6.1f) (%9.5f, %10.5f)%20s\r" % \
                 (self.xs[which][0], self.ys[which][0], self.data.mapperInfo.splitId(objId, asDict=False),
-                 flagsInfo, x, y, ""),
+                 flagsInfo, x, y, ra, dec, ""),
             sys.stdout.flush()
 
-            if ev.key in ("b", "r", "R"):
-
+            if ev.key in "bBrR":
                 if ev.key == "r":
                     fileName = "obj"
                 elif ev.key == "R":
@@ -5388,18 +5660,12 @@ If utils.eventCallbacks[ev.key] is defined it'll be called with arguments:
                 if fileName:
                     fileName += ".png"
                     
-                findSourcesAllBands(self.data, objId, frame=eventFrame, fileName=fileName)
+                findSourcesAllBands(self.data, objId, frame=eventFrame, fileName=fileName,
+                                    scaleSources=(ev.key in "bB" and self.scaleSources),
+                                    doSmooth=(ev.key == "B"))
                 return
-            elif ev.key in ('d', 'D', 'F'):
-                dataId = self.data.mapperInfo.splitId(objId)
-                title = re.sub(r"[' {}]", "", str(dataId)).replace(",", " ")
-                oid = dataId["objId"]; del dataId["objId"]
-                ss = self.data.butler.get(dtName("src"), **dataId)
-
-                i = int(np.where(objId == ss.get("id"))[0][0])
-                s = ss[i]
-
-                bbox = s.getFootprint().getBBox()
+            elif ev.key in ('d', 'D', 'f'):
+                bbox = self.s.getFootprint().getBBox()
                 grow = 0.5
                 bbox.grow(afwGeom.ExtentI(int(grow*bbox.getWidth()), int(grow*bbox.getHeight())))
 
@@ -5408,36 +5674,56 @@ If utils.eventCallbacks[ev.key] is defined it'll be called with arguments:
                                        afwGeom.ExtentI(md.get("NAXIS1"), md.get("NAXIS2"))))
 
                 if ev.key == 'd':
-                    calexp = self.data.butler.get(dtName("calexp_sub"), bbox=bbox, **dataId).getMaskedImage()
+                    calexp = self.data.butler.get(dtName("calexp_sub"), bbox=bbox, **dataId)
                 else:
                     import deblender
 
                     families = deblender.Families(ss, self.data.butler, nChildMin=0)
                     fam = families.find(oid)
                     if fam:
-                        calexp = self.data.butler.get(dtName("calexp"), **dataId).getMaskedImage()
-                        if ev.key == 'F': # family
-                            deblender.plotDeblendFamily(calexp, *fam, background=-1,
+                        calexp = self.data.butler.get(dtName("calexp"), **dataId)
+                        if ev.key == 'f': # family
+                            deblender.plotDeblendFamily(calexp.getMaskedImage(), *fam, background=-1,
                                                         mapperInfo=self.data.mapperInfo, frame=eventFrame)
                             calexp = None
                         else:
-                            calexp = deblender.footprintToImage(s.getFootprint(), calexp)
+                            im = deblender.footprintToImage(self.s.getFootprint(), calexp.getMaskedImage())
+                            calexp.setMaskedImage(afwImage.makeMaskedImage(im))
+                                    
                     else:
                         kid = [_ for _ in fam[1] if _.getId() == oid]
-                        calexp = deblender.footprintToImage(kid.getFootprint(), calexp)
+                        im = deblender.footprintToImage(kid.getFootprint(), calexp.getMaskedImage())
+                        calexp.setMaskedImage(afwImage.makeMaskedImage(im))
                         
                 if calexp:
+                    title = re.sub(r"[' {}]", "", str(dataId)).replace(",", " ")
                     ds9.mtv(calexp, title=title, frame=eventFrame)
-                    ds9.pan(s.getX() - calexp.getX0(), s.getY() - calexp.getY0(), frame=eventFrame)
-
-                    callback = eventCallbacks.get(ev.key)
-                    if callback:
-                        callback(ev.key, s, calexp, frame=eventFrame)
+                    ds9.dot("%s (%6.1f, %6.1f)" % (self.data.mapperInfo.splitId(objId, asDict=False), x, y),
+                            calexp.getWidth()/2, calexp.getHeight() - 5, frame=eventFrame)
+                    ds9.pan(self.s.getX() - calexp.getX0(), self.s.getY() - calexp.getY0(), frame=eventFrame)
 
             elif ev.key == "I":
                 print ""
         else:
             pass
+
+        if calexp:
+            self.calexp = calexp
+        else:
+            try:
+                self.calexp
+            except:
+                self.calexp = None
+
+        callbacks = eventCallbacks.get(ev.key)
+        if callbacks:
+            try:
+                callbacks[0]
+            except TypeError:
+                callbacks = [callbacks]
+
+            for callback in callbacks:
+                callback(ev, self.s, self.calexp, frame=eventFrame)
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
@@ -6730,22 +7016,34 @@ def improveWcs(wcs, matched, sipOrder=3):
     return bestWcs
 
 
-def findSourcesAllBands(data, objId, frame=None, fileName=None, showFile=True, doSmooth=False, title=""):
+def findSourcesAllBands(data, objId, frame=None, fileName=None, showFile=True, doSmooth=False,
+                        scaleSources=False, title=""):
     """Find all the sources in all bands that are matched to this (full) objId"""
 
     matched = data.matches[1].cat
 
-    dataKeys = range(1, len(matched.getSchema().extract("id*")) - 1)
-    suffixes = getFieldSuffixes(dataKeys)
+    suffixes = [k[2:] for k in sorted(matched.getSchema().extract("id*").keys()) if k != "id"]
+    # Some of those suffixes refer to the same run.  Handle this by brute force
+    _suffixes = {}
+    for k in suffixes:
+        _suffixes[data.mapperInfo.splitId(matched[0].get("id%s" % k))["visit"]] = k
+    suffixes = _suffixes.values()
+
+    dataKeys = range(len(suffixes))
+    suffixes = dict(zip(dataKeys, suffixes))
 
     m = None
     for k in suffixes.values():
-        m = matched[matched.get("id%s" % k) == objId]
+        try:
+            m = matched[matched.get("id%s" % k) == objId]
+        except KeyError as e:
+            continue
+
         if m:
             break        
     
     if not m:
-        print "\nFailed to match object %d == %s" % (objId, data.mapperInfo.splitId(objId, asDict=False))
+        print "\n\aFailed to match object %d == %s" % (objId, data.mapperInfo.splitId(objId, asDict=False))
         return
     try:
         nmatch = len(m)
@@ -6768,7 +7066,7 @@ def findSourcesAllBands(data, objId, frame=None, fileName=None, showFile=True, d
     bbox = afwGeom.BoxI()
     for d in dataKeys:
         doid = m.get("id%s" % suffixes[d])
-        dsrc, calexp = findSourcesFromId(data, doid, findCalexp=(frame != None))
+        dsrc, calexp = findSourceFromId(data, doid, findCalexp=(frame != None))
         sources.append(dsrc)
 
         if frame is None:
@@ -6789,14 +7087,20 @@ def findSourcesAllBands(data, objId, frame=None, fileName=None, showFile=True, d
             offset0 = offset
 
         dx, dy = offset0 - offset
+        if not fileName:                # no need for sub-pixel shifts if not making an RGB composite
+            dx, dy = np.rint([dx, dy])
         im = afwMath.offsetImage(im, dx, dy, "bilinear")
-        images.append([im, calexp.getFilter().getName(), calexp.getPsf()])
+        if scaleSources:
+            im /= float(np.max(im.getArray()))
+
+        images.append([im, calexp.getFilter().getName(), calexp.getPsf(),
+                       data.mapperInfo.splitId(dsrc.get("id"), asDict=True)])
 
         bbox.include(im.getBBox(afwImage.PARENT))
 
     if fileName or frame is not None:
         for i, ifp in enumerate(images):
-            im, filter, psf = ifp
+            im, filter, psf, idDict = ifp
             bim = im.Factory(bbox)
             x0, y0 = im.getXY0() - bbox.getMin()
             w, h = im.getDimensions()
@@ -6808,25 +7112,31 @@ def findSourcesAllBands(data, objId, frame=None, fileName=None, showFile=True, d
             ifp[0] = bim
 
         if doSmooth:
-            sigma = np.array([v[2].computeShape().getDeterminantRadius() for v in images])
-            tau = np.sqrt(sigma**2 - sigma.min()**2)
+            sigma = np.array([psf.computeShape().getDeterminantRadius() for _, _, psf, _ in images])
+            tau = np.sqrt(sigma.max()**2 - sigma**2)
+            print sigma, tau
             for i, ifp in enumerate(images):
-                im, filter, sigma = ifp
+                im, filter, sigma, idDict = ifp
                 if tau[i] > 0:
                     gaussFunc = afwMath.GaussianFunction1D(tau[i])
                     kernel = afwMath.SeparableKernel(int(5*tau[i]), int(5*tau[i]), gaussFunc, gaussFunc)
                     cim = im.clone()
                     afwMath.convolve(cim, im, kernel)
+
+                    ima = cim.getArray()
+                    ima[np.logical_not(np.isfinite(ima))] = 0
+                    del ima
+                    
                     ifp[0] = cim
 
         if fileName:
-            images = list(reversed([im for im, f, psf in images]))
+            images = list(reversed([im for im, f, psf, idDict in images]))
             if len(images) == 2:
                 images.append(images[-1])
 
             imax = max([np.max(i.getArray()) for i in images])
             writeRgb(images,
-                     fileName, min=0, max=min([5, imax]), Q=8, bin=1, scales=[1.0, 0.5, 1.0],
+                     fileName, min=0, max=min([25, imax]), Q=8, bin=1, scales=[1.0, 0.5, 1.0],
                      fixSaturation=False, saveFmt=None,
                      subtractBkgd=False, boxSize=1024, nsigma=5)
 
@@ -6845,10 +7155,56 @@ def findSourcesAllBands(data, objId, frame=None, fileName=None, showFile=True, d
                 plt.interactive(1)
                 plt.show()
         else:
+            filterNames = set([filterName for _, filterName, _, _ in images])
+
             mos = ds9Utils.Mosaic()
-            for im, filterName, psf in images:
-                mos.append(im, filterName)
+            for im, filterName, psf, idDict in images:
+                mos.append(im, idDict["visit"] if len(filterNames) == 1 else filterName)
 
             mos.makeMosaic(frame=frame)
 
     return sources
+
+#-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+def setEventCallbacks():
+    import lsst.analysis.cosmos as cosmos
+
+    eventCallbacks['C'] = centroidEventCallback
+    eventCallbacks['c'] = cosmos.acsEventCallback
+    eventCallbacks['F'] = flagsEventCallback
+    eventCallbacks['m'] = cmodelEventCallback
+    eventCallbacks['S'] = snEventCallback
+
+    EventHandler.markColor = 'yellow'
+    def callbackM(ev, s, exp, frame):
+        """Mark a point in EventHandler.markColor"""
+        if ev.inaxes:
+            ev.inaxes.plot(ev.xdata, ev.ydata, 'o', markersize=7, markeredgewidth=1,
+                           markerfacecolor='None', markeredgecolor=EventHandler.markColor)
+            ev.inaxes.plot(ev.xdata, ev.ydata, 'o', markersize=8, markeredgewidth=0.5,
+                           markerfacecolor='None', markeredgecolor='black')
+            ev.canvas.draw()
+    eventCallbacks['M'] = callbackM
+
+    EventHandler.markColor2 = 'magenta'
+    def callbackx(*args, **kwargs):
+        """Mark a point in EventHandler.markColor2"""
+
+        savedColor = EventHandler.markColor
+        try:
+            EventHandler.markColor = EventHandler.markColor2
+            callbackM(*args, **kwargs)
+        finally:
+            EventHandler.markColor = savedColor
+    eventCallbacks['x'] = callbackx
+
+    def callbackN(*args, **kwargs):
+        """Switch to next ds9 frame"""
+        ds9.ds9Cmd("frame next")
+    eventCallbacks['n'] = callbackN
+
+    def callbackP(*args, **kwargs):
+        """Switch to previous ds9 frame"""
+        ds9.ds9Cmd("frame prev")   
+    eventCallbacks['p'] = callbackP
