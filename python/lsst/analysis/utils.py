@@ -708,9 +708,10 @@ def makeMapperInfo(butler):
         def __init__(self, Mapper):
             SubaruMapperInfo.Mapper = Mapper
 
-            SubaruMapperInfo._Colorterm = Colorterm
-            SubaruMapperInfo.getColorterm = lambda x, y : Colorterm.getColorterm(y)
-            SubaruMapperInfo._Colorterm.setColorterms(colortermsData, "Hamamatsu")
+            if False:
+                SubaruMapperInfo._Colorterm = Colorterm
+                SubaruMapperInfo.getColorterm = lambda x, y : Colorterm.getColorterm(y)
+                SubaruMapperInfo._Colorterm.setColorterms(colortermsData, "Hamamatsu")
 
         @staticmethod
         def getFields(dataType):
@@ -892,7 +893,8 @@ def makeMapperInfo(butler):
             SubaruMapperInfo.__init__(self, None)
             HscMapperInfo.Mapper = Mapper
 
-            HscMapperInfo._Colorterm.setColorterms(colortermsData, "Hamamatsu")
+            if False:
+                HscMapperInfo._Colorterm.setColorterms(colortermsData, "Hamamatsu")
             
         @staticmethod
         def exposureToStr(exposure):
