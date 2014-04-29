@@ -64,7 +64,7 @@ def drawEllipses(plt, src, **kwargs):
         plt.gca().add_artist(el)
     return els
 
-def plotDeblendFamily(mi, parent, kids, mapperInfo, dkids=[],
+def plotDeblendFamily(mi, parent, kids, mapperInfo=None, dkids=[],
                       background=-10, symbolSize=2,
                       plotb=False, ellipses=True,
                       arcsinh=True, maskbit=False, frame=0):
@@ -136,10 +136,14 @@ all the other peaks in its footprint are marked with x (cyan if deblended-as-psf
 
         _kim = parent_im.Factory(imBbox)
         _kim[bbox] <<= kim
-        mos.append(_kim, '%d%s' % (mapperInfo.getId(kid), "P" if kid == parent else "C"))
+        mos.append(_kim, '%d%s' % (mapperInfo.getId(kid) if mapperInfo else (kid.getId() & 0xfff),
+                                   "P" if kid == parent else "C"))
         del _kim
 
-    title = re.sub(r"[{}']", "", str(mapperInfo.getId(parent, None))) # ds9 doesn't handle those chars well
+    if mapperInfo:
+        title = re.sub(r"[{}']", "", str(mapperInfo.getId(parent, None))) # ds9 doesn't handle those chars well
+    else:
+        title = "0x%x == %d" % (parent.getId(), (parent.getId() & 0xffff))
     mosaicImage = mos.makeMosaic(frame=frame, title=title)
     ds9.dot("%s  (%.1f, %1.f)" % (title, parent.getX(), parent.getY()),
             0.5*mosaicImage.getWidth(), 1.03*mosaicImage.getHeight(), frame=frame,
@@ -215,7 +219,7 @@ def footprintToImage(fp, mi=None, mask=False):
     if fp.isHeavy():
         fp = afwDet.cast_HeavyFootprintF(fp)
     elif mi is None:
-        raise RuntimeError("Unable to make a HeavyFootprint as image is None")
+        print >> sys.stderr, "Unable to make a HeavyFootprint as image is None"
     else:
         fp = afwDet.makeHeavyFootprint(fp, mi)
     bb = fp.getBBox()
@@ -224,13 +228,19 @@ def footprintToImage(fp, mi=None, mask=False):
     else:
         im = afwImage.ImageF(bb.getWidth(), bb.getHeight())
     im.setXY0(bb.getMinX(), bb.getMinY())
-    fp.insert(im)
+
+    try:
+        fp.insert(im)
+    except AttributeError:              # we failed to make it heavy
+        assert not mi
+        pass
+    
     if mask:
         im = im.getMask()
     return im
 
 class Families(list):
-    def __init__(self, cat, butler, nChildMin=None):
+    def __init__(self, cat, butler=None, nChildMin=None):
         '''
         Returns [ (parent0, [child0, child1]), (parent1, [child0, ...]), ...]
         where parents are sorted by ID.  Only objects that are deblended are included (unless nChildMin == 0)
@@ -299,16 +309,26 @@ class Families(list):
                 print >> sys.stderr, "Unable to find object at (%.2f, %.2f)" % (x, y)
                 return None
 
-            objId = self.mapperInfo.splitId(matched[0][0].getId(), asDict=True)["objId"]
+            if False:
+                objId = self.mapperInfo.splitId(matched[0][0].getId(), asDict=True)["objId"]
+            else:
+                objId = matched[0][0].getId()
 
-        family = [f for f in self if self.mapperInfo.getId(f[0]) == objId]
+        if False:
+            family = [f for f in self if self.mapperInfo.getId(f[0]) == objId]
+        else:
+            family = [f for f in self if f[0].getId() == objId]
         if family:
             return family[0]
 
         for family in self:
             for child in family[1]:
-                if self.mapperInfo.getId(child) == objId:
-                    return family
+                if False:
+                    if self.mapperInfo.getId(child) == objId:
+                        return family
+                else:
+                    if child.getId() == objId:
+                        return family
 
         return None
 
@@ -322,16 +342,38 @@ def findFamily(families, objId):
 
     return families.find(objId)
 
-def makeDisplayFamily(calexp, families, matchRadius=20, background=-10):
+def makeDisplayFamily(calexp, families, matchRadius=20, background=-10, frame=None):
     """Factory function for callback function implementing showBlend"""
     def display_family(k, x, y):
         fam = families.find((x, y), matchRadius=matchRadius)
         if fam:
-            plotDeblendFamily(calexp, *fam, mapperInfo=families.mapperInfo, background=background)
+            plotDeblendFamily(calexp, *fam, mapperInfo=families.mapperInfo, background=background, frame=frame)
 
     return display_family
 
-def showBlend(calexp, families, frame=None, key='d', mtv=False):
+def showBlend(calexp, families, key='d', frame0=0, frame=None, mtv=False):
+    """Show blends interactively on ds9
+
+    \param calexp   Exposure containing objects of interest
+    \param families A Families object
+    \param key      Key to display the family under the cursor in frame frame
+    \param frame0   The ds9 frame to display the families
+    \param frame    The ds9 frame displaying calexp (see mtv)
+    \param mtv      If true, display calexp in ds9 frame frame
+
+E.g.
+import lsst.daf.persistence as dafPersist
+import lsst.analysis.deblender as deblender
+
+butler = dafPersist.Butler("/home/astro/hsc/hsc/HSC/rerun/rhl/tmp")
+did = dict(visit=905518, ccd=31)
+calexp = butler.get("calexp", **did)
+ss = butler.get("src", **did)
+families = deblender.Families(ss, butler, nChildMin=0)
+deblender.showBlend(calexp, families, frame=1)
+
+Then hit 'key' (default: d) on objects of interest
+"""
     if frame is not None:
         if mtv:
             ds9.mtv(calexp, frame=frame)
@@ -342,18 +384,32 @@ def showBlend(calexp, families, frame=None, key='d', mtv=False):
         for k in set(list("ha") + [key]):
             old[k] = ds9.setCallback(k)
 
-        ds9.setCallback(key, makeDisplayFamily(calexp, families))
+        ds9.setCallback(key, makeDisplayFamily(calexp, families, frame=frame0))
         def new_h(*args):
             old['h'](*args)
-            print "   a: show All the pixels"
-            print "   %s: show family under the cursor and return to python prompt" % key
+            print "   1,2,4,8: Zoom to specified scale"
+            print "   a:       show All the pixels"
+            print "   %s:      show family under the cursor and return to python prompt" % key
+            print "   l:       cycle through sretch types"
         ds9.setCallback('h', new_h)
-        ds9.setCallback('a', lambda k, x, y: ds9.ds9Cmd("zoom to fit", frame=frame))
+        ds9.setCallback('a', lambda k, x, y: ds9.ds9Cmd("zoom to fit", frame=frame0))
         for z in [1, 2, 4, 8]:
             def _zoom(k, x, y, z=z):
-                ds9.zoom(z, frame=frame)
+                ds9.zoom(z, frame=frame0)
             ds9.setCallback('%d' % z, _zoom)
         
+        def callbackLog(k, x, y, i=[0]):
+            """Cycle through stretches"""
+            i[0] = (i[0] + 1)%3
+            if i[0] == 0:
+                ds9.ds9Cmd("scale log; scale minmax")
+            elif i[0] == 1:
+                ds9.ds9Cmd("scale linear; scale minmax")
+            elif i[0] == 2:
+                ds9.ds9Cmd("scale linear; scale zscale")
+
+        ds9.setCallback('l', callbackLog)
+
         ds9.interact()
     except Exception, e:
         print "RHL", e

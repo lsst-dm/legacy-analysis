@@ -33,10 +33,12 @@ from lsst.meas.algorithms.detection import SourceDetectionTask
 import lsst.meas.algorithms.utils as maUtils
 
 try:
-    from lsst.meas.mosaic.updateExposure import applyMosaicResultsCatalog
-except ImportError:
-    applyMosaicResultsCatalog = None
-    
+    applyMosaicResultsCatalog
+except NameError:
+    try:
+        from lsst.meas.mosaic.updateExposure import applyMosaicResultsCatalog
+    except ImportError:
+        applyMosaicResultsCatalog = None
 
 try:
     import lsst.meas.extensions.multiShapelet.simpleViewer as msViewer
@@ -329,6 +331,9 @@ def idsToDataIds(data, ids):
 
 def makeMapperInfo(butler):
     """Return an object with extra per-mapper information (e.g. which fields fully specify an exposure)"""
+
+    if not butler:
+        return None
 
     mapper = butler.mapper
     
@@ -1206,7 +1211,7 @@ class Data(object):
             else:
                 for vals in self.butler.queryMetadata(_raw_, _visit_, fields, **fixTypesForButler(did)):
                     _dataId = dict(zip(fields, vals))
-            
+
                     if self.butler.datasetExists(dtName(dataType), **_dataId):
                         dataSets.append(_dataId)
 
@@ -1283,7 +1288,7 @@ raft or sensor may be None (meaning get all)
                         self.hasCmodel = False
                         print "cmodel flux is NaN"
 
-                if True:
+                if False:
                     if self.hasCmodel:
                         modelFluxName, corrFac = "cmodel.flux", 10**(0.4*0.0)
                     else:
@@ -1386,8 +1391,11 @@ ccd may be a list"""
                 catInfo = _appendToCatalog(self, did, catInfo, extraApFlux=extraApFlux)
             except Exception, e:
                 print "RHL 2", e
-                import pdb; pdb.set_trace() 
-                catInfo = _appendToCatalog(self, did, catInfo, extraApFlux=extraApFlux)
+                if True:
+                    raise
+                else:
+                    import pdb; pdb.set_trace() 
+                    catInfo = _appendToCatalog(self, did, catInfo, extraApFlux=extraApFlux)
                 
         if verbose:
             print
@@ -1742,13 +1750,13 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
         # applyMosaicResultsCatalog needs immediate=True as it uses type(sourceSet)
         sourceSet = data.getDataset("src", dataId, immediate=True)[0]
 
-    useMeasMosaic = True
+    useMeasMosaic = "tract" in dataId
     if useMeasMosaic and applyMosaicResultsCatalog:
         dataRef = data.butler.dataRef("raw", **dataId)
         try:
             sourceSet = applyMosaicResultsCatalog(dataRef, sourceSet).catalog
         except pexExcept.LsstCppException as e:
-            pass
+            raise
 
     calexp_md = data.butler.get(dtName("calexp", True), **dataId)
     calib = afwImage.Calib(calexp_md)
@@ -1874,9 +1882,6 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
 
         cat.extend(sourceSet, True, scm)
 
-        if False and sourceSet.get("deblend.nchild") > 0:
-            pass
-
         # ensure that cat is contiguous
         try:
             cat.getColumnView()
@@ -1942,6 +1947,9 @@ def zipMatchList(matchList, suffixes=None, swap=False, verbose=True):
     @param matchList MatchList, as returned by e.g. afwTable.matchRaDec
     @param swap      Interchange [0] and [1]
     """
+
+    if not matchList:
+        raise RuntimeError("No objects matched")
 
     records = [matchList[0][i] for i in range(2)]
     if suffixes is None:
@@ -2180,6 +2188,52 @@ def getStellar(data, good, selectSG=None, getNonStellar=False):
     else:
         return stellar, junk
 
+def getColormapFromType(stellar, nonStellar, junk, SG,
+                        colorGalaxy="red", colorStar="green", colorJunk="blue"):
+    """Return a classification value and corresponding colour map
+
+E.g.
+        classification, classificationCM = getColormapFromType(stellar, nonStellar, junk, SG)
+
+        desired = classification >= 0
+        mag1, delta, classification = mag1[desired], delta[desired], classification[desired]
+
+        sc = axes.scatter(mag1, delta, c=classification,
+                          norm=pyplot.Normalize(0, 1), cmap=classificationCM,
+                          marker="o", s=2*markersize, edgecolors="none", alpha=alpha)
+"""
+    #                                                           galaxy       star       junk
+    classificationCM = pyplot.matplotlib.colors.ListedColormap((colorGalaxy, colorStar, colorJunk,
+                                                                # deV    exp
+                                                                'magenta', 'cyan'))
+    classification = np.zeros(len(stellar)) - 1
+
+    if "s" in SG.lower():
+        classification[stellar] = 1
+
+    if "j" in SG.lower():
+        classification[junk] = 2
+
+    if "d" in SG.lower() or "e" in SG.lower():           # split by deV/exp
+        try:
+            fracDeV = data.cat.get("cmodel.fracDev")[good][plotOrder]
+        except KeyError:
+            print >> sys.stderr, "No frac_deV is available"
+            fracDeV = np.ones_like(nonStellar)
+
+        deV = fracDeV > criticalFracDeV # it's a deV
+
+        if "d" in SG.lower():
+            classification[np.logical_and(deV, nonStellar)] = 3
+        if "e" in SG.lower():
+            classification[np.logical_and(np.logical_not(deV), nonStellar)] = 4
+    elif "g" in SG.lower():
+        classification[nonStellar] = 0
+
+    classification /= len(classificationCM.colors) - 0.5
+
+    return classification, classificationCM
+
 def plotDmag(data, magType1="model", magType2="psf", maglim=20, magmin=14,
              showMedians=False, sgVal=0.05, criticalFracDeV=0.5, alpha=1.0,
              selectObjId=None, colorCcds=False, showCamera=False, randomOrder=None,
@@ -2224,9 +2278,10 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
 
     bad = reduce(lambda x, y: np.logical_or(x, data.cat.get(y)),
                  ["flags.pixel.edge",
-                  "flags.pixel.bad",
-                  #"flags.pixel.interpolated.center",
-                  "flags.pixel.saturated.center",],
+                  #"flags.pixel.bad",
+                  "flags.pixel.interpolated.center",
+                  #"flags.pixel.saturated.center",
+                  ],
                  False)
     good = np.logical_not(bad)
 
@@ -2283,30 +2338,6 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     if SG and ("d" in SG.lower() or "e" in SG.lower()): # split by deV/exp?
         SG += "g"
 
-    plotKW = dict(markersize=markersize, markeredgewidth=0, zorder=1, alpha=alpha)
-    nobj = 0
-    if not colorCcds and SG and "g" in SG.lower():
-        if "d" in SG.lower() or "e" in SG.lower():           # split by deV/exp
-            try:
-                fracDeV = data.cat.get("cmodel.fracDev")[good][plotOrder]
-            except KeyError:
-                print >> sys.stderr, "No frac_deV is available"
-                fracDeV = np.ones_like(nonStellar)
-                
-            deV = fracDeV > criticalFracDeV # it's a deV
-
-            if "d" in SG.lower():
-                tmp = np.logical_and(deV, nonStellar)
-                nobj += tmp.sum()
-                axes.plot(mag1[tmp], delta[tmp], "o", color="red", **plotKW)
-            if "e" in SG.lower():
-                tmp = np.logical_and(np.logical_not(deV), nonStellar)
-                nobj += tmp.sum()
-                axes.plot(mag1[tmp], delta[tmp], "o", color="blue", **plotKW)
-        else:
-            nobj += nonStellar.sum()
-            axes.plot(mag1[nonStellar], delta[nonStellar], "o", color=color, **plotKW)
-
     if colorCcds:
         nobj = len(mag1)
         ccdIds = data.mapperInfo.splitId(ids)["ccd"]
@@ -2316,47 +2347,51 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
         fig.colorbar(sc)
     elif not SG:
         nobj += len(mag1)
-        axes.plot(mag1, delta, "o", color=color2, **plotKW)
-    elif "s" in SG.lower():
-        nobj += stellar.sum()
+        axes.plot(mag1, delta, "o", color=color2, markersize=markersize, markeredgewidth=0, zorder=1)
+    elif "s" in SG.lower() and showCamera:
+        #
+        # Get focal-plane positions ("mm" -- for HSC they are actually in units of 15 micron pixels)
+        #
+        inRange = np.logical_and(stellar, np.logical_and(mag1 > magmin, mag1 < maglim))
 
-        if showCamera:
-            #
-            # Get focal-plane positions ("mm" -- for HSC they are actually in units of 15 micron pixels)
-            #
-            inRange = np.logical_and(stellar, np.logical_and(mag1 > magmin, mag1 < maglim))
+        camera = data.butler.get("camera")
+        xc = data.cat.getX()[good][inRange][plotOrder]
+        yc = data.cat.getY()[good][inRange][plotOrder]
 
-            camera = data.butler.get("camera")
-            xc = data.cat.getX()[good][inRange][plotOrder]
-            yc = data.cat.getY()[good][inRange][plotOrder]
-
-            xmm = np.empty_like(xc); ymm = np.empty_like(yc)
-            for i, _id in enumerate(ids[inRange]):
-                ccdId = data.mapperInfo.splitId(_id, True)["ccd"]
-                ccd = cameraGeomUtils.findCcd(camera, cameraGeom.Id(ccdId))
-                xmm[i], ymm[i] = ccd.getPositionFromPixel(afwGeom.PointD(xc[i], yc[i])).getMm()
+        xmm = np.empty_like(xc); ymm = np.empty_like(yc)
+        for i, _id in enumerate(ids[inRange]):
+            ccdId = data.mapperInfo.splitId(_id, True)["ccd"]
+            ccd = cameraGeomUtils.findCcd(camera, cameraGeom.Id(ccdId))
+            xmm[i], ymm[i] = ccd.getPositionFromPixel(afwGeom.PointD(xc[i], yc[i])).getMm()
 
 
-            sc = axes.scatter(xmm, ymm, c=delta[inRange], norm=pyplot.Normalize(ymin, ymax),
-                              cmap=pyplot.cm.rainbow, marker="o", s=10*markersize,
-                              edgecolors="none")
-            fig.colorbar(sc)
-            axes.set_aspect('equal')
+        sc = axes.scatter(xmm, ymm, c=delta[inRange], norm=pyplot.Normalize(ymin, ymax),
+                          cmap=pyplot.cm.rainbow, marker="o", s=10*markersize,
+                          edgecolors="none")
+        fig.colorbar(sc)
+        axes.set_aspect('equal')
 
-            axes.set_xlabel("X (mm)")
-            axes.set_ylabel("Y (mm)")
+        axes.set_xlabel("X (mm)")
+        axes.set_ylabel("Y (mm)")
 
-            title += " %s - %s" % (magType1, magType2)
+        title += " %s - %s" % (magType1, magType2)
 
-            if overlay:
-                overlayCcds(camera, axes) 
-        else:
-            axes.plot(mag1[stellar], delta[stellar], "o", color=color2, **plotKW)
+        if overlay:
+            overlayCcds(camera, axes) 
+    else:
+        classification, classificationCM = getColormapFromType(stellar, nonStellar, junk, SG,
+                                                               colorGalaxy=color, colorStar=color2,
+                                                               colorJunk=color3)
 
-    if "j" in SG.lower():
-        nobj += junk.sum() 
-        axes.plot(mag1[junk], delta[junk], "o", color=color3, **plotKW)
-           
+        desired = classification >= 0
+        mag1, delta, classification = mag1[desired], delta[desired], classification[desired]
+        nobj = len(mag1)
+
+        # 2*markersize seems to match axes.plot better than markersize
+        sc = axes.scatter(mag1, delta, c=classification,
+                          norm=pyplot.Normalize(0, 1), cmap=classificationCM,
+                          marker="o", s=2*markersize, edgecolors="none", alpha=alpha)
+
     if not showCamera:
         axes.axhline(meanDelta, linestyle=":", color="black")
         if mean is not None:
@@ -2407,20 +2442,6 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     #
     # Make "i" print the object's ID, p pan ds9, etc.
     #
-    if SG and "j" not in SG.lower():
-        mag1[junk] = -1000              # we don't want to pick these objects
-    if SG and "g" not in SG.lower():
-        mag1[nonStellar] = -1000        # we don't want to pick these objects
-    if SG and "s" not in SG.lower():
-        mag1[stellar] = -1000
-        if "d" in SG.lower():
-            if "e" in SG.lower():       # show deV and /exp
-                pass
-            else:
-                mag1[np.logical_not(deV)] = -1000
-        elif "e" in SG.lower():         # show only exp
-            mag1[deV] = -1000
-
     did = data.mapperInfo.splitId(ids[0]); del did["objId"]
     md = data.get(dtName("calexp", True), did)
 
@@ -2654,7 +2675,7 @@ def makeSelectVisit(visit=None, ccd=None, include=True):
             id = data.mapperInfo.splitId(id)
 
         if visits[0] is None:
-            matches = np.ones_like(id)
+            matches = np.ones(len(id["objId"]), dtype=bool)
         else:
             visit = id["visit"]
             matches = reduce(lambda m, v: np.logical_or(m, visit == v), visits, False)
@@ -2692,9 +2713,9 @@ def makeSelectFilter(filterName, include=True):
     return selectFilter
 
 def plotCM(data, select1, select2, magType="psf", magType2=None, idN=1, maglim=20, magmin=14,           
-           SG="sg", showChildren=True, showIsolated = False, showMedians=False,
+           SG="sg", showChildren=True, showIsolated = False, showMedians=False, colorCcds=False,
            xlim=(None, None), ylim=(None, None),
-           title="+", markersize=1, color="red", alpha=1.0, frames=[0], verbose=False, fig=None):
+           title="+", markersize=1, alpha=1.0, frames=[0], verbose=False, fig=None):
     """Plot (data[select1].magType - data[select2].magType) v. data[idN].magType mags (e.g. "psf")
 where data[selectN] means, "the objects in data for which selectN(ids) returns True".  E.g.
 
@@ -2820,21 +2841,35 @@ If non-None, [xy]{min,max} are used to set the plot limits
 
     nonStellar = np.logical_not(stellar)
     
-    try:
-        alpha.keys()
-    except AttributeError:
-        alpha = dict(g=alpha, s=alpha)
+    if False:                           # not implemented after switch to scatter()
+        try:
+            alpha.keys()
+        except AttributeError:
+            alpha = dict(g=alpha, s=alpha)
 
-    color2 = "green"
-    nobj = 0
-    if "g" in SG.lower():
-        nobj += np.sum(nonStellar)
-        axes.plot(delta[nonStellar], mag[nonStellar], "o",
-                  alpha=alpha["g"], markersize=markersize, markeredgewidth=0, color=color, zorder=-1)
-    if "s" in SG.lower():
-        nobj += np.sum(stellar)
-        axes.plot(delta[stellar], mag[stellar], "*",
-                  alpha=alpha["s"], markersize=1.5*markersize, markeredgewidth=0, color=color2, zorder=-1)
+    if colorCcds:
+        splitId = data.mapperInfo.splitId(ids)
+        ccds = splitId.get("ccd", [])
+
+        classificationCM = pyplot.matplotlib.colors.ListedColormap(
+            ["red", "green", "blue", "cyan", "magenta", "yellow", "black", "orange", "brown", "gray"])
+        nColor = len(classificationCM.colors)
+        classification = np.empty_like(mag)
+        for i, c in enumerate(sorted(set(ccds))):
+            classification[ccds == c] = i%nColor
+
+        classification /= float(nColor)
+    else:
+        junk = np.zeros_like(stellar)
+        classification, classificationCM = getColormapFromType(stellar, nonStellar, junk, SG)
+        desired = classification >= 0
+        mag, delta, classification = mag[desired], delta[desired], classification[desired]
+    nobj = len(mag1)
+
+    # 2*markersize seems to match axes.plot better than markersize
+    sc = axes.scatter(delta, mag, c=classification,
+                      norm=pyplot.Normalize(0, 1), cmap=classificationCM,
+                      marker="o", s=2*markersize, edgecolors="none", alpha=alpha)
 
     if showMedians:
         binwidth = 0.5
@@ -3014,9 +3049,11 @@ def plotStellarLocus(axes, mags, k1, k2, k3, stellar, filterNames, stellarLocusE
     except:
         mean, stdev = float("NaN"), float("NaN")
 
-    #print "%g +- %g" % (mean, stdev)
-    axes.text(xy[0][0], 0.5*(xy[0][1] + xy[1][1]) + 0.25, r"$%s \pm %.3f$" % \
-                  ("%s = " % principalColor if principalColor else "", stdev), fontsize="larger")
+    if np.isfinite(xy).all():
+        axes.text(xy[0][0], 0.5*(xy[0][1] + xy[1][1]) + 0.25, r"$%s \pm %.3f$" % \
+                      ("%s = " % principalColor if principalColor else "", stdev), fontsize="larger")
+    else:
+        print >> sys.stderr, "I failed to find the stellar locus for you, sorry"
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
@@ -3190,7 +3227,7 @@ def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, f
                 idN=None, idColorN=None, selectObjId=None, matchRadius=2, plotRaDec=False,
                 showStatistics=False, show_r_xy=True, colorCcds=False, colorVisits=False, colorPatches=False,
                 usePrincipalColor=True, stellarLocusEnds=[], normalizePatches=False,
-                adjustLocus=False, locusLtype="b:",
+                adjustLocus=False, locusLtype="b:", showLegend=True,
                 xlim=(None, None), ylim=(None, None),
                 showXlabel="bottom", showYlabel="left",
                 datasetName="", title="+", titleAllObjects=True,
@@ -3379,12 +3416,15 @@ def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, f
                         axes.plot(xvec[tmp], yvec[tmp],
                                   ptype, alpha=alpha[c], markersize=markersize, markeredgewidth=0,
                                   color=color, label=str(patch))
-            if nobj == 0:
-                axes.legend(loc="upper left", numpoints=1,
-                            ncol=2, columnspacing=0,
-                            markerscale=2,
-                            borderpad=0.1, labelspacing=0, handletextpad=0, handlelength=1, borderaxespad=0,
-                            ).draggable()
+            if nobj == 0 and showLegend:
+                legend = axes.legend(loc="upper left", numpoints=1,
+                                     ncol=2, columnspacing=0,
+                                     markerscale=2,
+                                     borderpad=0.1, labelspacing=0, handletextpad=0,
+                                     handlelength=1, borderaxespad=0,
+                            )
+                if legend:
+                    legend.draggable()
         else:
             axes.plot(xvec[l], yvec[l], ptype,
                       alpha=alpha[c], markersize=markersize, markeredgewidth=0, color=color)
@@ -3683,6 +3723,187 @@ If selectObjId is provided, it's a function that returns True or False for each 
         
     eventHandlers[fig] = EventHandler(data, axes, mag, size, ids, x, y, flags, frames=frames)
 
+    fig.show()
+
+    return fig
+
+def plotWhisker(cat, magType="psf", selectObjId=None, useRaDec=False, pixelSize=1.0,
+                showData=True, showModel=True, showDiff=True,
+                pivot='middle', keyLen=None, scale=None,
+                xmin=None, xmax=None, ymin=None, ymax=None, fluxMin=5e3,
+                title="+", markersize=1, fig=None, frames=[0]):
+    """
+pixelSize:  In arcsec
+
+If selectObjId is provided, it's a function that returns True or False for each object. E.g.
+    sel = makeSelectCcd(ccd=2) (if it's an integer it defaults to makeSelectCcd(int))
+    plotWhisker(..., selectObjId=2, ...)
+is equivalent to
+    plotWhisker(..., selectObjId=utils.makeSelectCcd(2), ...)
+"""
+
+    bad = reduce(lambda x, y: np.logical_or(x, cat.get(y)),
+                 ["flags.pixel.edge",
+                  "flags.pixel.bad",
+                  #"flags.pixel.interpolated.center",
+                  "flags.pixel.saturated.center",],
+                 False)
+    good = np.logical_not(bad)
+    if selectObjId:
+        if isinstance(selectObjId, int):
+            selectObjId = makeSelectCcd(selectObjId)
+        ids = cat.get("id")
+        good = np.logical_and(good, selectObjId(data, ids))
+        ids = ids[good]
+
+    if fluxMin is not None:
+        good = np.logical_and(good, cat.get("flux.psf") > fluxMin)
+        
+    fig = getMpFigure(fig)
+    axes = fig.add_axes((0.1, 0.1, 0.85, 0.80))
+
+    stellar = cat.get("classification.extendedness")[good] < 0.5
+    nonStellar = np.logical_not(stellar)
+
+    Izz = {}
+    m = "shape.sdss"
+    for zz in ("xx", "yy", "xy",):
+        for p in ("", "psf."):
+            Izz["%s%s" % (p, zz)] = cat.get("%s.%s%s" % (m, p, zz))[good]
+
+    if False:
+        ba = np.empty(len(Izz["xx"]))
+        theta = np.empty_like(ba)
+
+        for i in range(len(ba)):
+            q    = afwGeom.ellipses.Quadrupole(Izz[    "xx"][i], Izz[    "yy"][i], Izz[    "xy"][i])
+            qpsf = afwGeom.ellipses.Quadrupole(Izz["psf.xx"][i], Izz["psf.yy"][i], Izz["psf.xy"][i])
+
+            # should use something like
+            #     afwGeom.ellipses.Separable[afwGeom.ellipses.ReducedShear,afwGeom.TraceRadius](q)
+
+        u = ba*cos(theta)
+        v = ba*cos(theta)
+    else:
+        R  = 0.5*(Izz["xx"] + Izz["yy"])
+        E1 = 0.5*(Izz["xx"] - Izz["yy"])/R
+        E2 = Izz["xy"]/R
+
+        Rpsf  = 0.5*(Izz["psf.xx"] + Izz["psf.yy"])
+        E1psf = 0.5*(Izz["psf.xx"] - Izz["psf.yy"])/Rpsf
+        E2psf = Izz["psf.xy"]/Rpsf
+
+        sigmaToFwhm = 2*np.sqrt(2*np.log10(2))
+        R    *= sigmaToFwhm             # convert to FWHM (for a Gaussian)
+        Rpsf *= sigmaToFwhm
+
+        R    *= pixelSize               # convert to arcsec
+        Rpsf *= pixelSize
+
+    if useRaDec:
+        x = cat.get("coord.ra")[good]
+        y = cat.get("coord.dec")[good]
+
+        y *= np.cos(x)
+
+        x = np.degrees(x); y = np.degrees(y)
+    else:
+        x = cat.get("centroid.sdss.x")[good]
+        y = cat.get("centroid.sdss.y")[good]
+
+    def plotE1E2(axes, x, y, e1, e2, FWHM=None, sel=None,
+                 isUV=False, pivot='middle', color=None, scale=None, width=None):
+
+        if FWHM is None:
+            FWHM = np.ones_like(e1)
+
+        if sel is not None:
+            x =  x[sel]
+            y =  y[sel]
+            e1 = e1[sel]
+            e2 = e2[sel]
+            FWHM =  FWHM[sel]
+
+            args, kwargs = [], {}
+        if isinstance(color, str):
+            kwargs["color"] = color
+        else:
+            args.append(color)
+            kwargs["cmap"] = pyplot.cm.rainbow
+
+        if isUV:
+            u, v = e1, e2
+        else:
+            theta = np.arctan2(e2, e1)
+            u, v = FWHM*np.cos(theta), FWHM*np.sin(theta)
+
+        return axes.quiver(x, y, u, v, *args, units='xy', scale_units='xy',
+                           width=width, pivot=pivot, scale=scale, headlength=0, headwidth=0, headaxislength=0,
+                           **kwargs)
+
+    if scale is None:
+        scale = 8e-2*pixelSize**2       # matplotlib is trying to be helpful
+    width = 2/pixelSize
+    if useRaDec:
+        fac = 3600.0/pixelSize
+        scale *= fac
+        width /= 0.8*fac
+        
+    xpos, ypos = 0.40, 0.95
+    if pixelSize == 1.0:
+        if keyLen is None:
+            keyLen = 5                  # pixels
+        keyLenStr = "%dpix " % keyLen
+    else:
+        if keyLen is None:
+            keyLen = 0.5                # arcsec
+        keyLenStr = "%g\" " % keyLen
+
+    Q = None                            # matplotlib's quiver object
+    if showData:
+        Q = plotE1E2(axes, x, y, E1, E2, R, sel=stellar, color='black', scale=scale, width=width,
+                     pivot=pivot)
+        axes.quiverkey(Q, xpos, ypos, keyLen, keyLenStr + "data", labelpos='W')
+        keyLenStr = ""; xpos += 0.25
+
+    if showModel:
+        Q = plotE1E2(axes, x, y, E1psf, E2psf, Rpsf, sel=stellar, color='red', scale=scale, width=width,
+                     pivot=pivot)
+        axes.quiverkey(Q, xpos, ypos, keyLen, keyLenStr + "model", labelpos='W')
+        keyLenStr = ""; xpos += 0.25
+
+    if showDiff:
+        theta = np.arctan2(E2, E1)
+        u = R*np.cos(theta); v = R*np.sin(theta)
+        theta = np.arctan2(E2psf, E1psf)
+        u -= Rpsf*np.cos(theta); v -= Rpsf*np.sin(theta)
+        
+        Q = plotE1E2(axes, x, y, u, v, isUV=True,
+                     sel=stellar, color='blue' if Q else np.hypot(u, v), scale=scale, width=width*(1 if Q else 2),
+                     pivot=pivot)
+        pyplot.colorbar(Q)
+        axes.quiverkey(Q, xpos, ypos, keyLen, keyLenStr + "diff", labelpos='W')
+        keyLenStr = ""; xpos += 0.25
+    
+    axes.set_aspect('equal')
+
+    if False:
+        axes.set_xlim(14 if xmin is None else xmin, 26 if xmax is None else xmax)
+        axes.set_ylim(0.0 if ymin is None else ymin, 10 if ymax is None else ymax)
+        axes.set_xlabel(magType)
+        axes.set_ylabel(r"$\sqrt{a b}$ (pixels)", fontsize="larger")
+
+    if False:
+        name = data.name if selectObjId is None else \
+            data.mapperInfo.dataIdToTitle(idsToDataIds(data, ids), data._rerun)
+        axes.set_title(re.sub(r"^\+\s*", name + " ", title))
+
+    if False:
+        global eventHandlers
+        flags = {}
+        
+        eventHandlers[fig] = EventHandler(data, axes, mag, size, ids, x, y, flags, frames=frames)
+        
     fig.show()
 
     return fig
@@ -4606,7 +4827,7 @@ def snEventCallback(ev, source, im, frame):
     """Print the object's signal to noise ratio"""
     
     print "S/N %6.2f (PSF) %6.2f (Model)%s\r" % (source.getPsfFlux()/source.getPsfFluxErr(),
-                                                 source.getModelFlux()/source.getModelFluxErr(), 30*" "),
+                                                 source.getModelFlux()/source.getModelFluxErr(), 60*" "),
     sys.stdout.flush()
 
 def flagsEventCallback(ev, source, im, frame):
@@ -6234,8 +6455,9 @@ def smooth(x, windowLen, windowType="boxcar"):
     return y[windowLen//2:-windowLen//2 + 1]
 
 def plotImageHistogram(calexp, minDN=None, maxDN=None, binwidth=None,
-                       bitmask=["DETECTED", "EDGE"], showStats=False,
+                       bitmask=["BAD", "DETECTED", "EDGE"], showStats=False,
                        windowLen=0, windowType='hamming', maxBins=1000,
+                       plotGaussian=None,
                        title=None, log=False, showUnclipped=False, fig=None):
     """Plot a histogram of image pixels
     @param calexp The Exposure/MaskedImage/Image to process
@@ -6243,7 +6465,8 @@ def plotImageHistogram(calexp, minDN=None, maxDN=None, binwidth=None,
     @param maxDN    The maximum value to plot (default: 1000)
     @param binwidth The width of the bins (default: 1)
     @param maxBins  The maximum number of bins in the histogram
-    @param bitmask Hex mask for pixels to ignore, or list of bit names (default: ["DETECTED", "EDGE"])
+    @param plotGaussian Value: (mu, stdev) Plot an N(mu, stdev^2) Gaussian
+    @param bitmask  Hex mask for pixels to ignore, or list of bit names (default: ["BAD", "DETECTED", "EDGE"])
     @param showStats Show median etc. estimated from the Exposure
     @param title    Title of plot
     @param log      Take log of histogram?
@@ -6294,8 +6517,8 @@ def plotImageHistogram(calexp, minDN=None, maxDN=None, binwidth=None,
         sky = np.histogram(img, bins)[0]
         showUnclipped = False
     else:
-        x,y = np.where(np.logical_not(np.bitwise_and(msk, bitmask)))
-        sky = np.histogram(img[x,y], bins)[0]
+        sky = np.histogram(img[np.logical_not(np.bitwise_and(msk, bitmask))], bins)[0]
+
         if showUnclipped:
             unclipped = np.histogram(img, bins)[0]
 
@@ -6323,7 +6546,7 @@ def plotImageHistogram(calexp, minDN=None, maxDN=None, binwidth=None,
     if title:
         axes.set_title(title)
 
-    if showStats:
+    if showStats or (plotGaussian and isinstance(plotGaussian, bool)):
         sctrl = afwMath.StatisticsControl()
 
         vals = ["MEAN", "MEDIAN", "MEANCLIP", "STDEVCLIP",]
@@ -6334,14 +6557,30 @@ def plotImageHistogram(calexp, minDN=None, maxDN=None, binwidth=None,
                                        reduce(lambda x, y:
                                                   x | afwMath.stringToStatisticsProperty(y), vals, 0), sctrl)
 
-        ctypes = ["red", "blue", "green", "yellow", "cyan"]
-        for i, v in enumerate(vals):
-            val = stats.getValue(afwMath.stringToStatisticsProperty(v))
-            axes.axvline(val, linestyle="-", color=ctypes[i%len(ctypes)],
-                      label="%-9s %.2f" % (v, val))
-        i += 1
-        axes.axvline(0, linestyle="--", color=ctypes[i%len(ctypes)])
-            
+        if showStats:
+            ctypes = ["red", "blue", "green", "yellow", "cyan"]
+            for i, v in enumerate(vals):
+                val = stats.getValue(afwMath.stringToStatisticsProperty(v))
+                axes.axvline(val, linestyle="-", color=ctypes[i%len(ctypes)],
+                          label="%-9s %.2f" % (v, val))
+            i += 1
+            axes.axvline(0, linestyle="--", color=ctypes[i%len(ctypes)])
+
+    if plotGaussian:
+        if isinstance(plotGaussian, bool):
+            mu, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
+        else:
+            mu, stdev = plotGaussian
+        x = np.linspace(*axes.get_xlim(), num=100)
+
+        msg = r"N(%.2f, %.2f^2)" % (mu, stdev)
+        axes.plot(x, binwidth*np.sum(sky)/np.sqrt(2*np.pi*stdev**2)*np.exp(-((x - mu)/stdev)**2/2),
+                  color="black", label=msg)
+
+        if not showStats:
+            fig.text(0.20, 0.85, msg)                 
+
+    if showStats:
         axes.legend(loc=1)
 
     fig.show()
@@ -6634,6 +6873,22 @@ def addBackgroundCallback(im, ccd=None, butler=None, imageSource=None):
     im += bkgd.getImage()
 
     return im
+
+#-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+def plotChisqHistogram(butler, dataId, plotGaussian=(0,1), showUnclipped=False, fig=1, frame=None):
+    calexp = butler.get("calexp", **dataId)
+    title = "visit=%(visit)d ccd=%(ccd)d" % dataId    
+
+    chi = calexp.getMaskedImage().clone()
+    chi.getImage().getArray()[:] /= np.sqrt(chi.getVariance().getArray())
+    
+    title = "$\chi$ " + title
+
+    plotImageHistogram(chi, fig=fig, maxDN=5, binwidth=0.05, showStats=True, title=title,
+                       plotGaussian=plotGaussian)
+    if frame is not None:
+        ds9.mtv(chi, frame=frame, title=title)
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 #
@@ -7026,8 +7281,16 @@ def findSourcesAllBands(data, objId, frame=None, fileName=None, showFile=True, d
     # Some of those suffixes refer to the same run.  Handle this by brute force
     _suffixes = {}
     for k in suffixes:
-        _suffixes[data.mapperInfo.splitId(matched[0].get("id%s" % k))["visit"]] = k
-    suffixes = _suffixes.values()
+        ids = data.mapperInfo.splitId(matched[0].get("id%s" % k))
+        del ids["objId"]
+
+        filterName = afwImage.Filter(data.butler.get(dtName("calexp", True), **ids)).getName()
+
+        _suffixes[ids["visit"]] = (k, filterName)
+
+    # Force suffixes to be in blue-to-red order of bands
+    filterSortOrder = dict(zip("ugrizy", range(6)))
+    suffixes = [kv[0] for kv in sorted(_suffixes.values(), key=lambda kv: filterSortOrder.get(kv[1], kv[1]))]
 
     dataKeys = range(len(suffixes))
     suffixes = dict(zip(dataKeys, suffixes))
@@ -7054,8 +7317,8 @@ def findSourcesAllBands(data, objId, frame=None, fileName=None, showFile=True, d
         ids = []
         for s in m:
             ids.append(data.mapperInfo.splitId(s.get("id"), asDict=False))
-        print "\nMatched %d objects: %s" % (nmatch, ", ".join([str(i) for i in ids]))
-        m = m[-1]
+        print "\nMatched %d objects (choosing first): %s" % (nmatch, ", ".join([str(i) for i in ids]))
+        m = m[0:1]
 
     if not title:
         title=str(data.mapperInfo.splitId(objId, asDict=False)) + \
@@ -7208,3 +7471,36 @@ def setEventCallbacks():
         """Switch to previous ds9 frame"""
         ds9.ds9Cmd("frame prev")   
     eventCallbacks['p'] = callbackP
+
+    def callbackLog(ev, s, exp, frame):
+        """Use a log stretch"""
+        ds9.ds9Cmd("scale log; scale minmax")
+    eventCallbacks['L'] = callbackLog
+
+    def callbackLinear(ev, s, exp, frame):
+        """Use a linear stretch"""
+        ds9.ds9Cmd("scale linear; scale zscale")
+    eventCallbacks['l'] = callbackLinear
+
+def setFrameEventCallbacks(extraFrames, zoomfac=1.0):
+    """Set frame callbacks on extra frames (e.g. zooming, setting the stretch)"""
+    for zoom in (1, 2, 4, 8):
+        def zoomCallback(ev, s, exp, frame, zoom=zoom, zoomfac=zoomfac, extraframes=extraFrames):
+            """Zoom frame 0 by zoom*zoomfac, and extraFrames by zoom"""
+            ds9.zoom(zoom*zoomfac, frame=0)
+            for frame in extraFrames:
+                ds9.zoom(zoom, frame=frame)
+        eventCallbacks[str(zoom)] = zoomCallback
+
+    def callbackLog(ev, s, exp, frame, extraframes=extraFrames):
+        """Use a log stretch"""
+        for frame in [frame] + extraFrames:
+            ds9.ds9Cmd("scale log; scale minmax", frame=frame)
+    eventCallbacks['L'] = callbackLog
+
+    def callbackLinear(ev, s, exp, frame, extraframes=extraFrames):
+        """Use a linear stretch"""
+        for frame in [frame] + extraFrames:
+            ds9.ds9Cmd("scale linear; scale zscale", frame=frame)
+    eventCallbacks['l'] = callbackLinear
+        

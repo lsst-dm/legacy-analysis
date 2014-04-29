@@ -2,6 +2,7 @@
 """Deal with COSMOS catalogs"""
 
 import re
+import sys
 import urllib2
 import numpy as np
 import xml.etree.ElementTree as ET
@@ -99,17 +100,34 @@ See http://irsa.ipac.caltech.edu/applications/Cutouts/docs/CutoutsProgramInterfa
 
     status = root.get("status")
     if status != "ok":
-        raise RuntimeError("Failed to get cutout: %s %s" % (status, root.get("message")))
+        raise RuntimeError("Failed to open cutout URL: %s %s" % (status, root.get("message")))
     #
     # Find the cutouts
     #
     cutouts = root.find("images").find("cutouts")
+    if not len(cutouts):
+        html2 = urllib2.urlopen(root.find("summary").find("resultHtml").text.strip()).read()
+        # fix things for ET
+        html2 = re.sub(r"&(nbsp;|micro)", "", html2)
+
+        root2 = ET.fromstring(html2)
+
+        body = root2[1]
+        try:
+            msg = body[-1][0][3][0][0][-1][0][0].text # aaarghhhh
+            msg = re.sub(r":\s*$", "", msg)
+        except:
+            msg = "Unable to retrieve cutout" + ":"
+        print >> sys.stderr, "Failed to retrieve cutout %s" % re.sub(r"\s+", " ", msg)
+        return afwImage.ExposureF(30,30)
     #
     # Read the fits data
     #
     try:
         fitsFD = urllib2.urlopen(cutouts[0].text.strip()) # 0: fits, 1: jpg
         fitsData = fitsFD.read()
+    except Exception as e:
+        fitsFD = None
     finally:
         del fitsFD
     #
@@ -151,15 +169,21 @@ Use as e.g. utils.eventCallbacks['c'] = cosmos.acsEventCallback
                                 im.getWcs().getCDMatrix()*scale))
         afwMath.warpExposure(rexp, exp, warpingControl)
     else:
-        print "\nI'm unable to determine the number of quarter turns to apply, sorry"
+        print "\nI'm unable to remap the cosmos image to your coordinates, sorry"
         rexp = exp.getMaskedImage().getImage()
 
     frame += 1
-    ds9.mtv(rexp.getMaskedImage().getImage(), frame=frame)
+    rim = rexp
+    if hasattr(rim, "getMaskedImage"):
+        rim = rim.getMaskedImage().getImage()
+    if hasattr(rim, "getImage"):
+        rim = rim.getImage()
+    ds9.mtv(rim, frame=frame)
 
-    cen = rexp.getWcs().skyToPixel(pos) - afwGeom.PointD(rexp.getXY0())
-    ds9.pan(*cen, frame=frame)
-    ds9.dot('+', *cen, frame=frame)
+    if hasattr(rexp, "getWcs"):
+        cen = rexp.getWcs().skyToPixel(pos) - afwGeom.PointD(rexp.getXY0())
+        ds9.pan(*cen, frame=frame)
+        ds9.dot('+', *cen, frame=frame)
 
 if __name__ == "__main__":
     readAlexieMASKED_reg(fileName="/Users/rhl/Dropbox/Robert/MASKED.reg")
