@@ -137,9 +137,12 @@ def dtName(dType, md=False):
     """Get the name of a given data type (e.g. dtName("src"))"""
     dType_base = re.sub(r"_(filename|md|sub)$", "", dType)
 
-    if _prefix_ == "forced" and dType_base == "calexp":
+    if _prefix_ in ("forced", "deepCoaddForced",) and dType_base == "calexp":
         md = md or re.search(r"_md$", dType)
-        dType = "deepCoadd"
+        sub = re.search(r"_sub$", dType)
+        dType = "deepCoadd_calexp"
+        if sub:
+            dType += "_sub"
         dType_base = "deepCoadd"
 
     if _prefix_ in ("", ) or dType_base in ("camera", "coaddTempExp", "deepCoadd", "goodSeeingCoadd",):
@@ -150,9 +153,9 @@ def dtName(dType, md=False):
     dTypeOut = None
     if _prefix_ == "" or dType_base in ("camera", "coaddTempExp", "deepCoadd", "goodSeeingCoadd",):
         dTypeOut = dType
-    elif _prefix_ == "forced":
+    elif _prefix_ in ("forced", "deepCoaddForced",):
         if dType == "src":
-            dTypeOut = "deepCoadd_forced_src"
+            dTypeOut = "deepCoadd_forced_src" if _prefix_ == "deepCoaddForced" else "deepCoadd_src"
         else:
             dTypeOut = dType
 
@@ -579,7 +582,7 @@ def makeMapperInfo(butler):
 
                 if dataType not in ("flat",):
                     fields.append("field")
-            elif _prefix_ in ("deepCoadd", "goodSeeingCoadd",):
+            elif _prefix_ in ("deepCoadd", "deepCoaddForced", "goodSeeingCoadd",):
                 fields = ["patch", "tract", "filter"]
             else:
                 raise RuntimeError("I don't know which fields I need to read %s data" % _prefix_)
@@ -620,7 +623,7 @@ def makeMapperInfo(butler):
                         filters.add(afwImage.Filter(butler.get(dtName("calexp", True), **dataId)).getName())
                     except:
                         filters.add(dataId.get("filter", "?"))
-                    if _prefix_ in ("", "forced"):
+                    if _prefix_ in ("", "forced", "deepCoaddForced"):
                         camcols.add("(all)")
                 else:
                     try:
@@ -719,7 +722,7 @@ def makeMapperInfo(butler):
                 fields = ["visit", "ccd"]
                 if dataType not in ("flat",):
                     fields.append("filter")
-            elif _prefix_ in ("deepCoadd", "forced",):
+            elif _prefix_ in ("deepCoadd", "deepCoaddForced", "forced",):
                 fields = ["tract", "patch", "filter"]
             elif _prefix_ in ("stack",):
                 fields = ["stack", "patch", "filter"]
@@ -913,7 +916,7 @@ def makeMapperInfo(butler):
         If hasFilter is True, the ObjectId encodes a filtername
             """
 
-            if _prefix_ in ("deepCoadd", "forced",):
+            if _prefix_ in ("deepCoadd", "deepCoaddForced", "forced",):
                 return HscMapperInfo.splitCoaddId(oid, asDict=asDict, hasFilter=True)
             elif _prefix_ in ("chisqCoadd",):
                 return HscMapperInfo.splitCoaddId(oid, asDict=asDict, hasFilter=False)
@@ -1204,7 +1207,7 @@ class Data(object):
             if _prefix_ in ("goodSeeingCoadd", "stack"): # XXXXXXX
                 if self.butler.datasetExists(dtName(dataType), **did):
                     dataSets.append(did)
-            elif _prefix_ in ("forced", "deepCoadd",): # XXXXXXX
+            elif _prefix_ in ("forced", "deepCoadd", "deepCoaddForced",): # XXXXXXX
                 try:
                     self.butler.get(dtName(dataType), **did)
                     dataSets.append(did)
@@ -1270,8 +1273,12 @@ raft or sensor may be None (meaning get all)
 
         data = []
         for did in dataSets:
-            dataElem = self.butler.get(dtName(dataType), flags=afwTable.SOURCE_IO_NO_HEAVY_FOOTPRINTS,
-                                       immediate=immediate, **did)
+            try:
+                dataElem = self.butler.get(dtName(dataType), flags=afwTable.SOURCE_IO_NO_HEAVY_FOOTPRINTS,
+                                           immediate=immediate, **did)
+            except Exception as e:
+                print >> sys.stderr, "Reading %s %s: %s" % (dataType, did, e)
+                continue
 
             if dataType == "psf":
                 calexp = self.butler.get(dtName("calexp"), **did)
@@ -1750,9 +1757,12 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
         assert sourceSet
     else:
         # applyMosaicResultsCatalog needs immediate=True as it uses type(sourceSet)
-        sourceSet = data.getDataset("src", dataId, immediate=True)[0]
+        try:
+            sourceSet = data.getDataset("src", dataId, immediate=True)[0]
+        except IndexError:
+            return catInfo
 
-    useMeasMosaic = "tract" in dataId
+    useMeasMosaic = "visit" in dataId and "tract" in dataId
     if useMeasMosaic and applyMosaicResultsCatalog:
         dataRef = data.butler.dataRef("raw", **dataId)
         try:
@@ -1836,7 +1846,7 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
                                                    "The error in the magnitude corresponding to %sFlux" % x))
 
         scm.addOutputField(afwTable.Field["Flag"]("good", "The object is good"))
-        if _prefix_ == "forced":
+        if _prefix_ in ("deepCoaddForced",):
             scm.addOutputField(afwTable.Field["F"]("deblend.nchild", "Number of children this object has"))
 
         cat = afwTable.SourceCatalog(scm.getOutputSchema())
@@ -1937,7 +1947,7 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
             cat.get("%sMag" % x)[oldLen:] = mag_magErr[0]
             cat.get("%sMagErr" % x)[oldLen:] = mag_magErr[1]
 
-    if _prefix_ == "forced":
+    if _prefix_ in ("deepCoaddForced"):
         cat["parent"][oldLen:] =         sourceSet["object.parent"]
         cat["deblend.nchild"][oldLen:] = sourceSet["object.deblend.nchild"]
 
@@ -2139,7 +2149,7 @@ def getStellar(data, good, selectSG=None, getNonStellar=False):
         ids = data.cat["id"]
         matchRadius = 1*afwGeom.arcseconds
 
-        if isinstance(selectSG, str):   # name of a table with S/G info
+        if isinstance(selectSG, str) and os.path.exists(selectSG): # name of a table with S/G info
             sgTable = afwTable.SimpleCatalog.readFits(selectSG)
             if False:
                 sgTable = sgTable[sgTable["mag.auto"] < 24].copy(True)
@@ -2164,6 +2174,8 @@ def getStellar(data, good, selectSG=None, getNonStellar=False):
         else:
             if isinstance(selectSG, int):
                 selectSG = makeSelectVisit(selectSG)
+            elif isinstance(selectSG, str):
+                selectSG = makeSelectFilter(selectSG)
 
             dataSG = data.cat[selectSG(data, ids)]
 
@@ -2245,29 +2257,29 @@ def plotDmag(data, magType1="model", magType2="psf", maglim=20, magmin=14,
              color="red", color2="green", color3="blue", frames=[0], wcss=[], fig=None):
     """Plot (magType1 - magType2) v. magType1 mags (e.g. "model" and "psf")
 
-If selectObjId is provided, it's a function that returns True or False for each object. E.g.
+    If selectObjId is provided, it's a function that returns True or False for each object. E.g.
     sel = makeSelectCcd(ccd=2)
     plotDmag(..., selectObjId=makeSelectCcd(2), ...)
-(if it's an int, it's interpreted as makeSelectVisit(selectObjId)
+    (if it's an int, it's interpreted as makeSelectVisit(selectObjId), if a string makeSelectFilter is used)
 
-The magnitude limit for the "locus" box used to calculate statistics is maglim, and only objects within
-+- sgLim of meanDelta are included in the locus (the axes are also adjusted to include meanDelta in the
-visible area).  If adjustMean is True, adjust all the CCDs being plotted to have the same mean within
-the "locus" area.
+    The magnitude limit for the "locus" box used to calculate statistics is maglim, and only objects within
+    +- sgLim of meanDelta are included in the locus (the axes are also adjusted to include meanDelta in the
+    visible area).  If adjustMean is True, adjust all the CCDs being plotted to have the same mean within
+    the "locus" area.
 
-If SG is provided it's a string containing one or more of s(tar) g(alaxy) e(xponential) d(eV); only the
-requested types of object are plotted (if it's None all objects are plotted in the stellar colour). If
-selectSG is provided is specifies a dataId to be used for S/G classification -- it's interpreted the
-same way as selectObjId.
+    If SG is provided it's a string containing one or more of s(tar) g(alaxy) e(xponential) d(eV); only the
+    requested types of object are plotted (if it's None all objects are plotted in the stellar colour). If
+    selectSG is provided is specifies a dataId to be used for S/G classification -- it's interpreted the
+    same way as selectObjId (except that if it's a filename it's taken to be a file with S/G information)
 
-If randomOrder is True, randomize the order in which points are plotted (useful with colorCcds, for which
-it defaults to True)
+    If randomOrder is True, randomize the order in which points are plotted (useful with colorCcds, for which
+    it defaults to True)
 
-If title is provided it's used as a plot title; if it starts + the usual title is prepended
+    If title is provided it's used as a plot title; if it starts + the usual title is prepended
 
-If overlay is True, plot the CCDs' outlines and IDs
+    If overlay is True, plot the CCDs' outlines and IDs
 
-If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are interpreted relative to meanDelta)
+    If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are interpreted relative to meanDelta)
     """
     fig = getMpFigure(fig)
 
@@ -2282,7 +2294,7 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
                  ["flags.pixel.edge",
                   #"flags.pixel.bad",
                   "flags.pixel.interpolated.center",
-                  #"flags.pixel.saturated.center",
+                  "flags.pixel.saturated.center",
                   ],
                  False)
     good = np.logical_not(bad)
@@ -2296,6 +2308,8 @@ If non-None, [xy]{min,max} are used to set the plot limits (y{min,max} are inter
     if selectObjId:
         if isinstance(selectObjId, int):
             selectObjId = makeSelectVisit(selectObjId)
+        elif isinstance(selectObjId, str):
+            selectObjId = makeSelectFilter(selectObjId)                
         
         good = np.logical_and(good, selectObjId(data, data.cat.get("id")))
 
@@ -2716,6 +2730,7 @@ def makeSelectFilter(filterName, include=True):
 
 def plotCM(data, select1, select2, magType="psf", magType2=None, idN=1, maglim=20, magmin=14,           
            SG="sg", showChildren=True, showIsolated = False, showMedians=False, colorCcds=False,
+           selectSG=None,
            xlim=(None, None), ylim=(None, None),
            title="+", markersize=1, alpha=1.0, frames=[0], verbose=False, fig=None):
     """Plot (data[select1].magType - data[select2].magType) v. data[idN].magType mags (e.g. "psf")
@@ -2724,8 +2739,11 @@ where data[selectN] means, "the objects in data for which selectN(ids) returns T
     plotCM(data, makeSelectVisit(902030), makeSelectVisit(902032)...)
 
 If a select "function" is actually an int, it is interpreted as makeSelectVisit(selectN) -- i.e.
-as a visit IDs
+as a visit IDs.  If it's a string, interpret it as makeSelectFilter(selectN)
 
+If selectSG is provided is specifies a dataId to be used for S/G classification -- it's interpreted the
+same way as selectN (except that if it's a filename it's taken to be a file with S/G information)
+    
 If magType2 is provided, select2 must be None and we plot
     (data[select1].magType - data[select1].magType2) v. data[idN].magType
 
@@ -2755,6 +2773,8 @@ If non-None, [xy]{min,max} are used to set the plot limits
     for k, v in selections.items():
         if isinstance(v, int):
             selections[k] = makeSelectVisit(v)
+        if isinstance(v, str):
+            selections[k] = makeSelectFilter(v)
 
         selections[k] = selections[k](data, allIds)
     #
@@ -2812,10 +2832,18 @@ If non-None, [xy]{min,max} are used to set the plot limits
 
     if False:                            # no parents
         good = np.logical_and(good, sum([matched.cat.get("deblend.nchild%s" % s) for s in suffixes.values()]) == 0)
-    if False:                           # only non-blended objects
-        good = np.logical_and(good, matched.cat.get("parent") == 0)
-                
-    stellar = matched.cat.get("stellar_%d" % idN)
+    if isinstance(selectSG, str) and os.path.exists(selectSG): # name of a table with S/G info
+        matchRadius = 1*afwGeom.arcseconds
+        sgTable = afwTable.SimpleCatalog.readFits(selectSG)
+        sgTable["coord.ra"][:]  = np.radians(sgTable["coord.ra"])
+        sgTable["coord.dec"][:] = np.radians(sgTable["coord.dec"])
+
+        matchedSG = zipMatchList(afwTable.matchRaDec(sgTable, data.cat, matchRadius, False))
+
+        stellar = (matchedSG["mu.class_1"] == 2)
+    else:
+        stellar = matched.cat.get("stellar_%d" % idN)
+
     if SG.lower() == 's':
         good = np.logical_and(good, stellar)
     elif SG.lower() == 'g':
@@ -3069,6 +3097,7 @@ where data[selectN] means, "the objects in data for which selectN(ids) returns T
 
 If selectN is an int it's interpreted as makeSelectVisit(selectN), so this is equivalent to
     plotCC(data, 902030, 902032, 902034, "psf", ...)
+if selectN is a string, interpret it as makeSelectFilter(selectN)
 
 (let's write data[selectN].magType as magN).  If provided, idN specifies the data from which selection
 function should to be used for magnitude limits (e.g. idN == 3 => visit 902034 in the example)
@@ -3109,6 +3138,8 @@ it would be in aperture mags)
     for k, v in selections.items():
         if isinstance(v, int):
             selections[k] = makeSelectVisit(v)
+        elif isinstance(v, str):
+            selections[k] = makeSelectFilter(v)
 
         selections[k] = selections[k](data, allIds)
 
@@ -3213,7 +3244,7 @@ it would be in aperture mags)
                                      magType2=magType2,
                                      magTypeForSelection=magTypeForSelection, verbose=verbose, fig=axes,
                                      title="T:+" if j == 0 else None,
-                                     titleAllObjects=(sorted(SG) in ("gs", ["g", "s"])),
+                                     titleAllObjects=True or sum(_ in sorted(SG) for _ in ["gs", ["g", "s"]]),
                                      datasetName=datasetName,
                                      showXlabel=showXlabel, showYlabel=showYlabel,
                                      *args, **kwargs
@@ -3312,6 +3343,7 @@ def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, f
 
     stellar = stellar[good]
     nonStellar = np.logical_not(stellar)
+    nobjTot = len(stellar)
 
     for k in ids.keys():
         ids[k] = ids[k][good]
@@ -3588,9 +3620,6 @@ def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, f
         if re.search(r"^T:", title):
             title = title[2:]
             titlePos = "figure"
-
-            if titleAllObjects:
-                nobj = sum(good)
         else:
             titlePos = "axes"
             
@@ -3601,6 +3630,10 @@ def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, f
                                                    magTypeForSelection, magmax)
             else:
                 title += " [$%s_{%s} < %g$]" % (filterNames[idN], magTypeForSelection, magmax)
+
+
+        if titleAllObjects:
+            nobj = nobjTot
 
         title += " %d objects" % nobj
         if data._rerun:
@@ -3920,8 +3953,7 @@ def plotDmagHistograms(data, magType1="cmodel", magType2="psf", selectObjId=None
 If selectObjId is provided, it's a function that returns True or False for each object. E.g.
     sel = makeSelectCcd(ccd=2)
     plotDmag(..., selectObjId=makeSelectCcd(2), ...)
-(if it's an int, it's interpreted as makeSelectVisit(selectObjId)
-
+(if it's an int, it's interpreted as makeSelectVisit(selectObjId), if a string as makeSelectFilter)
 
 If SG is provided it's a string containing one or both of s(tar) g(alaxy); only the
 requested types of object are plotted (if it's None all objects are plotted in the stellar colour). If
@@ -3946,6 +3978,8 @@ same way as selectObjId.
     if selectObjId:
         if isinstance(selectObjId, int):
             selectObjId = makeSelectVisit(selectObjId)
+        elif isinstance(selectObjId, str):
+            selectObjId = makeSelectFilter(selectObjId)
         
         good = np.logical_and(good, selectObjId(data, data.cat.get("id")))
 
@@ -4552,13 +4586,20 @@ If showPsfs is true, include a reconstructed psf mosaic in the lower left corner
     return ims
 
 def findSource(sourceSet, x, y, radius=2):
-    ss = afwDetect.SourceSet()
+    sch = afwTable.SourceTable.makeMinimalSchema()
 
-    s = afwDetect.Source();
-    s.setX(x); s.setY(y)
-    ss.push_back(s)
+    centroidName = "foo"
+    sch.addField(afwTable.Field["PointD"](centroidName, ""))
+    oneObjCatalog = afwTable.SourceCatalog(sch)
+    oneObjCatalog.table.defineCentroid(centroidName)
+    
+    s = oneObjCatalog.addNew()
+    s.set("%s.x" % centroidName, x)
+    s.set("%s.y" % centroidName, y)
+    
+    matches = [m.first for m in afwTable.matchXy(sourceSet, oneObjCatalog, radius)
+               if m.first.get("deblend.nchild") == 0]
 
-    matches = [m.first for m in afwDetect.matchXy(sourceSet, ss, radius)]
     if len(matches) == 0:
         raise RuntimeError("Unable to find a source within %g pixels of (%g,%g)" % (radius, x, y))
 
@@ -5756,6 +5797,7 @@ utils.eventCallbacks['k'] = utils.kronEventCallback
 (If you attach a callback to an active letter such as 'd' it'll be called in addition to the
 pre-defined behaviour)
     """
+    allFlags = False
     scaleSources = False
 
     def __init__(self, data, axes, xs, ys, ids, x=None, y=None, flags={}, frames=[0], wcss=[], selectWcs=0):
@@ -5813,12 +5855,13 @@ pre-defined behaviour)
         if ev.key.lower() == 'h':
             print """
 Live keys:
-   d, D, f Display the object in ds9, frame utils.eventFrame.  If D, show the deblended child, if f
-           show the family
-   a       Zoom the display to show All of the current object
    1,2,4,8 Zoom the display by 1, 2, 4, or 8
+   a       Zoom the display to show All of the current object
    b, B    Show this object in all bands (as matched by the most recent plotCM or plotCC command)
            B smoothes to constant seeing
+   d, D, f Display the object in ds9, frame utils.eventFrame.  If D, show the deblended child, if f
+           show the family
+   F       Show the Source flags that are set (if EventHandler.allFlags == True, show all flags)
    h, H    Print this message
    r, R    Make and display a RGB file (R names it from the object)
            (as matched by the most recent plotCM or plotCC command
@@ -5833,6 +5876,7 @@ Callbacks:"""
 
             print """
 There are also some static values in EventHander which you may set from the command line:
+   EventHandler.allFlags            Make F show all flags
    EventHandler.scaleSources        Scale sources to peak flux == 1 in bB
 """,
             return
@@ -5840,7 +5884,7 @@ There are also some static values in EventHander which you may set from the comm
             ds9.ds9Cmd("zoom to fit", frame=eventFrame)
         elif ev.key in ("1248"):
             ds9.zoom(int(ev.key), frame=eventFrame)
-        elif ev.key in "bBdDfiIrRzZ":
+        elif ev.key in "bBdDfFiIrRzZ":
             if ev.key in "zZ":
                 print "\r>>>",
                 print "%.3f %.3f %d%40s\r" % (self.xs[which][0], self.ys[which][0], objId, ""),
@@ -5888,11 +5932,13 @@ There are also some static values in EventHander which you may set from the comm
                                     doSmooth=(ev.key == "B"))
                 return
             elif ev.key in ('d', 'D', 'f'):
+                md = self.data.butler.get(dtName("calexp_md"), **dataId)
+
                 bbox = self.s.getFootprint().getBBox()
                 grow = 0.5
                 bbox.grow(afwGeom.ExtentI(int(grow*bbox.getWidth()), int(grow*bbox.getHeight())))
+                bbox.shift(afwGeom.ExtentI(md.get("LTV1"), md.get("LTV2")))
 
-                md = self.data.butler.get(dtName("calexp_md"), **dataId)
                 bbox.clip(afwGeom.BoxI(afwGeom.PointI(0, 0),
                                        afwGeom.ExtentI(md.get("NAXIS1"), md.get("NAXIS2"))))
 
@@ -5919,12 +5965,20 @@ There are also some static values in EventHander which you may set from the comm
                         calexp.setMaskedImage(afwImage.makeMaskedImage(im))
                         
                 if calexp:
+                    try:
+                        x, y = self.s.getCentroid()
+                    except:
+                        x, y = self.s.get("centroid.sdss")
+                        
                     title = re.sub(r"[' {}]", "", str(dataId)).replace(",", " ")
                     ds9.mtv(calexp, title=title, frame=eventFrame)
                     ds9.dot("%s (%6.1f, %6.1f)" % (self.data.mapperInfo.splitId(objId, asDict=False), x, y),
                             calexp.getWidth()/2, calexp.getHeight() - 5, frame=eventFrame)
-                    ds9.pan(self.s.getX() - calexp.getX0(), self.s.getY() - calexp.getY0(), frame=eventFrame)
+                    ds9.pan(x - calexp.getX0(), y - calexp.getY0(), frame=eventFrame)
 
+            elif ev.key == "F":
+                print "\n"
+                showFlags(self.s, not self.allFlags)
             elif ev.key == "I":
                 print ""
         else:
@@ -7200,6 +7254,20 @@ def analyzeForced(dataId, sourceSet_forced, sourceSet_sfm, magType="psf",
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
+def showFlags(source, onlyTrue=True):
+    """Show all the flags associated with a Source
+    \param source   The Source of interest
+    \param onlyTrue Only show flags that are set ("True")
+    """
+    for f in sorted(source.getSchema().extract("*flags*")):
+        val = source.get(f)
+        if onlyTrue and not val:
+            continue
+        print "%-30s %s" % (f, val)
+        
+
+#-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
 from lsst.pipe.tasks.astrometry import AstrometryTask
 import lsst.meas.astrom.sip as astromSip
 
@@ -7288,7 +7356,11 @@ def findSourcesAllBands(data, objId, frame=None, fileName=None, showFile=True, d
 
         filterName = afwImage.Filter(data.butler.get(dtName("calexp", True), **ids)).getName()
 
-        _suffixes[ids["visit"]] = (k, filterName)
+        visitKey = "visit"
+        if "visit" not in ids:
+            visitKey = "filter"
+            
+        _suffixes[ids[visitKey]] = (k, filterName)
 
     # Force suffixes to be in blue-to-red order of bands
     filterSortOrder = dict(zip("ugrizy", range(6)))
@@ -7424,11 +7496,34 @@ def findSourcesAllBands(data, objId, frame=None, fileName=None, showFile=True, d
 
             mos = ds9Utils.Mosaic()
             for im, filterName, psf, idDict in images:
-                mos.append(im, idDict["visit"] if len(filterNames) == 1 else filterName)
+                mos.append(im, idDict[visitKey] if len(filterNames) == 1 else filterName)
 
             mos.makeMosaic(frame=frame)
 
     return sources
+
+#-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+def showPatchInputs(butler, dataId, coaddType="deepCoadd", summary=True):
+    """Print the inputs to a coadd patch"""
+    coadd = butler.get(coaddType, **dataId)
+    visitInputs = coadd.getInfo().getCoaddInputs().visits
+    ccdInputs = coadd.getInfo().getCoaddInputs().ccds
+
+    ccdDict = dict((int(v), int(ccd)) for v, ccd in zip(ccdInputs.get("visit"), ccdInputs.get("ccd")))
+
+    totalExpTime = 0.0
+    for v in visitInputs.get("id"):
+        md = butler.get("calexp_md", visit=int(v), ccd=ccdDict[v])
+        calib = afwImage.Calib(md)
+        expTime = calib.getExptime()
+
+        totalExpTime += expTime
+
+        print "%-6d %4.0f" % (v, expTime)
+
+    if summary:
+        print "%-6s %4.0f" % ("", totalExpTime)
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
