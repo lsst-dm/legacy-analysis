@@ -3257,6 +3257,7 @@ it would be in aperture mags)
 def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, fig=None, show=True,
                 magType2=None, magTypeForSelection=None, magmax=None, magmin=None, 
                 verbose=False,
+                selectSG=None,
                 idN=None, idColorN=None, selectObjId=None, matchRadius=2, plotRaDec=False,
                 showStatistics=False, show_r_xy=True, colorCcds=False, colorVisits=False, colorPatches=False,
                 usePrincipalColor=True, stellarLocusEnds=[], normalizePatches=False,
@@ -3267,6 +3268,8 @@ def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, f
                 markersize=1, alpha=1.0, color="red", frames=[0], wcss=[]):
     """
     \param idN   The (1-based) index into the selection functions to use for magnitude limits etc.
+    \param selectSG Specifies a dataId to be used for S/G classification -- it's interpreted the
+same way as selectN (except that if it's a filename it's taken to be a file with S/G information)
     """
 
     subplot = isinstance(fig, pyplot.Axes)
@@ -3312,7 +3315,17 @@ def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, f
         xc = np.empty(0)
         yc = np.empty_like(xc)
 
-    stellar = matched.cat.get("stellar%s" % suffixes[idN])[good]
+    if isinstance(selectSG, str) and os.path.exists(selectSG): # name of a table with S/G info
+        matchRadius = 1*afwGeom.arcseconds
+        sgTable = afwTable.SimpleCatalog.readFits(selectSG)
+        sgTable["coord.ra"][:]  = np.radians(sgTable["coord.ra"])
+        sgTable["coord.dec"][:] = np.radians(sgTable["coord.dec"])
+
+        matchedSG = zipMatchList(afwTable.matchRaDec(sgTable, data.cat, matchRadius, False))
+
+        stellar = (matchedSG["mu.class_1"] == 2)
+    else:
+        stellar = matched.cat.get("stellar%s" % suffixes[idN])[good]
 
     mags, mags2, ids = {}, {}, {}
     for k, s in suffixes.items():
@@ -5648,7 +5661,7 @@ when writing the final images to disk
         # Handle MaskedImages
         #
         try:
-            image = image.getImage()          # maybe it's (now) a MaskedImage
+            image = image.getImage()          # maybe it was a MaskedImage
         except AttributeError:
             pass
 
