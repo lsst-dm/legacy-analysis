@@ -1947,7 +1947,7 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
             cat.get("%sMag" % x)[oldLen:] = mag_magErr[0]
             cat.get("%sMagErr" % x)[oldLen:] = mag_magErr[1]
 
-    if _prefix_ in ("deepCoaddForced"):
+    if _prefix_ in ("deepCoaddForced",):
         cat["parent"][oldLen:] =         sourceSet["object.parent"]
         cat["deblend.nchild"][oldLen:] = sourceSet["object.deblend.nchild"]
 
