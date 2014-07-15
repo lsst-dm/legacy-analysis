@@ -157,7 +157,7 @@ Use as e.g. utils.eventCallbacks['c'] = cosmos.acsEventCallback
     pos = source.get("coord")
     exp = getCosmosCutout(*pos.getPosition(), sizeX=sizeCutout)
 
-    if im:
+    if im and exp and exp.getWcs():
         #
         # Resample and rotate to the HSC orientation
         #
