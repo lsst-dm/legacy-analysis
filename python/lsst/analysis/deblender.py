@@ -65,7 +65,7 @@ def drawEllipses(plt, src, **kwargs):
     return els
 
 def plotDeblendFamily(mi, parent, kids, mapperInfo=None, dkids=[],
-                      background=-10, symbolSize=2,
+                      background=float("NAN"), symbolSize=2,
                       plotb=False, ellipses=True,
                       arcsinh=True, maskbit=False, frame=0):
     """Display a deblend on ds9
@@ -342,7 +342,7 @@ def findFamily(families, objId):
 
     return families.find(objId)
 
-def makeDisplayFamily(calexp, families, matchRadius=20, background=-10, frame=None):
+def makeDisplayFamily(calexp, families, matchRadius=20, background=float("NAN"), frame=None):
     """Factory function for callback function implementing showBlend"""
     def display_family(k, x, y):
         x0, y0 = calexp.getXY0()
