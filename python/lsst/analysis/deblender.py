@@ -65,7 +65,7 @@ def drawEllipses(plt, src, **kwargs):
     return els
 
 def plotDeblendFamily(mi, parent, kids, mapperInfo=None, dkids=[],
-                      background=-10, symbolSize=2,
+                      background=float("NAN"), symbolSize=2,
                       plotb=False, ellipses=True,
                       arcsinh=True, maskbit=False, frame=0):
     """Display a deblend on ds9
@@ -163,6 +163,11 @@ all the other peaks in its footprint are marked with x (cyan if deblended-as-psf
             
             ds9.dot("+", src.getX() + x0, src.getY() + y0, frame=frame,
                     size=symbolSize, ctype=centroid_ctype)
+            if i != 0:
+                ds9.line(((src.getX() + x0, src.getY() + y0),
+                          (src.getX() + mos.getBBox(0).getMinX() - parent_im.getX0(),
+                           src.getY() + mos.getBBox(0).getMinY() - parent_im.getY0())),
+                         frame=frame, ctype=centroid_ctype)
             for p in src.getFootprint().getPeaks():
                 ds9.dot("x", p.getFx() + x0, p.getFy() + y0, frame=frame,
                         size=0.5*symbolSize if i == 0 else symbolSize,
@@ -342,7 +347,7 @@ def findFamily(families, objId):
 
     return families.find(objId)
 
-def makeDisplayFamily(calexp, families, matchRadius=20, background=-10, frame=None):
+def makeDisplayFamily(calexp, families, matchRadius=20, background=float("NAN"), frame=None):
     """Factory function for callback function implementing showBlend"""
     def display_family(k, x, y):
         x0, y0 = calexp.getXY0()
