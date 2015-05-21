@@ -163,6 +163,11 @@ all the other peaks in its footprint are marked with x (cyan if deblended-as-psf
             
             ds9.dot("+", src.getX() + x0, src.getY() + y0, frame=frame,
                     size=symbolSize, ctype=centroid_ctype)
+            if i != 0:
+                ds9.line(((src.getX() + x0, src.getY() + y0),
+                          (src.getX() + mos.getBBox(0).getMinX() - parent_im.getX0(),
+                           src.getY() + mos.getBBox(0).getMinY() - parent_im.getY0())),
+                         frame=frame, ctype=centroid_ctype)
             for p in src.getFootprint().getPeaks():
                 ds9.dot("x", p.getFx() + x0, p.getFy() + y0, frame=frame,
                         size=0.5*symbolSize if i == 0 else symbolSize,
