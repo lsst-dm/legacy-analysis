@@ -345,7 +345,8 @@ def findFamily(families, objId):
 def makeDisplayFamily(calexp, families, matchRadius=20, background=-10, frame=None):
     """Factory function for callback function implementing showBlend"""
     def display_family(k, x, y):
-        fam = families.find((x, y), matchRadius=matchRadius)
+        x0, y0 = calexp.getXY0()
+        fam = families.find((x + x0, y + y0), matchRadius=matchRadius)
         if fam:
             plotDeblendFamily(calexp, *fam, mapperInfo=families.mapperInfo, background=background, frame=frame)
 
