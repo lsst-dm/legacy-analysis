@@ -44,7 +44,7 @@ try:
     import lsst.meas.extensions.multiShapelet.simpleViewer as msViewer
 except ImportError:
     msViewer = None
-    
+
 try:
     from lsst.obs.lsstSim import LsstSimMapper
     _raw_ = "raw"
@@ -87,7 +87,7 @@ try:
     warnedHackExtendedness
 except NameError:
     warnedHackExtendedness = False      # generate a warning once
-    
+
 try:
     log
 except:
@@ -124,7 +124,7 @@ class Prefix(object):
     def __init__(self, prefix):
         self._saved_prefix_ = _prefix_
         self.prefix = prefix
-        
+
     def __enter__(self):
         global _prefix_
         _prefix_ = self.prefix
@@ -196,7 +196,7 @@ if True:
             raise RuntimeError("Unknown flag: %s" % (flagName))
 
         s.set(keyName, value)
-    
+
 def findMapper(root, mapperFile):
     """Search root, looking for mapperFile; follow _parent links if they exist"""
     root0 = root
@@ -339,7 +339,7 @@ def makeMapperInfo(butler):
         return None
 
     mapper = butler.mapper
-    
+
     class MapperInfo(object):
         @staticmethod
         def getColorterm(filterName):
@@ -357,7 +357,7 @@ def makeMapperInfo(butler):
         @staticmethod
         def idMask(dataId):
             return 0x0
-            
+
     class LsstSimMapperInfo(MapperInfo):
         def __init__(self, Mapper):
             LsstSimMapperInfo.Mapper = Mapper
@@ -818,7 +818,7 @@ def makeMapperInfo(butler):
             return "%s %s" % (visit, ccdId)
 
         assembleCcd = staticmethod(assembleCcdSubaru)
-    
+
         @staticmethod
         def getInButler(dataRoot, registry, butler=None):
             return butler
@@ -854,7 +854,7 @@ def makeMapperInfo(butler):
                     return dict(stack=stack, patch=patch, filter=filter, objId=objId)
                 else:
                     return stack, patch, filter, objId
-                
+
             else:
                 oid = np.right_shift(oid, 10).astype('int32')
                 ccd = oid % 10
@@ -898,7 +898,7 @@ def makeMapperInfo(butler):
 
             if False:
                 HscMapperInfo._Colorterm.setColorterms(colortermsData, "Hamamatsu")
-            
+
         @staticmethod
         def exposureToStr(exposure):
             try:
@@ -965,7 +965,7 @@ def makeMapperInfo(butler):
 
                 if filterId.size == 1:
                     filterId = [int(filterId)] # as you can't iterate over a length-1 np array
-                    
+
                 for fid in set(filterId):
                     name = afwImage.Filter(int(fid)).getName()
 
@@ -1052,7 +1052,7 @@ def getMpFigure(fig=None, clear=True):
         if not mpFigures.has_key(i):
             for j in range(1, i):
                 getMpFigure(j)
-                
+
             mpFigures[i] = pyplot.figure()
             #
             # Modify pyplot.figure().show() to make it raise the plot too
@@ -1085,7 +1085,7 @@ def getMpFigure(fig=None, clear=True):
 
 def makeSubplots(figure, nx=2, ny=2):
     """Return a generator of a set of subplots"""
-    for window in range(nx*ny):  
+    for window in range(nx*ny):
         yield figure.add_subplot(nx, ny, window + 1) # 1-indexed
 
 class DataId(dict):
@@ -1136,7 +1136,7 @@ class Data(object):
         self.astrom = None
 
         self.hasCmodel = None           # did we calculate cmodel quantities?
-            
+
     def setButler(self, dataRoot=None, rerun=None):
         if (self._dataRoot and dataRoot != self._DataRoot) or (self._rerun and self._rerun != rerun):
             self.butler = None
@@ -1190,7 +1190,7 @@ class Data(object):
                 dataSets[st][(v, f)].append((r, s))
 
         self.dataSets = dataSets
-        
+
         return self.dataSets
 
     def lookupDataByVisit(self, dataType, dataId):
@@ -1290,7 +1290,7 @@ raft or sensor may be None (meaning get all)
                 idKey = sch.find("id").getKey()
                 parentKey = sch.find("parent").getKey()
                 extendednessKey = sch.find("classification.extendedness").getKey()
-                
+
                 if self.hasCmodel is None:
                     self.hasCmodel = True if len(sch.extract("cmodel*")) > 0 else False
                     if self.hasCmodel and sum(np.isfinite(cat.get("cmodel.flux"))) == 0:
@@ -1319,14 +1319,14 @@ raft or sensor may be None (meaning get all)
                         print >> sys.stderr, "Hacking the extendeness value to use %.2f*%s" % \
                             (corrFac, modelFluxName)
                         warnedHackExtendedness = True
-                   
+
             data.append(dataElem)
 
         return data
 
     def getSources(self, dataId, setXYfromRaDec=False):
         """Return the list of Sources for the specified dataId
-        
+
         If setXYfromRaDec is true, recalculate (x, y) from (ra, dec)"""
 
         if setXYfromRaDec:
@@ -1389,7 +1389,7 @@ ccd may be a list"""
         """Read the magnitudes for a set of data"""
 
         dataIds = self.expandDataId(dataId)
-        
+
         catInfo = None
         for did in dataIds:
             if verbose:
@@ -1403,14 +1403,14 @@ ccd may be a list"""
                 if True:
                     raise
                 else:
-                    import pdb; pdb.set_trace() 
+                    import pdb; pdb.set_trace()
                     catInfo = _appendToCatalog(self, did, catInfo, extraApFlux=extraApFlux)
-                
+
         if verbose:
             print
 
         cat = catInfo[0] if catInfo else None
-            
+
         if cat is None:
             raise RuntimeError("Failed to read any data for %s" % " ".join([str(d) for d in dataId]))
 
@@ -1419,7 +1419,7 @@ ccd may be a list"""
         except:
             cat = cat.copy(True)
         self.cat = cat
-        
+
         self.name = self.mapperInfo.dataIdToTitle(dataIds, self._rerun)
 
     #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
@@ -1440,14 +1440,14 @@ ccd may be a list"""
 
         if mtv and frame is None:
             frame = 0
-            
+
         _matched = []
         _zp = []
         for dataId in dataIds:
             if verbose:
                 print "Reading %s         \r" % dataId,
                 sys.stdout.flush()
-                
+
             if frame is not None:
                 if mtv:
                     calexp = self.getDataset("calexp", dataId)[0]
@@ -1456,8 +1456,8 @@ ccd may be a list"""
                 elif erase:
                     ds9.erase(frame)
                 else:
-                    pass 
-                    
+                    pass
+
             matched, zp, frame = self._getCalibObjectsImpl(dataId, displayType, frame, verbose=verbose,
                                                            maglim=maglim, showGalaxies=showGalaxies,
                                                            allSources=allSources)
@@ -1468,7 +1468,7 @@ ccd may be a list"""
                         res = raw_input("%s: [ chnpq] " % str(dataId)[1:-1]).strip()
                     except EOFError:
                         res = ""
-                        
+
                     if res == "c":
                         frame = None
                     elif res == "h":
@@ -1502,8 +1502,8 @@ Plotted symbols are:
                     break
 
                 if res == "q":
-                    break                
-            
+                    break
+
             _matched.append(matched)
             _zp.append(zp)
         if verbose:
@@ -1529,7 +1529,7 @@ Plotted symbols are:
             if True:                                               # work around a bug
                 matchedCalibs_new = afwTable.SourceCatalog(matchedCalibs_old.getSchema())
                 matchedCalibs_new.reserve(len(matchedCalibs_old) + len(self.matchedCalibs))
-                
+
                 for s in matchedCalibs_old:
                     matchedCalibs_new.append(s)
 
@@ -1548,7 +1548,7 @@ Plotted symbols are:
         imageSize = calexp_md.get("NAXIS1"), calexp_md.get("NAXIS2")
         xy0 = (calexp_md.get("CRVAL1A"), calexp_md.get("CRVAL2A"),)
         filterName = afwImage.Filter(calexp_md).getName()
-            
+
         calib = afwImage.Calib(calexp_md)
 
         if not self.astrom:
@@ -1626,7 +1626,7 @@ Plotted symbols are:
             if displayType:
                 print >> sys.stderr, "Ignoring unknown displayType %s" % displayType
             frame = None
-            
+
         if showJacobian:
             calexp = self.butler.get('calexp', **dataId)
             ccd = cameraGeom.cast_Ccd(calexp.getDetector())
@@ -1667,11 +1667,11 @@ Plotted symbols are:
                         if maglim is not None:
                             if refmag > maglim:
                                 continue
-                        
+
                     size = min([100, max([deltaScale*delta, -100])])
                     bad = src.get("flags.pixel.interpolated.center") | src.get("flags.pixel.edge")
                     stellar = src.get("classification.extendedness") < 0.5
-                    
+
                     if not showJacobian and not (stellar or showGalaxies):
                         continue
 
@@ -1683,7 +1683,7 @@ Plotted symbols are:
 
                     ds9.dot("o", src.getX(), src.getY(), size=abs(size),
                             frame=frame, ctype=ds9.CYAN if size > 0 else ds9.MAGENTA)
-           
+
         if verbose > 1:
             print "Kept %d out of %d reference sources for %s" % (len(keepMatched), len(matched), dataId)
 
@@ -1706,7 +1706,7 @@ def _dataIdDictOuterProduct(dataId, expandedDataId=[]):
     expandedDataId.append(dataId)
 
     return expandedDataId
-        
+
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 def getFilters(dataRoot, dataId, filters, verbose=False):
@@ -1726,7 +1726,7 @@ def getFilters(dataRoot, dataId, filters, verbose=False):
 def _setFlagsFromSource(ssc=None):
     """Return a dictionary of status flags from a Source or table;  if ssc is None, return a
     dictionary of the Source fields used"""
-    
+
     names = dict(
         BAD =           "flags.pixel.bad",
         EDGE =          "flags.pixel.edge",
@@ -1790,7 +1790,7 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
     if catInfo is not None:
         cat, scm = catInfo
         assert scm
-        
+
         table = cat.table
     else:
         tab = sourceSet.getTable()
@@ -1928,11 +1928,11 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
                 tab.getSchema().find(fluxFieldName) # was the flux measured?
             except KeyError, e:
                 if catInfo is None:     # we're reading the first CCD
-                    print >> sys.stderr, e                
+                    print >> sys.stderr, e
                 continue
             except (Exception, pexExcept.LsstCppException) as e:
                 if catInfo is None:     # we're reading the first CCD
-                    print >> sys.stderr, e                
+                    print >> sys.stderr, e
                 continue
 
             flux = sourceSet.get(fluxFieldName)
@@ -1979,7 +1979,7 @@ def zipMatchList(matchList, suffixes=None, swap=False, verbose=True):
     keys_2 = []                         # keys from second list that need to be copied over
     for i, rec in enumerate(records):
         suffix = suffixes[i]
-        
+
         sch = rec.getSchema()
         if not scm:
             scm = afwTable.SchemaMapper(sch)
@@ -2023,7 +2023,7 @@ def zipMatchList(matchList, suffixes=None, swap=False, verbose=True):
 
         rec.setL(id_1Key, m1.getId())
         rec.setL(id_2Key, m2.getId())
-        
+
         for key, okey, typeString in keys_2:
             if typeString == "D":
                 rec.setD(okey, m2.getD(key))
@@ -2089,7 +2089,7 @@ def queryDB(query, host=None, db=None, read_default_file="~/.my.cnf",):
 
 def getFluxMag0DB(visit, raft, sensor, db=None):
     """Get fluxMag0 from the DB for the specified visit/raft/sensor"""
-    
+
     return queryDB("""
        select
           fluxMag0
@@ -2108,7 +2108,7 @@ def overlayCcds(camera, axes, names=False):
         for ccd in raft:
             ccd = cameraGeom.cast_Ccd(ccd)
             ccd.setTrimmed(True)
-            
+
             width, height = ccd.getAllPixels(True).getDimensions()
 
             corners = ((0.0,0.0), (0.0, height), (width, height), (width, 0.0), (0.0, 0.0))
@@ -2165,7 +2165,7 @@ def getStellar(data, good, selectSG=None, getNonStellar=False):
                 #pyplot.gca().set_aspect("equal") # although we ignored cos(dec)
 
                 pyplot.xlim(149.56, 149.58); pyplot.ylim(2.36, 2.38)
-                
+
                 pyplot.show()
 
             matchedSG = zipMatchList(afwTable.matchRaDec(sgTable, data.cat[good], matchRadius, False))
@@ -2191,7 +2191,7 @@ def getStellar(data, good, selectSG=None, getNonStellar=False):
         for i, oid in enumerate(ids):
             if False and (oid & 0xffff) == 382:
                 mm = afwTable.matchRaDec(sgTable, data.cat[np.logical_and(good, data.cat.get("id")==oid)], 1*afwGeom.arcseconds, False)
-                import pdb; pdb.set_trace() 
+                import pdb; pdb.set_trace()
             if oid in stellarDict:
                 stellar[i] = stellarDict[oid]
             else:
@@ -2309,8 +2309,8 @@ def plotDmag(data, magType1="model", magType2="psf", maglim=20, magmin=14,
         if isinstance(selectObjId, int):
             selectObjId = makeSelectVisit(selectObjId)
         elif isinstance(selectObjId, str):
-            selectObjId = makeSelectFilter(selectObjId)                
-        
+            selectObjId = makeSelectFilter(selectObjId)
+
         good = np.logical_and(good, selectObjId(data, data.cat.get("id")))
 
     mag1 = data.getMagsByType(magType1, good)
@@ -2393,7 +2393,7 @@ def plotDmag(data, magType1="model", magType2="psf", maglim=20, magmin=14,
         title += " %s - %s" % (magType1, magType2)
 
         if overlay:
-            overlayCcds(camera, axes) 
+            overlayCcds(camera, axes)
     else:
         classification, classificationCM = getColormapFromType(stellar, nonStellar, junk, SG,
                                                                colorGalaxy=color, colorStar=color2,
@@ -2474,7 +2474,7 @@ def plotDmag(data, magType1="model", magType2="psf", maglim=20, magmin=14,
             raise e
         x = np.zeros_like(mag1)
         y = np.zeros_like(mag1)
-        
+
     if False:
         ids = data.cat.get("id")[good][plotOrder]
     eventHandlers[fig] = EventHandler(data, axes, mag1, delta, ids, x, y, flags, frames=frames, wcss=wcss)
@@ -2672,7 +2672,7 @@ def makeSelectCcd(ccd, include=True):
 
 def makeSelectVisit(visit=None, ccd=None, include=True):
     visits, ccds = visit, ccd           # we use singular nouns consistently
-    
+
     try:
         visits[0]
     except TypeError:
@@ -2728,7 +2728,7 @@ def makeSelectFilter(filterName, include=True):
 
     return selectFilter
 
-def plotCM(data, select1, select2, magType="psf", magType2=None, idN=1, maglim=20, magmin=14,           
+def plotCM(data, select1, select2, magType="psf", magType2=None, idN=1, maglim=20, magmin=14,
            SG="sg", showChildren=True, showIsolated = False, showMedians=False, colorCcds=False,
            selectSG=None,
            xlim=(None, None), ylim=(None, None),
@@ -2743,7 +2743,7 @@ as a visit IDs.  If it's a string, interpret it as makeSelectFilter(selectN)
 
 If selectSG is provided is specifies a dataId to be used for S/G classification -- it's interpreted the
 same way as selectN (except that if it's a filename it's taken to be a file with S/G information)
-    
+
 If magType2 is provided, select2 must be None and we plot
     (data[select1].magType - data[select1].magType2) v. data[idN].magType
 
@@ -2812,7 +2812,7 @@ If non-None, [xy]{min,max} are used to set the plot limits
         matchRadius = 2                     # arcsec
         mat = afwTable.matchRaDec(cats[1], cats[2], matchRadius*afwGeom.arcseconds)
         matched = Data(cat=zipMatchList(mat))
-        
+
         data.matches = selections, matched
 
     suffixes = {1 : "_1", 2 : "_2"}
@@ -2870,7 +2870,7 @@ If non-None, [xy]{min,max} are used to set the plot limits
     good = good[good]
 
     nonStellar = np.logical_not(stellar)
-    
+
     if False:                           # not implemented after switch to scatter()
         try:
             alpha.keys()
@@ -2947,7 +2947,7 @@ If non-None, [xy]{min,max} are used to set the plot limits
             axes.axhline(m, color="black", ls=":")
 
         fig.text(0.20, 0.85, r"$%.3f \pm %.3f$" % (mean, stdev), fontsize="larger")
-        
+
     filterNames = [None]
     for k in sorted(cats.keys()):
         dataId = idsToDataIds(data, allIds[selections[k]][0:2])[0]
@@ -3007,7 +3007,7 @@ If non-None, [xy]{min,max} are used to set the plot limits
 
 def robustStd(y):
     """Return a robust estimate of y's standard deviation based on the IQR"""
-    
+
     y = sorted(y)
     n = len(y)
     return 0.741*(y[int(0.75*n)] - y[int(0.25*n)])
@@ -3196,7 +3196,7 @@ it would be in aperture mags)
         else:
             mat = afwTable.matchRaDec(cat123, cats[4], matchRadius*afwGeom.arcseconds)
             matched = Data(cat=zipMatchList(mat))
-        
+
         data.matches = selections, matched
 
     filterNames = [None]
@@ -3228,7 +3228,7 @@ it would be in aperture mags)
     for _magType in magType:
         for _sg in SG:
             axes = subplots.next(); j += 1
-            
+
             if len(SG) == 1 and len(magType) == 1:
                 showXlabel = "bottom"
                 showYlabel = "left"
@@ -3249,13 +3249,13 @@ it would be in aperture mags)
                                      showXlabel=showXlabel, showYlabel=showYlabel,
                                      *args, **kwargs
                                      )
-                                     
+
     fig.show()
 
     return fig
 
 def _plotCCImpl(data, matched, dataKeys, magType, filterNames, visitNames, SG, fig=None, show=True,
-                magType2=None, magTypeForSelection=None, magmax=None, magmin=None, 
+                magType2=None, magTypeForSelection=None, magmax=None, magmin=None,
                 verbose=False,
                 selectSG=None,
                 idN=None, idColorN=None, selectObjId=None, matchRadius=2, plotRaDec=False,
@@ -3278,7 +3278,7 @@ same way as selectN (except that if it's a filename it's taken to be a file with
         fig = axes.figure
     else:
         fig = getMpFigure(fig)
-        
+
         axes = fig.add_axes((0.1, 0.1, 0.85, 0.80))
 
     if idN is None:
@@ -3431,7 +3431,7 @@ same way as selectN (except that if it's a filename it's taken to be a file with
 
         if colorCcds or colorVisits or colorPatches:
             colors = ["red", "green", "blue", "cyan", "magenta", "yellow", "black", "orange", "brown", "gray"]
-            
+
             if colorCcds:
                 for i, ccd in enumerate(sorted(set(ccds))):
                     color = colors[i%len(colors)]
@@ -3491,7 +3491,7 @@ same way as selectN (except that if it's a filename it's taken to be a file with
         plotStellarLocus(axes, mags, k1, k2, k3, stellar, filterNames,
                          stellarLocusEnds, locusLtype, usePrincipalColor, plotRaDec,
                          xvec=xvec, yvec=yvec)
-        
+
     if plotRaDec:
         axes.set_xlim(xlim)
         axes.set_ylim(ylim)
@@ -3512,7 +3512,7 @@ same way as selectN (except that if it's a filename it's taken to be a file with
     if xlim[1] is not None and xlim[0] is not None and ylim[1] is not None and ylim[0] is not None and \
             abs(xlim[1] - xlim[0]) == abs(ylim[1] - ylim[0]):
         axes.set_aspect('equal')
-        
+
     if showStatistics:
         mean, stdev = [], []
         delta = []
@@ -3614,7 +3614,7 @@ same way as selectN (except that if it's a filename it's taken to be a file with
         else:
             xlabel = "%s - %s" % (filterNames[lk1], filterNames[lk2])
             ylabel = "%s - %s" % (filterNames[lk3], filterNames[lk4])
-        
+
     axes.text(0.05, 0.1, magType + (r"  $r_{xy}=%.2f$" % r_xy if show_r_xy else ""),
               #fontsize="larger",
               ha="left", transform = axes.transAxes)
@@ -3635,7 +3635,7 @@ same way as selectN (except that if it's a filename it's taken to be a file with
             titlePos = "figure"
         else:
             titlePos = "axes"
-            
+
         if not deltaColor and magmax is not None:
             if magmin is not None:
                 title += " [$%g < %s_{%s} < %g$]" % (magmin,
@@ -3684,7 +3684,7 @@ same way as selectN (except that if it's a filename it's taken to be a file with
         xvec[nonStellar] = -1000
     if "s" not in SG.lower():
         xvec[stellar] = -1000
-    
+
     eventHandlers[fig] = EventHandler(data, axes, xvec, yvec, canonicalIds, xc, yc, flags,
                                       frames=frames, wcss=wcss, selectWcs=idN-1)
 
@@ -3706,7 +3706,7 @@ If selectObjId is provided, it's a function that returns True or False for each 
     sel = makeSelectCcd(ccd=2)
     plotSizes(..., selectObjId=utils.makeSelectCcd(2), ...)
 """
-    
+
     try:
         data.cat
     except AttributeError:
@@ -3723,7 +3723,7 @@ If selectObjId is provided, it's a function that returns True or False for each 
         ids = data.cat.get("id")
         good = np.logical_and(good, selectObjId(data, data.cat.get("id")))
         ids = ids[good]
-        
+
     fig = getMpFigure(fig)
     axes = fig.add_axes((0.1, 0.1, 0.85, 0.80))
 
@@ -3768,7 +3768,7 @@ If selectObjId is provided, it's a function that returns True or False for each 
             raise e
         x = np.zeros_like(mag)
         y = np.zeros_like(mag)
-        
+
     eventHandlers[fig] = EventHandler(data, axes, mag, size, ids, x, y, flags, frames=frames)
 
     fig.show()
@@ -3806,7 +3806,7 @@ is equivalent to
 
     if fluxMin is not None:
         good = np.logical_and(good, cat.get("flux.psf") > fluxMin)
-        
+
     fig = getMpFigure(fig)
     axes = fig.add_axes((0.1, 0.1, 0.85, 0.80))
 
@@ -3896,7 +3896,7 @@ is equivalent to
         fac = 3600.0/pixelSize
         scale *= fac
         width /= 0.8*fac
-        
+
     xpos, ypos = 0.40, 0.95
     if pixelSize == 1.0:
         if keyLen is None:
@@ -3925,14 +3925,14 @@ is equivalent to
         u = R*np.cos(theta); v = R*np.sin(theta)
         theta = np.arctan2(E2psf, E1psf)
         u -= Rpsf*np.cos(theta); v -= Rpsf*np.sin(theta)
-        
+
         Q = plotE1E2(axes, x, y, u, v, isUV=True,
                      sel=stellar, color='blue' if Q else np.hypot(u, v), scale=scale, width=width*(1 if Q else 2),
                      pivot=pivot)
         pyplot.colorbar(Q)
         axes.quiverkey(Q, xpos, ypos, keyLen, keyLenStr + "diff", labelpos='W')
         keyLenStr = ""; xpos += 0.25
-    
+
     axes.set_aspect('equal')
 
     if False:
@@ -3949,9 +3949,9 @@ is equivalent to
     if False:
         global eventHandlers
         flags = {}
-        
+
         eventHandlers[fig] = EventHandler(data, axes, mag, size, ids, x, y, flags, frames=frames)
-        
+
     fig.show()
 
     return fig
@@ -3993,7 +3993,7 @@ same way as selectObjId.
             selectObjId = makeSelectVisit(selectObjId)
         elif isinstance(selectObjId, str):
             selectObjId = makeSelectFilter(selectObjId)
-        
+
         good = np.logical_and(good, selectObjId(data, data.cat.get("id")))
 
     fig = getMpFigure(fig)
@@ -4070,12 +4070,12 @@ same way as selectObjId.
         axes.set_xlabel(xlab)
         if False:
             if mean is not None:
-                axes.set_title("%.3f\n$\pm$%.3f" % (mean, stdev), fontsize="smaller") 
+                axes.set_title("%.3f\n$\pm$%.3f" % (mean, stdev), fontsize="smaller")
             #
             # Put out information for intensity-dependent PSFs
             #
             print "%.4f %6.2e %.4f %.4f" % (meanMag, calib.getFlux(meanMag), mean, stdev)
-        
+
     ids = data.cat.get("id")[good]
     name = data.name if selectObjId is None else \
         data.mapperInfo.dataIdToTitle(idsToDataIds(data, ids), data._rerun)
@@ -4139,7 +4139,7 @@ Use the matplotlib Figure object fig; if none is provided it'll be created and s
 If showZP is True, the data plotted is the per-CCD zeropoint
 
 if eventHandler is true, make the points in the plot live
-    
+
 If plotBand is provided, draw lines at +- plotBand
 
 If title is provided it's used as a plot title; if it starts + the usual title is prepended
@@ -4161,7 +4161,7 @@ If frame is not None plot the objects in ds9 (if mtv is True as well, display th
         good = np.logical_and(good, selectObjId(data, data.matchedCalibs.get("id")))
     magTypeName = "sinc" if magType == "ap" else "deconvolvedPsf" if magType == "inst" else magType
     flux = data.matchedCalibs.get("flux.%s%s" % (magTypeName, sourceSuffix))[good]
-    
+
     ids = data.matchedCalibs.get("id")[good]
     xc = data.matchedCalibs.get("centroid.sdss%s.x" % sourceSuffix)[good]
     yc = data.matchedCalibs.get("centroid.sdss%s.y" % sourceSuffix)[good]
@@ -4188,7 +4188,7 @@ If frame is not None plot the objects in ds9 (if mtv is True as well, display th
 
         if correctJacobian:
             perChipJacobian = True      # set the average Jacobian to 1.0 for every CCD
-            
+
         if perChipJacobian:
             ccdId = data.mapperInfo.splitId(ids)["ccd"]
             for _id in set(ccdId):
@@ -4262,7 +4262,7 @@ If frame is not None plot the objects in ds9 (if mtv is True as well, display th
     except Exception, e:
         print "Failed to estimate mean: %s" % e
         mean, stdev = float("NaN"), float("NaN")
-        
+
     if showCamera or plotRadial:
         inRange = np.logical_and(refmag >= magmin, refmag <= maglim)
 
@@ -4282,14 +4282,14 @@ If frame is not None plot the objects in ds9 (if mtv is True as well, display th
                               edgecolors="none", alpha=alpha)
             fig.colorbar(sc)
             axes.set_aspect('equal')
-            
+
             axes.set_xlabel("X (mm)")
             axes.set_ylabel("Y (mm)")
-            
+
             title += " %s" % magType
 
             if overlay:
-                overlayCcds(camera, axes) 
+                overlayCcds(camera, axes)
     else:
         axes.plot(refmag, delta, "k.", markersize=markersize, alpha=alpha, markeredgewidth=0)
 
@@ -4346,7 +4346,7 @@ def plotAstromCalibration(data, plotBand=0.5, magType='psf', maglim=20,
 The Data must have been initialised with a call to the getCalibObjects method
 
 Use the matplotlib Figure object fig; if none is provided it'll be created and saved in data (and if it's true, a new one will be created)
-    
+
 If plotBand is provided, draw lines at +- plotBand
     """
     if not data.matchedCalibs:
@@ -4381,7 +4381,7 @@ If plotBand is provided, draw lines at +- plotBand
     refy = np.array([s.first.getY() for s in mstars if s.first and s.second])
     srcx = np.array([s.second.getX() for s in mstars if s.first and s.second])
     srcy = np.array([s.second.getY() for s in mstars if s.first and s.second])
-        
+
     ids = np.array([s.second.getId() for s in mstars if s.first and s.second])
 
     delta = refx - srcx
@@ -4390,7 +4390,7 @@ If plotBand is provided, draw lines at +- plotBand
     if False:
         for i in range(len(ids)):
             print "%d4 %.2f %.2f (%.2f, %.2f)" % (ids[i], refmag[i], delta[i], x[i], y[i])
-    
+
 
     stats = afwMath.makeStatistics(delta[refmag < maglim], afwMath.STDEVCLIP | afwMath.MEANCLIP)
     mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
@@ -4404,7 +4404,7 @@ If plotBand is provided, draw lines at +- plotBand
     axes.plot((minRef, maglim, maglim, minRef, minRef), 100*np.array([-1, -1, 1, 1, -1]), "g:")
 
     #axes.plot(refmag[realStars], delta[realStars], "gx")
-        
+
     axes.plot((-100, 100), (0, 0), "g-")
     if plotBand:
         for i in (-plotBand, plotBand):
@@ -4433,10 +4433,10 @@ If plotBand is provided, draw lines at +- plotBand
             for m in _mstars:
                 print "%.1f %.1f  %.2f %.2f" % (m.second.getX(), m.second.getY(),
                                                 -2.5*math.log10(m.first.getPsfFlux()),
-                                                -2.5*math.log10(m.first.getPsfFlux()) - 
+                                                -2.5*math.log10(m.first.getPsfFlux()) -
                                                 (data.zp - 2.5*math.log10(m.second.getPsfFlux())))
                 ds9.dot("*", m.second.getX(), m.second.getY(), ctype=ds9.MAGENTA, size=10)
-                
+
     return fig
 
 def displayCalibration(data, frame=0):
@@ -4473,7 +4473,7 @@ def plotZeroPoints(data, selectObjId=None,
     """Plot the per-CCD zeropoints (only for visit == visit if non-None)
 
 If selectObjId is provided, it's a function that returns True or False for each CCD. E.g.
-    plotZeroPoints(..., selectObjId=makeSelectVisit(visit=902040), ...)   
+    plotZeroPoints(..., selectObjId=makeSelectVisit(visit=902040), ...)
 
     """
     fig = getMpFigure(fig)
@@ -4518,7 +4518,7 @@ If selectObjId is provided, it's a function that returns True or False for each 
 
     name = data.name if selectObjId is None else data.mapperInfo.dataIdToTitle(dataSets, data._rerun)
     axes.set_title(re.sub(r"^\+\s*", "Zeropoints " + name + " ", title))
-    
+
     #
     # Make "z" print the z-axis (zp)
     #
@@ -4540,7 +4540,7 @@ def showObject(data, objectId, filterId, frame0=0, raw=False, visits=None, maxDs
     """Show and return all the images for some objectId and filterId (a maximum of maxDs9 are displayed, starting at ds9 frame0).
 If you specify visits, only that set of visits are considered for display
 
-If showPsfs is true, include a reconstructed psf mosaic in the lower left corner 
+If showPsfs is true, include a reconstructed psf mosaic in the lower left corner
     """
 
     ims = {}
@@ -4605,11 +4605,11 @@ def findSource(sourceSet, x, y, radius=2):
     sch.addField(afwTable.Field["PointD"](centroidName, ""))
     oneObjCatalog = afwTable.SourceCatalog(sch)
     oneObjCatalog.table.defineCentroid(centroidName)
-    
+
     s = oneObjCatalog.addNew()
     s.set("%s.x" % centroidName, x)
     s.set("%s.y" % centroidName, y)
-    
+
     matches = [m.first for m in afwTable.matchXy(sourceSet, oneObjCatalog, radius)
                if m.first.get("deblend.nchild") == 0]
 
@@ -4690,7 +4690,7 @@ def showRefCatalog(data, dataId, wcs=None, frame=0):
 
 def _getSourceSetFromQuery(data, dataId, queryStr):
     """Return a SourceSet given a Data object and query string that returns certain information"""
-    
+
     calexp_md = data.butler.get(dtName("calexp", True), **dataId)
     data.wcs = afwImage.makeWcs(calexp_md)
     data.calib = afwImage.Calib(calexp_md)
@@ -4736,7 +4736,7 @@ from
 where
    visit = %(visit)d and raftName = '%(raft)s' and ccdName = '%(sensor)s'
    and rsm.refObjectId is Null
-   """ % dataId)   
+   """ % dataId)
 
 def getMatched(data, dataId):
     """Return a SourceSet of all the catalogue objects that we detected for dataId (a single CCD)"""
@@ -4763,7 +4763,7 @@ where
    """
 
     return _getSourceSetFromQuery(data, dataId, query)
-    
+
 def getMissed(data, dataId):
     """Return a SourceSet of all the catalogue objects that we failed to detect for dataId (a single CCD)"""
 
@@ -4776,7 +4776,7 @@ def getMissed(data, dataId):
         WHERE
             visit = %(visit)d and raftName = '%(raft)s' and ccdName = '%(sensor)s'
         INTO @poly, @sceId, @filterId;
-        
+
         SELECT
            sro.refObjectId, sro.ra, sro.decl,
            CASE WHEN @filterId = 0 THEN uMag
@@ -4847,7 +4847,7 @@ def drawKron(s, xy0=(0, 0), **kwargs):
     R_K = s.get("flux.kron.radius")
     if False:
         if math.isnan(R_K):
-            import pdb; pdb.set_trace() 
+            import pdb; pdb.set_trace()
         assert not math.isnan(R_K)
 
     nRadiusForFlux = 2.5
@@ -4871,7 +4871,7 @@ Use as e.g.
     isStar = np.logical_or(isStar, source.get("flags.pixel.saturated.center"))
 
     ctype = (ds9.GREEN if isStar else ds9.RED) if source.get("parent") == 0 else \
-             (ds9.CYAN if isStar else ds9.MAGENTA)                    
+             (ds9.CYAN if isStar else ds9.MAGENTA)
 
     cen = source.getCentroid() - afwGeom.PointD(im.getXY0())
 
@@ -4881,7 +4881,7 @@ Use as e.g.
 
 def snEventCallback(ev, source, im, frame):
     """Print the object's signal to noise ratio"""
-    
+
     print "S/N %6.2f (PSF) %6.2f (Model)%s\r" % (source.getPsfFlux()/source.getPsfFluxErr(),
                                                  source.getModelFlux()/source.getModelFluxErr(), 60*" "),
     sys.stdout.flush()
@@ -4903,7 +4903,7 @@ Use as e.g.
         psf = im.getPsf()
     except:
         psf = None
-        
+
     drawCmodel(source, im.getXY0(), frame=frame, psf=psf)
 
 def kronEventCallback(ev, source, im, frame):
@@ -4920,7 +4920,7 @@ def showSourceSet(sourceSet, exp=None, wcs=None, xy0=None, raDec=None, magmin=No
 
     If nSource > 0, only show the nSource objects with the brightest psf flux
     If mask, it's a set of bitplane names (e.g. INTERP) which must be set to display the source"""
-    
+
     try:
         sourceSet.getColumnView()
     except:
@@ -5010,7 +5010,7 @@ def showSourceSet(sourceSet, exp=None, wcs=None, xy0=None, raDec=None, magmin=No
             _symb = symb
             if SG:
                 kwargs["ctype"] = (ds9.GREEN if isStar[i] else ds9.RED) if s.get("parent") == 0 else \
-                    (ds9.CYAN if isStar[i] else ds9.MAGENTA)                    
+                    (ds9.CYAN if isStar[i] else ds9.MAGENTA)
                 _symb = "+" if isStar[i] else "o"
 
             dx, dy = 0.0, 0.0           # offset of symbol from position
@@ -5025,7 +5025,7 @@ def showSourceSet(sourceSet, exp=None, wcs=None, xy0=None, raDec=None, magmin=No
                         _id = _id & 0xffff # guess wildly
                     _symb = "%d" % _id
                 if deblend:
-                    kwargs["ctype"] = ds9.RED if s.get("parent") == 0 else ds9.MAGENTA                    
+                    kwargs["ctype"] = ds9.RED if s.get("parent") == 0 else ds9.MAGENTA
 
             elif symb == "@":
                 _symb = s.getShape()    # requires a ds9.py >= 2013-01-15
@@ -5110,7 +5110,7 @@ def plotCompleteness(data, dataId, refCat=None, calexp=None, matchRadius=2, **kw
             continue
 
         refOnly.push_back(s)
-        
+
     return (plotCounts(data, detected, refOnly, spurious, blended, ss, calexp,
                        **kwargs), ss, refCat)
 
@@ -5153,7 +5153,7 @@ def plotCounts(data, matched, refOnly, spurious, blended, ss=None, calexp=None,
                 bad = np.logical_or(bad, np.logical_not(isStar))
             else:
                 bad = np.logical_or(bad, isStar)
-                 
+
         mags = data.getMagsByType(magType, np.logical_not(bad), magDict=mags)
 
         xyPos.append(zip(mags, x[np.logical_not(bad)], yAstrom[np.logical_not(bad)]))
@@ -5166,7 +5166,7 @@ def plotCounts(data, matched, refOnly, spurious, blended, ss=None, calexp=None,
                 mag = calexp.getCalib().getMagnitude(getFlux(s, magType))
             except pexExcept.LsstCppException:
                 mag = np.nan
-                
+
             m.append(mag)
             x.append(s.getX())
             y.append(s.getY())
@@ -5181,7 +5181,7 @@ def plotCounts(data, matched, refOnly, spurious, blended, ss=None, calexp=None,
         for i, ct in enumerate([ds9.GREEN, ds9.CYAN, ds9.BLUE, ds9.RED, ds9.YELLOW]):
             if i >= len(xyPos):
                 break
-            
+
             symb = "+" if ct == ds9.YELLOW else "o"
             with ds9.Buffering():
                 for mag, x, y in xyPos[i]:
@@ -5264,7 +5264,7 @@ def getMatches(ss, refCat, radius=2):
 
     matchedRefs = {}                    # matched pairs;  reference object is unique
     matchedSrcs = {}                    # list of matched objects from ss
-    
+
     spurious = afwDetect.SourceSet()
     refOnly = afwDetect.SourceSet()
 
@@ -5315,7 +5315,7 @@ def getMatches(ss, refCat, radius=2):
     for src in ss:
         if src.getId() not in sids:
             spurious.push_back(src)
-            
+
     return matched, spurious, refOnly
 
 def subtractModels(data, dataId, magType="model", frame=0, subtractedOnly=False, showExposure=True, ccd=None,
@@ -5351,7 +5351,7 @@ If fitAmplitude, fit the object's amplitudes rather than using the measured flux
                 comboImage, expImage, devImage = msViewer.makeGalaxyImages(s, imageBBox=exp.getBBox())
             except ValueError, e:
                 continue
-            
+
             try:
                 if True:
                     modelImage = comboImage
@@ -5393,7 +5393,7 @@ If fitAmplitude, fit the object's amplitudes rather than using the measured flux
     si -= exp.getMaskedImage().getImage()
     si *= -1
 
-    return subtracted    
+    return subtracted
 
 def plotObject(exp, xc, yc, dir="-", hlen=10, findPeak=0, frame=None, fig=None):
     """Plot a cross section through an object centered at (xc, yc) on the specified figure
@@ -5417,7 +5417,7 @@ def plotObject(exp, xc, yc, dir="-", hlen=10, findPeak=0, frame=None, fig=None):
         for y in range(yc0 - findPeak, yc0 + findPeak + 1):
             if image.get(x, y) > maxVal:
                 xc, yc, maxVal = x, y, image.get(x, y)
-    
+
     if dir == "-":
         x0, x1 = xc - hlen, xc + hlen
         y0, y1 = yc, yc
@@ -5440,7 +5440,7 @@ def plotObject(exp, xc, yc, dir="-", hlen=10, findPeak=0, frame=None, fig=None):
         ds9.pan(xc, yc, frame=frame)
         ds9.dot("+", xc, yc, frame=frame)
         ds9.line([(x0, y0), (x1, y1)], frame=frame)
-    
+
     fig = getMpFigure(fig)
     axes = fig.add_axes((0.1, 0.1, 0.85, 0.80))
 
@@ -5469,7 +5469,7 @@ def psf(exposure, ngrid=40, fig=None):
     Z = []
     for j in range(nfunc):
         Z.append(100*np.ones(X.size))
-        
+
     j = 0
     for _x, _y in zip(X, Y):
         for x, y in zip(_x, _y):
@@ -5495,11 +5495,11 @@ def psf(exposure, ngrid=40, fig=None):
         ny = 1
     while nx*ny < n:
         nx += 1
-        
+
     subplots = makeSubplots(fig, nx=nx, ny=ny)
 
     fig.suptitle("PSF eigen components, %s [%s]" % (data.mapperInfo.exposureToStr(exposure), rerun),
-                 fontsize=14) 
+                 fontsize=14)
 
     for i in range(1, nfunc):
         axes = subplots.next()
@@ -5574,7 +5574,7 @@ def subtractBackground(image, nsigma=5, boxSize=1024, method="fit"):
             image.getImage
         except AttributeError:
             image = afwImage.makeMaskedImage(image)
-            
+
         exp = afwImage.makeExposure(image)
         bkgd = sdTask.detectFootprints(exp, sigma=1).background
         del exp
@@ -5599,7 +5599,7 @@ If bin is specified, it should be an integer > 1;  the output file will be binne
 If saveFmt is non-None it's taken to be a string with a single %s which will be replaced by "R", "G", and "B"
 when writing the final images to disk
     """
-    
+
     if not afwRgb:
         raise RuntimeError("I was unable to import lsst.afw.extensions.rgb")
 
@@ -5615,7 +5615,7 @@ when writing the final images to disk
     elif len(images) == 3:
         grayScale = False
     else:
-        raise RuntimeError("Please specify one or three images, not %d" % len(images)) 
+        raise RuntimeError("Please specify one or three images, not %d" % len(images))
 
     for i, image in enumerate(images):
         #
@@ -5694,7 +5694,7 @@ when writing the final images to disk
             images[1] = image
             images[2] = image
 
-            break            
+            break
 
     afwRgb.RgbImageF(images[R], images[G], images[B], afwRgb.asinhMappingF(min, max - min, Q)).write(rgbFile)
 
@@ -5711,7 +5711,7 @@ the range of the stretch; as Q increases they still define the slope of the line
 
 If bin is specified, it should be an integer > 1;  the output file will be binned by that factor.
     """
-    
+
     if not afwRgb:
         raise RuntimeError("I was unable to import lsst.afw.extensions.rgb")
 
@@ -5753,7 +5753,7 @@ def assembleCcdLsst(dataType, butler, dataId, snap=0, fixAmpLevels=False):
     id = cameraGeom.Id("R:%d,%d S:%d,%d" % (r0, r1, s0, s1))
 
     ccd = cameraGeomUtils.findCcd(cg, id)
-    
+
     ampList = []
     for n,a in enumerate(ccd):
         serial = a.getId().getSerial()
@@ -5772,7 +5772,7 @@ def assembleCcdLsst(dataType, butler, dataId, snap=0, fixAmpLevels=False):
         except AttributeError:          # pre afw 4.3.2.1
             calib = afwImage.Calib(md)
             exp.getCalib().setExptime(calib.getExptime())
-            
+
         ampList.append(exp)
 
     return ipIsr.assembleCcd(ampList, ccd, fixAmpLevels=fixAmpLevels)
@@ -5831,7 +5831,7 @@ pre-defined behaviour)
                 frames[0]
             except TypeError:
                 frames = [frames]
-            
+
         if not wcss:
             wcss = [None]*len(frames)
 
@@ -5846,7 +5846,7 @@ pre-defined behaviour)
     def __call__(self, ev):
         if ev.inaxes != self.axes:
             return
-        
+
         if not ev.key:
             return
 
@@ -5939,7 +5939,7 @@ There are also some static values in EventHander which you may set from the comm
 
                 if fileName:
                     fileName += ".png"
-                    
+
                 findSourcesAllBands(self.data, objId, frame=eventFrame, fileName=fileName,
                                     scaleSources=(ev.key in "bB" and self.scaleSources),
                                     doSmooth=(ev.key == "B"))
@@ -5971,18 +5971,18 @@ There are also some static values in EventHander which you may set from the comm
                         else:
                             im = deblender.footprintToImage(self.s.getFootprint(), calexp.getMaskedImage())
                             calexp.setMaskedImage(afwImage.makeMaskedImage(im))
-                                    
+
                     else:
                         kid = [_ for _ in fam[1] if _.getId() == oid]
                         im = deblender.footprintToImage(kid.getFootprint(), calexp.getMaskedImage())
                         calexp.setMaskedImage(afwImage.makeMaskedImage(im))
-                        
+
                 if calexp:
                     try:
                         x, y = self.s.getCentroid()
                     except:
                         x, y = self.s.get("centroid.sdss")
-                        
+
                     title = re.sub(r"[' {}]", "", str(dataId)).replace(",", " ")
                     ds9.mtv(calexp, title=title, frame=eventFrame)
                     ds9.dot("%s (%6.1f, %6.1f)" % (self.data.mapperInfo.splitId(objId, asDict=False), x, y),
@@ -6016,10 +6016,10 @@ There are also some static values in EventHander which you may set from the comm
                 callback(ev, self.s, self.calexp, frame=eventFrame)
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-
+'''
 class PsfModelImage(cameraGeomUtils.GetCcdImage):
     """A class to return an Image of a given Ccd based on its cameraGeometry"""
-    
+
     def __init__(self, butler, bin=10, background=np.nan, verbose=False, stampSize=0, *args, **kwargs):
         """Initialise
         gravity  If the image returned by the butler is trimmed (e.g. some of the SuprimeCam CCDs)
@@ -6035,7 +6035,7 @@ class PsfModelImage(cameraGeomUtils.GetCcdImage):
         self.imageIsBinned = True       # i.e. images returned by getImage are already binned
 
         self.isRaw = False
-        
+
         self.gravity = None
         self.background = background
 
@@ -6083,8 +6083,8 @@ class PsfModelImage(cameraGeomUtils.GetCcdImage):
                 im = afwMath.binImage(im, self.bin)
 
         return im
+'''
 
-        
 def showPsfModelImage(butler, visit, bin=20, stampSize=0, frame=0, verbose=False, title=None):
     """Show a mosaic of PSF mosaics"""
     cameraImage = cameraGeomUtils.showCamera(butler.get("camera"),
@@ -6101,10 +6101,10 @@ def showPsfModelImage(butler, visit, bin=20, stampSize=0, frame=0, verbose=False
     return cameraImage
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-
+'''
 class ResidualImage(cameraGeomUtils.GetCcdImage):
     """A class to return an Image of a given Ccd based on its cameraGeometry"""
-    
+
     def __init__(self, butler, magMin=None, magLim=30, magType="psf", apCorr=1.0, showPsfStars=False,
                  showPsfModels=True,
                  bin=10, stampSize=0, background=np.nan, sigma=0, verbose=False, *args, **kwargs):
@@ -6128,7 +6128,7 @@ class ResidualImage(cameraGeomUtils.GetCcdImage):
         self.showPsfModels = showPsfModels
         self.stampSize = stampSize
         self.isRaw = False
-        
+
         self.gravity = None
         self.background = background
 
@@ -6158,7 +6158,7 @@ class ResidualImage(cameraGeomUtils.GetCcdImage):
             return ccdImage
 
         ss = self.butler.get("src",  ccd=ccdNum, **dataId)
-        
+
         calib = calexp.getCalib()
         if calib.getFluxMag0()[0] > 0.0:
             with afwImageUtils.CalibNoThrow():
@@ -6207,7 +6207,7 @@ class ResidualImage(cameraGeomUtils.GetCcdImage):
                              afwGeom.ExtentI(calexp.getWidth()//self.bin, calexp.getHeight()//self.bin))]
 
         return im
-    
+'''
 
 def showPsfResiduals(data, dataId, magMin=None, magLim=23, magType="psf", showPsfStars=False,
                      showPsfModels=True, stampSize=0, radius=17920,
@@ -6227,7 +6227,7 @@ def showPsfResiduals(data, dataId, magMin=None, magLim=23, magType="psf", showPs
                                       title=data.mapperInfo.dataIdToTitle([dataId]))
     if frame is not None and radius:
         ds9.dot("o", -mos.getX0(), -mos.getY0(), size=radius/float(bin), ctype=ds9.RED, frame=frame)
-        
+
     return mos
 
 def showStackedPsfResiduals(data=None, dataId={}, exposure=None, sourceSet=None, sigma=None,
@@ -6243,7 +6243,7 @@ def showStackedPsfResiduals(data=None, dataId={}, exposure=None, sourceSet=None,
             exposures = [exposure]
         else:
             exposures = data.getDataset("calexp", dataId)
-                
+
         if sourceSet:
             sourceSets = [sourceSet]
         else:
@@ -6254,7 +6254,7 @@ def showStackedPsfResiduals(data=None, dataId={}, exposure=None, sourceSet=None,
     mimIn = mimIn.Factory(mimIn, True)  # make a copy to subtract from
 
     Image = mimIn.getImage().Factory    # Image ctor
-    
+
     psf = exposure.getPsf()
     psfWidth, psfHeight = psf.getLocalKernel().getDimensions()
     #
@@ -6305,7 +6305,7 @@ def showStackedPsfResiduals(data=None, dataId={}, exposure=None, sourceSet=None,
 
             residualImages[bin(mag)][1].push_back(expIm)
             residualImages[bin(mag)][3] += 1
-        
+
     objects = ds9Utils.Mosaic(gutter=gutter)
     residuals = ds9Utils.Mosaic(gutter=gutter)
 
@@ -6396,7 +6396,7 @@ def showStackedPsfResidualsCamera(data, dataId, frame=0, overlay=False, normaliz
         except (RuntimeError, TypeError), e:
             print "Failed to return residuals for %s: %s" % (dataId, e)
             continue
-            
+
         if not mags:
             mags  = [m for m, n in labels]
             nstar = np.array([m for m, n in labels])
@@ -6420,7 +6420,7 @@ def showStackedPsfResidualsCamera(data, dataId, frame=0, overlay=False, normaliz
         npanel = len(mags); nx = 2; ny = npanel//nx
         if ny*nx != npanel:
             ny += 1
-            
+
         w = (w - (nx - 1)*subGutter)//nx
         h = (h - (ny - 1)*subGutter)/ny
 
@@ -6433,7 +6433,7 @@ def showStackedPsfResidualsCamera(data, dataId, frame=0, overlay=False, normaliz
             sim = im.Factory(im, bbox, afwImage.PARENT)
 
             peak = afwMath.makeStatistics(sim, afwMath.MAX).getValue()
-            
+
             sim /= peak
 
             labs.append(["%.2f %d" % (m, n), x + 0.5*w, y])
@@ -6471,7 +6471,7 @@ def comparePsfModels(da1, da2, dataId, nx=3, stampSize=0):
 
         if ims[da] == None:
             continue
-            
+
         if n == 0:
             res = ims[da1].clone(); res[:] = 0
             im1 = ims[da1].clone()
@@ -6496,7 +6496,7 @@ def smooth(x, windowLen, windowType="boxcar"):
     """Adapted from http://www.scipy.org/Cookbook/SignalSmooth"""
     if x.ndim != 1:
         raise ValueError("smooth only accepts 1 dimension arrays.")
- 
+
     if x.size < windowLen:
         raise ValueError("Input vector needs to be bigger than window size.")
 
@@ -6565,7 +6565,7 @@ def plotImageHistogram(calexp, minDN=None, maxDN=None, binwidth=None,
     img = img.getArray()
     if msk is not None:
         msk = msk.getArray()
-   
+
     if maxDN in ("max", None):
         maxDN = np.max(img)
 
@@ -6611,7 +6611,7 @@ def plotImageHistogram(calexp, minDN=None, maxDN=None, binwidth=None,
     if log:
         ymin, ymax = axes.get_ylim()
         axes.set_ylim(max([0.5, ymin]), ymax)
-        
+
     if title:
         axes.set_title(title)
 
@@ -6647,7 +6647,7 @@ def plotImageHistogram(calexp, minDN=None, maxDN=None, binwidth=None,
                   color="black", label=msg)
 
         if not showStats:
-            fig.text(0.20, 0.85, msg)                 
+            fig.text(0.20, 0.85, msg)
 
     if showStats:
         axes.legend(loc=1)
@@ -6658,7 +6658,7 @@ def plotImageHistogram(calexp, minDN=None, maxDN=None, binwidth=None,
 
 def plotFrames(das, fig=None):
     fig = getMpFigure(fig)
-    
+
     plottingArea = (0.1, 0.1, 0.85, 0.80)
     axes = fig.add_axes(plottingArea)
 
@@ -6682,7 +6682,7 @@ def plotFrames(das, fig=None):
 
     axes.set_xlabel("RA")
     axes.set_ylabel("Dec")
-    
+
     fig.show()
 
     return fig
@@ -6718,7 +6718,7 @@ def findMissedSatur(data, maglim=15, deltaMin=-0.4, deltaMax=-0.06, frame=None, 
             missed = np.logical_and(missed, inV)
         except TypeError:
             missed = np.logical_and(missed, sids[k] == v)
-            
+
     #
     # OK, we've got our bad objects
     #
@@ -6733,7 +6733,7 @@ def findMissedSatur(data, maglim=15, deltaMin=-0.4, deltaMax=-0.06, frame=None, 
     if len(psf) == 1:                   # => the elements of dids are ints, not arrays
         for k, v in sids.items():
             sids[k] = [v]
-            
+
     ids = [dict(zip(sids.keys(), _)) for _ in zip(*sids.values())]
 
     del sids["objId"]
@@ -6801,7 +6801,7 @@ def plotImageCrossSection(im, dir='-', topBottom=False, fig=1, ymin=None, ymax=N
         vals2 *= vals1[100]/vals2[100]
         axes.plot(vals2, color='red', label="%s scaled to bottom" % label2)
         axes.legend(loc="upper left")
-        
+
     axes.set_xlim(-0.02*len(vals1), 1.02*len(vals1))
     axes.set_ylim(ymin, ymax)
     axes.set_xlabel("column" if dir == '-' else "row")
@@ -6813,7 +6813,7 @@ def plotImageCrossSection(im, dir='-', topBottom=False, fig=1, ymin=None, ymax=N
 
     return fig
 
-    
+
 def standardEllipticity(ss, calexp, magLim=100, frame=0):
     n = 0
     sIxx, sIyy, sIxy = 0.0, 0.0, 0.0
@@ -6824,7 +6824,7 @@ def standardEllipticity(ss, calexp, magLim=100, frame=0):
         sIyy += Q.getIyy()
         sIxy += Q.getIxy()
         n += 1
-        
+
     sIxx /= n
     sIyy /= n
     sIxy /= n
@@ -6866,11 +6866,11 @@ def standardEllipticity(ss, calexp, magLim=100, frame=0):
             ds9.dot(Q, *s.getCentroid(), ctype=ds9.RED, frame=frame)
             ds9.dot(Qstandard, *s.getCentroid(), ctype=ds9.GREEN, frame=frame)
 
-        
-        
+
+
 def showApcorr(data,  ymin=None, ymax=None, markersize=1, fig=None, **dataId):
     """Show the aperture corrections for a given detector"""
-    
+
     fig = getMpFigure(fig)
 
     axes = fig.add_axes((0.1, 0.1, 0.85, 0.80))
@@ -6879,20 +6879,20 @@ def showApcorr(data,  ymin=None, ymax=None, markersize=1, fig=None, **dataId):
     xmm = ss.get("focalplane.x")
     ymm = ss.get("focalplane.y")
     apcorr = ss.get("correctfluxes.apcorr")
-        
+
     sc = axes.scatter(xmm, ymm, c=apcorr, norm=pyplot.Normalize(ymin, ymax),
                       cmap=pyplot.cm.rainbow, marker="o", s=10*markersize,
-                      edgecolors="none")   
+                      edgecolors="none")
     fig.colorbar(sc)
     axes.set_aspect('equal')
 
     psfStar = ss.get("calib.psf.used")
     axes.plot(xmm[psfStar], ymm[psfStar], "*", color="black", markerfacecolor="none")
-    
+
     axes.set_xlabel("X (mm)")
     axes.set_ylabel("Y (mm)")
     axes.set_title("Aperture correction %s" % data.mapperInfo.dataIdToTitle([dataId]))
-    
+
     fig.show()
     return fig
 
@@ -6947,11 +6947,11 @@ def addBackgroundCallback(im, ccd=None, butler=None, imageSource=None):
 
 def plotChisqHistogram(butler, dataId, plotGaussian=(0,1), showUnclipped=False, fig=1, frame=None):
     calexp = butler.get("calexp", **dataId)
-    title = "visit=%(visit)d ccd=%(ccd)d" % dataId    
+    title = "visit=%(visit)d ccd=%(ccd)d" % dataId
 
     chi = calexp.getMaskedImage().clone()
     chi.getImage().getArray()[:] /= np.sqrt(chi.getVariance().getArray())
-    
+
     title = "$\chi$ " + title
 
     plotImageHistogram(chi, fig=fig, maxDN=5, binwidth=0.05, showStats=True, title=title,
@@ -7120,7 +7120,7 @@ def hackM31Sky(fileFmt="sat-16-%s.fits", outfile="fixed.png", *args, **kwargs):
     backobj = afwMath.BackgroundMI(im.getBBox(), sim); im -= backobj.getImageF("LINEAR")
 
     writeRgb([images["R"], images["G"], images["B"]], outfile, *args, **kwargs)
-    
+
 import lsst.meas.algorithms as measAlg
 import lsst.pex.config as pexConfig
 #import lsst.meas.algorithms.defects as defects
@@ -7128,7 +7128,7 @@ import lsst.pex.config as pexConfig
 def trimRemoveCrCallback(im, ccd=None, butler=None, imageSource=None, subtractBackground=False):
     if hasattr(im, "convertF"):
         im = im.convertF()
-        
+
     im = cameraGeomUtils.trimRawCallback(im, ccd, butler, imageSource=imageSource, subtractBackground=True)
     if True:                            # XXX
         return im
@@ -7176,17 +7176,17 @@ def analyzeForced(dataId, sourceSet_forced, sourceSet_sfm, magType="psf",
 
     sourceSet_forced = _appendToCatalog(None, dataId, sourceSet=sourceSet_forced)[0]
     sourceSet_sfm    = _appendToCatalog(None, dataId, sourceSet=sourceSet_sfm)[0]
-    
+
     matched = afwTable.matchRaDec(sourceSet_forced, sourceSet_sfm, matchRadius*afwGeom.arcseconds)
 
     if showAstrometricResiduals:
         calexp_md = butler.get("calexp_md", **dataId)
         wcs = afwImage.makeWcs(calexp_md)
-        
+
         #wcs = improveWcs(wcs, matched, sipOrder=5)
 
     matched = zipMatchList(matched, verbose=False)
-    
+
     mag_f = matched.get("%sMag_1" % magType)
     mag_s = matched.get("%sMag_2" % magType)
 
@@ -7214,7 +7214,7 @@ def analyzeForced(dataId, sourceSet_forced, sourceSet_sfm, magType="psf",
     yvec = mag_f - mag_s
     if ymin is None: ymin = -0.01
     if ymax is None: ymax =  0.10
-        
+
     if maglim is not None:
         good = mag_f < maglim
 
@@ -7230,7 +7230,7 @@ def analyzeForced(dataId, sourceSet_forced, sourceSet_sfm, magType="psf",
     #
     # Time to plot
     #
-    fig = getMpFigure(fig)    
+    fig = getMpFigure(fig)
     axes = fig.add_axes((0.1, 0.1, 0.85, 0.80));
 
     if "s" in SG.lower():
@@ -7246,8 +7246,8 @@ def analyzeForced(dataId, sourceSet_forced, sourceSet_sfm, magType="psf",
 
     if maglim is not None:
         title += "%s < %g" % (magType, maglim)
-        
-    axes.set_title(re.sub(r"^\+\s*", str(dataId) + " ", title))    
+
+    axes.set_title(re.sub(r"^\+\s*", str(dataId) + " ", title))
     #
     # Make plot live
     #
@@ -7258,7 +7258,7 @@ def analyzeForced(dataId, sourceSet_forced, sourceSet_sfm, magType="psf",
         xvec[nonStellar] = -1000
     if "s" not in SG.lower():
         xvec[stellar] = -1000
-    
+
     eventHandlers[fig] = EventHandler(axes, xvec, yvec, ids, x, y, flags, frames=frames)
 
     fig.show()
@@ -7277,11 +7277,11 @@ def showFlags(source, onlyTrue=True):
         if onlyTrue and not val:
             continue
         print "%-30s %s" % (f, val)
-        
+
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-from lsst.pipe.tasks.astrometry import AstrometryTask
+#from lsst.pipe.tasks.astrometry import AstrometryTask
 import lsst.meas.astrom.sip as astromSip
 
 def improveWcs(wcs, matched, sipOrder=3):
@@ -7319,7 +7319,7 @@ def improveWcs(wcs, matched, sipOrder=3):
 
         dz = np.hypot(dx, dy)
         i = np.arange(len(dz))
-        
+
         nsigma = 4
         rms = np.median(dz)*medToOneDRms
         good = dz < nsigma*rms
@@ -7340,9 +7340,9 @@ def improveWcs(wcs, matched, sipOrder=3):
             axes.plot(i[good], dz[good], "g.")
             axes.plot(i[bad], dz[bad], "r.")
             fig.show()
-            import pdb; pdb.set_trace() 
+            import pdb; pdb.set_trace()
         sipOrder += 1
-        
+
         rmv = afwTable.ReferenceMatchVector()
         rmv.reserve(int(sum(good)))
         for i, m in enumerate(matched):
@@ -7372,7 +7372,7 @@ def findSourcesAllBands(data, objId, frame=None, fileName=None, showFile=True, d
         visitKey = "visit"
         if "visit" not in ids:
             visitKey = "filter"
-            
+
         _suffixes[ids[visitKey]] = (k, filterName)
 
     # Force suffixes to be in blue-to-red order of bands
@@ -7390,8 +7390,8 @@ def findSourcesAllBands(data, objId, frame=None, fileName=None, showFile=True, d
             continue
 
         if m:
-            break        
-    
+            break
+
     if not m:
         print "\n\aFailed to match object %d == %s" % (objId, data.mapperInfo.splitId(objId, asDict=False))
         return
@@ -7476,7 +7476,7 @@ def findSourcesAllBands(data, objId, frame=None, fileName=None, showFile=True, d
                     ima = cim.getArray()
                     ima[np.logical_not(np.isfinite(ima))] = 0
                     del ima
-                    
+
                     ifp[0] = cim
 
         if fileName:
@@ -7493,7 +7493,7 @@ def findSourcesAllBands(data, objId, frame=None, fileName=None, showFile=True, d
             if showFile:
                 import matplotlib.pyplot as plt
                 import matplotlib.image as mpimg
-                
+
                 img = mpimg.imread(fileName)
                 plt.figure(1)
                 plt.clf()
@@ -7579,7 +7579,7 @@ def setEventCallbacks():
 
     def callbackP(*args, **kwargs):
         """Switch to previous ds9 frame"""
-        ds9.ds9Cmd("frame prev")   
+        ds9.ds9Cmd("frame prev")
     eventCallbacks['p'] = callbackP
 
     def callbackLog(ev, s, exp, frame):
@@ -7613,4 +7613,3 @@ def setFrameEventCallbacks(extraFrames, zoomfac=1.0):
         for frame in [frame] + extraFrames:
             ds9.ds9Cmd("scale linear; scale zscale", frame=frame)
     eventCallbacks['l'] = callbackLinear
-        
