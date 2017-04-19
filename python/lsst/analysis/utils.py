@@ -953,6 +953,11 @@ def makeMapperInfo(butler):
             See obs/subaru/python/lsst/obs/hscSim/hscMapper.py"""
             mapper = HscMapperInfo.Mapper
 
+            try:
+                oid[0]
+            except TypeError:
+                oid = [oid]
+
             oid = np.array(oid, dtype='int64')
             objId = np.bitwise_and(oid, 2**mapper._nbit_id - 1)
             oid >>= mapper._nbit_id
@@ -965,7 +970,7 @@ def makeMapperInfo(butler):
 
                 if filterId.size == 1:
                     filterId = [int(filterId)] # as you can't iterate over a length-1 np array
-                    
+
                 for fid in set(filterId):
                     name = afwImage.Filter(int(fid)).getName()
 
@@ -986,12 +991,13 @@ def makeMapperInfo(butler):
             oid >>= mapper._nbit_patch
             add = np.core.defchararray.add # why isn't this easier to find?
             patch = add(add(patchX.astype(str), ","), patchY.astype(str))
-            patch.shape = filterName.shape # why do I have to do this?
+            patch.shape = patchY.shape # why do I have to do this?
 
             tract = oid.astype('int32')
 
             if oid.size == 1:     # sqlite doesn't like numpy types
-                filterName = str(filterName[0])
+                if filterName:
+                    filterName = str(filterName[0])
                 tract = int(tract)
                 patch = str(patch[0])
                 objId = int(objId)
@@ -1287,9 +1293,6 @@ raft or sensor may be None (meaning get all)
             elif dataType == 'src':
                 cat = dataElem
                 sch = cat.getSchema()
-                idKey = sch.find("id").getKey()
-                parentKey = sch.find("parent").getKey()
-                extendednessKey = sch.find("classification.extendedness").getKey()
                 
                 if self.hasCmodel is None:
                     self.hasCmodel = True if len(sch.extract("cmodel*")) > 0 else False
@@ -1305,14 +1308,14 @@ raft or sensor may be None (meaning get all)
 
                     extendedness = np.where(cat.get(modelFluxName)*corrFac/cat.getPsfFlux() > 1.04, 1.0, 0.0)
                     extendedness = np.where(np.isfinite(cat.get(modelFluxName)),
-                                            extendedness, cat.get(extendednessKey))
-                    cat.get(extendednessKey)[:] = extendedness
+                                            extendedness, cat.get("classification.extendedness"))
+                    cat.get("classification.extendedness")[:] = extendedness
 
                     if False:
                         cmodel_bad = cat.get("cmodel.flux.flags")
                         for m in ["initial", "exp", "dev"]:
                             cmodel_bad = np.logical_or(cmodel_bad, cat.get("cmodel.%s.flux.flags" % m))
-                        cat.get(extendednessKey)[:] = cmodel_bad
+                        cat.get("classification.extendedness")[:] = cmodel_bad
 
                     global warnedHackExtendedness
                     if not warnedHackExtendedness:
