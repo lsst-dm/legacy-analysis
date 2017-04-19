@@ -129,7 +129,7 @@ all the other peaks in its footprint are marked with x (cyan if deblended-as-psf
         kim = kidImages[kid]
         #
         # Put the child into the correct place in the parent image.  We have to do this for
-        # the parent too if some of the children extended outside it's BBox
+        # the parent too if some of the children extended outside its BBox
         #
         bbox = afwGeom.Box2I(afwGeom.Point2I(kim.getX0() - imBbox.getMinX(),
                                              kim.getY0() - imBbox.getMinY()), kim.getDimensions())
