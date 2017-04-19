@@ -8,7 +8,7 @@ try:
 except ImportError:
     pyplot = None
 import lsst.pex.exceptions as pexExcept
-import lsst.pex.logging as pexLogging
+#import lsst.pex.logging as pexLogging
 import lsst.pex.policy as pexPolicy
 import lsst.daf.persistence as dafPersist
 
@@ -91,8 +91,11 @@ except NameError:
 try:
     log
 except:
-    log = pexLogging.Log.getDefaultLog()
-    #log.setThreshold(pexLogging.Log.DEBUG);
+    if False:
+        log = pexLogging.Log.getDefaultLog()
+        log.setThreshold(pexLogging.Log.DEBUG);
+    else:
+        log = None
 
 try:
     import MySQLdb
@@ -338,7 +341,7 @@ def makeMapperInfo(butler):
     if not butler:
         return None
 
-    mapper = butler.mapper
+    mapper = butler._getDefaultMapper()
     
     class MapperInfo(object):
         @staticmethod
@@ -704,8 +707,11 @@ def makeMapperInfo(butler):
 
     #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-    from lsst.meas.photocal.colorterms import Colorterm
-    from lsst.obs.suprimecam.colorterms import colortermsData
+    from lsst.pipe.tasks.colorterms import Colorterm
+    try:
+        from lsst.obs.suprimecam.colorterms import colortermsData
+    except ImportError as e:
+        pass
 
     class SubaruMapperInfo(MapperInfo):
         def __init__(self, Mapper):
@@ -889,7 +895,10 @@ def makeMapperInfo(butler):
             SubaruMapperInfoMit.Mapper = Mapper
             SubaruMapperInfo._Colorterm.setColorterms(colortermsData, "MIT")
 
-    from lsst.obs.hsc.colorterms import colortermsData
+    try:
+        from lsst.obs.hsc.colorterms import colortermsData
+    except ImportError as e:
+        pass
 
     class HscMapperInfo(SubaruMapperInfo):
         def __init__(self, Mapper):
@@ -1009,15 +1018,15 @@ def makeMapperInfo(butler):
 
     #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-    if isinstance(mapper, LsstSimMapper):
+    if mapper == LsstSimMapper:
         return LsstSimMapperInfo(LsstSimMapper)
-    elif isinstance(butler.mapper, SdssMapper):
+    elif mapper == SdssMapper:
         return SdssMapperInfo(SdssMapper)
-    elif isinstance(butler.mapper, SuprimecamMapper):
+    elif mapper == SuprimecamMapper:
         return SubaruMapperInfo(SuprimecamMapper)
-    elif isinstance(butler.mapper, SuprimecamMapperMit):
+    elif mapper == SuprimecamMapperMit:
         return SubaruMapperInfoMit(SuprimecamMapperMit)
-    elif isinstance(butler.mapper, HscMapper):
+    elif mapper == HscMapper:
         return HscMapperInfo(HscMapper)
     else:
         raise RuntimeError("Impossible mapper")
@@ -6020,7 +6029,7 @@ There are also some static values in EventHander which you may set from the comm
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-class PsfModelImage(cameraGeomUtils.GetCcdImage):
+class PsfModelImage(cameraGeomUtils.FakeImageDataSource):
     """A class to return an Image of a given Ccd based on its cameraGeometry"""
     
     def __init__(self, butler, bin=10, background=np.nan, verbose=False, stampSize=0, *args, **kwargs):
@@ -6105,7 +6114,7 @@ def showPsfModelImage(butler, visit, bin=20, stampSize=0, frame=0, verbose=False
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-class ResidualImage(cameraGeomUtils.GetCcdImage):
+class ResidualImage(cameraGeomUtils.FakeImageDataSource):
     """A class to return an Image of a given Ccd based on its cameraGeometry"""
     
     def __init__(self, butler, magMin=None, magLim=30, magType="psf", apCorr=1.0, showPsfStars=False,
@@ -7284,7 +7293,7 @@ def showFlags(source, onlyTrue=True):
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-from lsst.pipe.tasks.astrometry import AstrometryTask
+from lsst.meas.astrom import AstrometryTask
 import lsst.meas.astrom.sip as astromSip
 
 def improveWcs(wcs, matched, sipOrder=3):

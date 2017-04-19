@@ -29,7 +29,6 @@ deblender.showBlend(calexp, families, frame=0)
 import math, re, sys
 
 import utils
-import lsst.pex.logging as pexLog
 import lsst.afw.detection as afwDet
 import lsst.afw.geom as afwGeom
 import lsst.afw.image as afwImage
@@ -67,8 +66,8 @@ def drawEllipses(plt, src, **kwargs):
 def plotDeblendFamily(mi, parent, kids, mapperInfo=None, dkids=[],
                       background=-10, symbolSize=2,
                       plotb=False, ellipses=True,
-                      arcsinh=True, maskbit=False, frame=0):
-    """Display a deblend on ds9
+                      arcsinh=True, maskbit=False, display=None):
+    """Display a deblend using afwDisplay
 
 Each child is marked with a + at its centre (green if deblended-as-psf else red)
 all the other peaks in its footprint are marked with x (cyan if deblended-as-psf else magenta)
@@ -135,7 +134,7 @@ all the other peaks in its footprint are marked with x (cyan if deblended-as-psf
                                              kim.getY0() - imBbox.getMinY()), kim.getDimensions())
 
         _kim = parent_im.Factory(imBbox)
-        _kim[bbox] <<= kim
+        _kim[bbox] = kim
         mos.append(_kim, '%d%s' % (mapperInfo.getId(kid) if mapperInfo else (kid.getId() & 0xfff),
                                    "P" if kid == parent else "C"))
         del _kim
@@ -144,29 +143,29 @@ all the other peaks in its footprint are marked with x (cyan if deblended-as-psf
         title = re.sub(r"[{}']", "", str(mapperInfo.getId(parent, None))) # ds9 doesn't handle those chars well
     else:
         title = "0x%x == %d" % (parent.getId(), (parent.getId() & 0xffff))
-    mosaicImage = mos.makeMosaic(frame=frame, title=title)
-    ds9.dot("%s  (%.1f, %1.f)" % (title, parent.getX(), parent.getY()),
-            0.5*mosaicImage.getWidth(), 1.03*mosaicImage.getHeight(), frame=frame,
-            ctype=ds9.BLACK, fontFamily="times", size=3)
+    mosaicImage = mos.makeMosaic(display=display, title=title)
+    display.dot("%s  (%.1f, %1.f)" % (title, parent.getX(), parent.getY()),
+            0.5*mosaicImage.getWidth(), 1.03*mosaicImage.getHeight(),
+            ctype=afwDisplay.BLACK, fontFamily="times", size=3)
 
-    with ds9.Buffering():
+    with display.Buffering():
         for i, src in enumerate([parent] + kids):    
             x0, y0 = mos.getBBox(i).getMin()
             x0 -= parent_im.getX0(); y0 -= parent_im.getY0()          
 
             if src.get("deblend.deblended-as-psf"):
-                centroid_ctype = ds9.GREEN
-                peak_ctype = ds9.CYAN
+                centroid_ctype = afwDisplay.GREEN
+                peak_ctype = afwDisplay.CYAN
             else:
-                centroid_ctype = ds9.RED
-                peak_ctype = ds9.MAGENTA
+                centroid_ctype = afwDisplay.RED
+                peak_ctype = afwDisplay.MAGENTA
             
-            ds9.dot("+", src.getX() + x0, src.getY() + y0, frame=frame,
+            display.dot("+", src.getX() + x0, src.getY() + y0,
                     size=symbolSize, ctype=centroid_ctype)
             for p in src.getFootprint().getPeaks():
-                ds9.dot("x", p.getFx() + x0, p.getFy() + y0, frame=frame,
+                display.dot("x", p.getFx() + x0, p.getFy() + y0,
                         size=0.5*symbolSize if i == 0 else symbolSize,
-                        ctype=ds9.YELLOW if i == 0 else peak_ctype)
+                        ctype=afwDisplay.YELLOW if i == 0 else peak_ctype)
 
         if False:
             if len(kid.flags):
@@ -217,7 +216,7 @@ all the other peaks in its footprint are marked with x (cyan if deblended-as-psf
 
 def footprintToImage(fp, mi=None, mask=False):
     if fp.isHeavy():
-        fp = afwDet.cast_HeavyFootprintF(fp)
+        pass
     elif mi is None:
         print >> sys.stderr, "Unable to make a HeavyFootprint as image is None"
     else:
@@ -300,8 +299,8 @@ class Families(list):
             oneObjCatalog.table.defineCentroid(centroidName)
 
             s = oneObjCatalog.addNew()
-            s.set("%s.x" % centroidName, x)
-            s.set("%s.y" % centroidName, y)
+            s.set("%s_x" % centroidName, x)
+            s.set("%s_y" % centroidName, y)
 
             matched = afwTable.matchXy(self.cat, oneObjCatalog, matchRadius)
 
@@ -342,79 +341,86 @@ def findFamily(families, objId):
 
     return families.find(objId)
 
-def makeDisplayFamily(calexp, families, matchRadius=20, background=-10, frame=None):
+def makeDisplayFamily(calexp, families, matchRadius=20, background=0, display=None):
     """Factory function for callback function implementing showBlend"""
     def display_family(k, x, y):
         x0, y0 = calexp.getXY0()
         fam = families.find((x + x0, y + y0), matchRadius=matchRadius)
         if fam:
-            plotDeblendFamily(calexp, *fam, mapperInfo=families.mapperInfo, background=background, frame=frame)
+            plotDeblendFamily(calexp, *fam, mapperInfo=families.mapperInfo, background=background,
+                              display=display)
 
     return display_family
 
-def showBlend(calexp, families, key='d', frame0=0, frame=None, mtv=False):
+def showBlend(calexp, families, key='d', display=None, imageDisplay=None, mtv=False):
     """Show blends interactively on ds9
 
     \param calexp   Exposure containing objects of interest
     \param families A Families object
     \param key      Key to display the family under the cursor in frame frame
-    \param frame0   The ds9 frame to display the families
-    \param frame    The ds9 frame displaying calexp (see mtv)
-    \param mtv      If true, display calexp in ds9 frame frame
+    \param display The afwDisplay to display the families
+    \param imageDisplay  The afwDisplay displaying the image
+    \param mtv      If true, display calexp in display
 
 E.g.
 import lsst.daf.persistence as dafPersist
 import lsst.analysis.deblender as deblender
+
+import lsst.afw.display as afwDisplay
+
+disp1  = afwDisplay.Display(1)
+disp2 = afwDisplay.Display(2)
 
 butler = dafPersist.Butler("/home/astro/hsc/hsc/HSC/rerun/rhl/tmp")
 did = dict(visit=905518, ccd=31)
 calexp = butler.get("calexp", **did)
 ss = butler.get("src", **did)
 families = deblender.Families(ss, butler, nChildMin=0)
-deblender.showBlend(calexp, families, frame=1)
+deblender.showBlend(calexp, families, disp1, disp2)
 
 Then hit 'key' (default: d) on objects of interest
 """
-    if frame is not None:
+    if imageDisplay is not None:
         if mtv:
-            ds9.mtv(calexp, frame=frame)
-        ds9.ds9Cmd(ds9.selectFrame(frame))
+            imageDisplay.mtv(calexp)
+        #ds9.ds9Cmd(ds9.selectFrame(frame))
 
     old = {}
     try:
         for k in set(list("ha") + [key]):
-            old[k] = ds9.setCallback(k)
+            old[k] = display.setCallback(k)
 
-        ds9.setCallback(key, makeDisplayFamily(calexp, families, frame=frame0))
+        display.setCallback(key, makeDisplayFamily(calexp, families, display=display))
         def new_h(*args):
             old['h'](*args)
             print "   1,2,4,8: Zoom to specified scale"
             print "   a:       show All the pixels"
             print "   %s:      show family under the cursor and return to python prompt" % key
-            print "   l:       cycle through sretch types"
-        ds9.setCallback('h', new_h)
-        ds9.setCallback('a', lambda k, x, y: ds9.ds9Cmd("zoom to fit", frame=frame0))
+            print "   l:       cycle through stretch types"
+        display.setCallback('h', new_h)
+        #display.setCallback('a', lambda k, x, y: ds9.ds9Cmd("zoom to fit", frame=frame0))
         for z in [1, 2, 4, 8]:
             def _zoom(k, x, y, z=z):
-                ds9.zoom(z, frame=frame0)
-            ds9.setCallback('%d' % z, _zoom)
+                """Zoom to %d""" % z
+                display.zoom(z)
+            display.setCallback('%d' % z, _zoom)
         
         def callbackLog(k, x, y, i=[0]):
             """Cycle through stretches"""
             i[0] = (i[0] + 1)%3
             if i[0] == 0:
-                ds9.ds9Cmd("scale log; scale minmax")
+                display.scale("log", "minmax")
             elif i[0] == 1:
-                ds9.ds9Cmd("scale linear; scale minmax")
+                display.scale("linear", "minmax")
             elif i[0] == 2:
-                ds9.ds9Cmd("scale linear; scale zscale")
+                display.scale("linear", "zscale")
 
-        ds9.setCallback('l', callbackLog)
+        display.setCallback('l', callbackLog)
 
-        ds9.interact()
+        display.interact()
     except Exception, e:
         print "RHL", e
     finally:
         print "Cleaning up"
         for k, func in old.items():
-            ds9.setCallback(k, func)
+            display.setCallback(k, func)
