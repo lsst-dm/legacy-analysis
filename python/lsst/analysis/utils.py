@@ -341,7 +341,11 @@ def makeMapperInfo(butler):
     if not butler:
         return None
 
-    mapper = butler._getDefaultMapper()
+    class Foo(object):
+        def __init__(self):
+            self.mapper = "lsst.obs.hsc.HscMapper"
+            
+    mapper = butler._getDefaultMapper([Foo()])
     
     class MapperInfo(object):
         @staticmethod

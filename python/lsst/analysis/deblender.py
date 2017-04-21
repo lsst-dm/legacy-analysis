@@ -191,7 +191,7 @@ all the other peaks in its footprint are marked with x (cyan if deblended-as-psf
 
 def footprintToImage(fp, mi=None, mask=False):
     if fp.isHeavy():
-        pass
+        fp = afwDet.cast_HeavyFootprintF(fp)
     elif mi is None:
         print >> sys.stderr, "Unable to make a HeavyFootprint as image is None"
     else:
