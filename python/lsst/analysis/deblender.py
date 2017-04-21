@@ -4,9 +4,11 @@ Based on Dustin Lang's code in meas_deblender/examples, but heavily rewritten si
 
 E.g.
 import lsst.daf.persistence as dafPersist
-import lsst.afw.display.ds9 as ds9
+import lsst.afw.display as afwDisplay
 import lsst.analysis.utils as utils
 import lsst.analysis.deblender as deblender
+
+disp = afwDisplay.Display()
 
 butler = dafPersist.Butler(os.path.join(os.environ["SUPRIME_DATA_DIR"], "rerun", "rhl", "realFlats"))
 dataId = dict(visit=905518, ccd=31)
@@ -15,25 +17,27 @@ ss = butler.get('src', **dataId)
 families = deblender.Families(ss, butler, nChildMin=0)
 
 frame=1            # We'll use 0 for the children
-ds9.mtv(calexp, title="%(visit)s %(ccd)s" % dataId, frame=frame)
+disp.mtv(calexp, title="%(visit)s %(ccd)s" % dataId, frame=frame)
 utils.showSourceSet(ss, frame=frame)
-utils.showSourceSet(ss, mapperInfo=families.mapperInfo, frame=frame, symb='id', size=1.0, fontFamily="times", ctype=ds9.GREEN)
+utils.showSourceSet(ss, mapperInfo=families.mapperInfo, frame=frame, symb='id', size=1.0, fontFamily="times", ctype=afwDisplay.GREEN)
 #
-# This puts us into a loop waiting on ds9.  Sigh.
-# Use d on an object in frame 1 to show the children in frame 0; q to quit the ds9 interactive loop
+# This puts us into a loop waiting on afwDisplay.  Sigh.
+# Use d on an object in frame 1 to show the children in frame 0; q to quit the interactive loop
 #
-deblender.showBlend(calexp, families, frame=0)
+deblender.showBlend(calexp, families, display=disp)
 
 """
 
 import math, re, sys
+import numpy as np
 
 import utils
 import lsst.afw.detection as afwDet
 import lsst.afw.geom as afwGeom
 import lsst.afw.image as afwImage
 import lsst.afw.table as afwTable
-import lsst.afw.display.ds9 as ds9
+import lsst.afw.display as afwDisplay
+import lsst.afw.display.rgb as afwRgb
 import lsst.afw.display.utils as displayUtils
 
 def getEllipses(src, nsigs=[1.], **kwargs):
@@ -63,21 +67,10 @@ def drawEllipses(plt, src, **kwargs):
         plt.gca().add_artist(el)
     return els
 
-def plotDeblendFamily(mi, parent, kids, mapperInfo=None, dkids=[],
-                      background=-10, symbolSize=2,
-                      plotb=False, ellipses=True,
-                      arcsinh=True, maskbit=False, display=None):
-    """Display a deblend using afwDisplay
-
-Each child is marked with a + at its centre (green if deblended-as-psf else red)
-all the other peaks in its footprint are marked with x (cyan if deblended-as-psf else magenta)
+def makeDeblendFamilyMosaic(mi, parent, kids, mapperInfo=None,
+                            background=-10, maskbit=False, imBbox=None):
+    """Create a mosaic of an object's children
     """
-
-    if mi:
-        try:
-            mi = mi.getMaskedImage()        # maybe it's an Exposure?
-        except AttributeError:
-            pass
 
     aa = {}
     if maskbit:
@@ -91,13 +84,11 @@ all the other peaks in its footprint are marked with x (cyan if deblended-as-psf
     piy = [pk.getIy() for pk in pks]
     pfx = [pk.getFx() for pk in pks]
     pfy = [pk.getFy() for pk in pks]
-    if ellipses:
-        ell = (parent.getX(), parent.getY(), parent.getIxx(), parent.getIyy(), parent.getIxy())
 
     N = 1 + len(kids)
-    S = math.ceil(math.sqrt(N))
+    S = np.ceil(np.sqrt(N))
     C = S
-    R = math.ceil(float(N)/C)
+    R = np.ceil(float(N)/C)
 
     Rx,Ry = [],[]
     tts = []
@@ -106,18 +97,20 @@ all the other peaks in its footprint are marked with x (cyan if deblended-as-psf
     #
     # Find how large an image we need to display the parent and all the children
     #
-    imBbox = parent_im.getBBox(afwImage.PARENT)
     kidImages, kim = {}, None
     for kid in kids:
         kim = footprintToImage(kid.getFootprint(), mi, **aa)
         kidImages[kid] = kim
-        
-        imBbox.include(kim.getBBox(afwImage.PARENT))
-
-    mos = displayUtils.Mosaic(background=background)
 
     if not kim:
         kim = parent_im.clone()
+
+    if not imBbox:
+        imBbox = parent_im.getBBox(afwImage.PARENT)
+        for kid in kids:
+            imBbox.include(kidImages[kid].getBBox(afwImage.PARENT))
+
+    mos = displayUtils.Mosaic(background=background)
         
     bbox = afwGeom.Box2I(afwGeom.Point2I(kim.getX0() - imBbox.getMinX(),
                                          kim.getY0() - imBbox.getMinY()), kim.getDimensions())
@@ -134,26 +127,55 @@ all the other peaks in its footprint are marked with x (cyan if deblended-as-psf
                                              kim.getY0() - imBbox.getMinY()), kim.getDimensions())
 
         _kim = parent_im.Factory(imBbox)
-        _kim[bbox] = kim
+        if kid.getFootprint().getBBox().isEmpty():
+            _kim[:] = 0
+            pass
+        else:
+            _kim[bbox] = kim
+
         mos.append(_kim, '%d%s' % (mapperInfo.getId(kid) if mapperInfo else (kid.getId() & 0xfff),
                                    "P" if kid == parent else "C"))
         del _kim
+
+    return mos
+
+def plotDeblendFamily(mi, parent, kids, mapperInfo=None, dkids=[],
+                      background=-10, symbolSize=2,
+                      plotb=False,
+                      arcsinh=True, maskbit=False, display=afwDisplay.getDisplay(0)):
+    """Display a deblend using afwDisplay
+
+Each child is marked with a + at its centre (green if deblended-as-psf else red)
+all the other peaks in its footprint are marked with x (cyan if deblended-as-psf else magenta)
+    """
+
+    if mi:
+        try:
+            mi = mi.getMaskedImage()        # maybe it's an Exposure?
+        except AttributeError:
+            pass
+    
+    mos = makeDeblendFamilyMosaic(mi, parent, kids, mapperInfo, background, maskbit)
 
     if mapperInfo:
         title = re.sub(r"[{}']", "", str(mapperInfo.getId(parent, None))) # ds9 doesn't handle those chars well
     else:
         title = "0x%x == %d" % (parent.getId(), (parent.getId() & 0xffff))
+
     mosaicImage = mos.makeMosaic(display=display, title=title)
+
     display.dot("%s  (%.1f, %1.f)" % (title, parent.getX(), parent.getY()),
             0.5*mosaicImage.getWidth(), 1.03*mosaicImage.getHeight(),
             ctype=afwDisplay.BLACK, fontFamily="times", size=3)
 
+    px0, py0 = footprintToImage(parent.getFootprint(), mi).getXY0()
+
     with display.Buffering():
         for i, src in enumerate([parent] + kids):    
             x0, y0 = mos.getBBox(i).getMin()
-            x0 -= parent_im.getX0(); y0 -= parent_im.getY0()          
+            x0 -= px0; y0 -= py0
 
-            if src.get("deblend.deblended-as-psf"):
+            if src.get("deblend_deblendedAsPsf"):
                 centroid_ctype = afwDisplay.GREEN
                 peak_ctype = afwDisplay.CYAN
             else:
@@ -166,53 +188,6 @@ all the other peaks in its footprint are marked with x (cyan if deblended-as-psf
                 display.dot("x", p.getFx() + x0, p.getFy() + y0,
                         size=0.5*symbolSize if i == 0 else symbolSize,
                         ctype=afwDisplay.YELLOW if i == 0 else peak_ctype)
-
-        if False:
-            if len(kid.flags):
-                tt += ', ' + ', '.join(kid.flags)
-
-        if False:
-            # peak(s)
-            plt.plot(kid.pfx, kid.pfy, 'x', **sty2)
-            xys.append((kid.pfx, kid.pfy, sty2))
-            # centroid
-            plt.plot([kid.cx], [kid.cy], 'x', **sty1)
-            xys.append(([kid.cx], [kid.cy], sty1))
-            # ellipse
-            if ellipses and not kid.ispsf:
-                drawEllipses(plt, kid, ec=sty1['color'], fc='none', alpha=0.7)
-            if plotb:
-                plt.axis(ext)
-            else:
-                plt.axis(pax)
-
-
-    # add child centers and ellipses...
-    if False:
-        for x,y,sty in xys:
-            plt.plot(x, y, 'x', **sty)
-    if ellipses:
-        for kid,sty in zip(kids,stys):
-            if kid.ispsf:
-                continue
-            drawEllipses(plt, kid, ec=sty['color'], fc='none', alpha=0.7)
-    if False:
-        plt.plot([parent.getX()], [parent.getY()], 'x', color='b')
-        if ellipses:
-            drawEllipses(plt, parent, ec='b', fc='none', alpha=0.7)
-
-    # Plot dropped kids
-    for kid in dkids:
-        ext = kid.ext
-        # bounding box
-        xx = [ext[0],ext[1],ext[1],ext[0],ext[0]]
-        yy = [ext[2],ext[2],ext[3],ext[3],ext[2]]
-        plt.plot(xx, yy, 'y-')
-        # peak(s)
-        plt.plot(kid.pfx, kid.pfy, 'yx')
-    
-    #plt.axis(pax)
-    
 
 def footprintToImage(fp, mi=None, mask=False):
     if fp.isHeavy():
@@ -341,49 +316,102 @@ def findFamily(families, objId):
 
     return families.find(objId)
 
-def makeDisplayFamily(calexp, families, matchRadius=20, background=0, display=None):
+def makeDisplayFamily(calexp, families, matchRadius=20, background=-0.1, display=None, rgb=False):
     """Factory function for callback function implementing showBlend"""
     def display_family(k, x, y):
-        x0, y0 = calexp.getXY0()
-        fam = families.find((x + x0, y + y0), matchRadius=matchRadius)
+        if calexp is not None:
+            xy0 = calexp.getXY0()
+            x += xy0[0]
+            y += xy0[1]
+        fam = families.find((x, y), matchRadius=matchRadius)
         if fam:
-            plotDeblendFamily(calexp, *fam, mapperInfo=families.mapperInfo, background=background,
-                              display=display)
+            if rgb:
+                plotDeblendFamilyRGB(fam[0], rgbFileFmt="AI-%.0f,%.0f-%%s.png" % (x, y))
+            else:
+                plotDeblendFamily(calexp, *fam, mapperInfo=None, background=background, 
+                                  display=display)
 
     return display_family
 
-def showBlend(calexp, families, key='d', display=None, imageDisplay=None, mtv=False):
-    """Show blends interactively on ds9
+#
+# plotDeblendFamilyRGB uses a couple of dicts to avoid repeated I/O
+#
+try:
+    coaddDict
+except NameError:
+    coaddDict = {}
+try:
+    familiesDict
+except NameError:
+    familiesDict = {}
+
+def plotDeblendFamilyRGB(parent, bands=['g', 'r', 'i'],
+                         min=0.01, max=0.5, Q=8, rgbFileFmt=None):
+    x, y = parent.getX(), parent.getY()
+
+    fams = {}
+    imBbox = afwGeom.BoxI()
+    for bandName in "GRI".upper():
+        filterName = "HSC-%s" % bandName
+
+        x0, y0 = coaddDict[filterName].getXY0()
+        x0, y0 = 0, 0
+        fams[filterName] = familiesDict[filterName].find((x + x0, y + y0), matchRadius=20)
+        if not fams[filterName]:
+            return
+        parent, kids = fams[filterName]
+
+        bbox = parent.getFootprint().getBBox()
+        for kid in kids:
+            kim = footprintToImage(kid.getFootprint(), coaddDict[filterName].getMaskedImage())
+            bbox.include(kim.getBBox(afwImage.PARENT))
+
+        imBbox.include(bbox)
+
+    images = {} 
+    for bandName in bands:
+        filterName = "HSC-%s" % bandName.upper()
+
+        images[bandName] = makeDeblendFamilyMosaic(coaddDict[filterName].getMaskedImage(),
+                                                   *fams[filterName],
+                                                    background=-0.1, imBbox=imBbox).makeMosaic(display=None)
+
+    for bands in [bands]:
+        B, G, R = bands
+        rgb = afwRgb.makeRGB(images[R], images[G], images[B], min, max - min, Q)
+
+        afwRgb.displayRGB(rgb, show=True)
+
+        if rgbFileFmt:
+            afwRgb.writeRGB(rgbFileFmt % "".join(bands), rgb)
+
+def showBlend(calexp, families, key='d', background=0.0, display=afwDisplay.getDisplay(0),
+              imageDisplay=None, mtv=False):
+    """Show blends interactively on an afwDisplay
 
     \param calexp   Exposure containing objects of interest
     \param families A Families object
-    \param key      Key to display the family under the cursor in frame frame
-    \param display The afwDisplay to display the families
-    \param imageDisplay  The afwDisplay displaying the image
-    \param mtv      If true, display calexp in display
+    \param key      Key to display the family under the cursor in Display display
+    \param display The afwDisplay.Display to display the families
+    \param imageDisplay  The afwDisplay.Display displaying calexp (see mtv)
+    \param mtv      If true, display calexp on display
 
 E.g.
 import lsst.daf.persistence as dafPersist
 import lsst.analysis.deblender as deblender
-
-import lsst.afw.display as afwDisplay
-
-disp1  = afwDisplay.Display(1)
-disp2 = afwDisplay.Display(2)
 
 butler = dafPersist.Butler("/home/astro/hsc/hsc/HSC/rerun/rhl/tmp")
 did = dict(visit=905518, ccd=31)
 calexp = butler.get("calexp", **did)
 ss = butler.get("src", **did)
 families = deblender.Families(ss, butler, nChildMin=0)
-deblender.showBlend(calexp, families, disp1, disp2)
+deblender.showBlend(calexp, families, display=afwDisplay.Display(1))
 
-Then hit 'key' (default: d) on objects of interest
+Then hit 'key' (default: d) on objects of interest; 'r' for an rgb image
 """
-    if imageDisplay is not None:
+    if display is not None:
         if mtv:
             imageDisplay.mtv(calexp)
-        #ds9.ds9Cmd(ds9.selectFrame(frame))
 
     old = {}
     try:
@@ -398,10 +426,10 @@ Then hit 'key' (default: d) on objects of interest
             print "   %s:      show family under the cursor and return to python prompt" % key
             print "   l:       cycle through stretch types"
         display.setCallback('h', new_h)
-        #display.setCallback('a', lambda k, x, y: ds9.ds9Cmd("zoom to fit", frame=frame0))
+        display.setCallback('a', lambda k, x, y: display.zoom("to fit"))
         for z in [1, 2, 4, 8]:
             def _zoom(k, x, y, z=z):
-                """Zoom to %d""" % z
+                """Zoom by %d""" % z
                 display.zoom(z)
             display.setCallback('%d' % z, _zoom)
         
@@ -414,13 +442,14 @@ Then hit 'key' (default: d) on objects of interest
                 display.scale("linear", "minmax")
             elif i[0] == 2:
                 display.scale("linear", "zscale")
-
         display.setCallback('l', callbackLog)
 
+        display.setCallback('r', makeDisplayFamily(calexp, families, rgb=True))
+
         display.interact()
-    except Exception, e:
-        print "RHL", e
+    except Exception as e:
+        print ("Error in callback: %s" % e)
     finally:
-        print "Cleaning up"
         for k, func in old.items():
             display.setCallback(k, func)
+
