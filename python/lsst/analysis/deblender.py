@@ -191,6 +191,10 @@ all the other peaks in its footprint are marked with x (cyan if deblended-as-psf
 
 def footprintToImage(fp, mi=None, mask=False):
     if fp.isHeavy():
+        try:
+            fp = afwDet.cast_HeavyFootprintF(fp) # not needed with pybind11
+        except AttributeError:
+            pass
         pass
     elif mi is None:
         print >> sys.stderr, "Unable to make a HeavyFootprint as image is None"
@@ -450,6 +454,7 @@ Then hit 'key' (default: d) on objects of interest; 'r' for an rgb image
     except Exception as e:
         print ("Error in callback: %s" % e)
     finally:
+        # Cleaning up; disable if you want to be able to call and debug the callbacks
         for k, func in old.items():
             display.setCallback(k, func)
 
