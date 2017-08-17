@@ -1564,8 +1564,9 @@ Plotted symbols are:
                              showGalaxies=False, verbose=False, allSources=False):
         calexp_md = self.butler.get(dtName("calexp", True), **dataId)
         wcs = afwImage.makeWcs(calexp_md)
-        imageSize = calexp_md.get("NAXIS1"), calexp_md.get("NAXIS2")
-        xy0 = (calexp_md.get("CRVAL1A"), calexp_md.get("CRVAL2A"),)
+        bbox = afwImage.bboxFromMetadata(calexp_md)
+        imageSize = bbox.getDimensions()
+        xy0 = bbox.getMin()
         filterName = afwImage.Filter(calexp_md).getName()
             
         calib = afwImage.Calib(calexp_md)
@@ -4512,7 +4513,7 @@ If selectObjId is provided, it's a function that returns True or False for each 
     zp = np.empty_like(xmm); jacobian = np.empty_like(xmm)
     for i, did in enumerate(dataSets):
         calexp_md = data.butler.get(dtName("calexp", True), **did)
-        w, h = calexp_md.get("NAXIS1"), calexp_md.get("NAXIS2")
+        w, h = afwImage.bboxFromMetadata(calexp_md).getDimensions()
 
         ccd = cameraGeomUtils.findCcd(camera, cameraGeom.Id(did["ccd"]))
         xmm[i], ymm[i] = ccd.getPositionFromPixel(afwGeom.PointD(0.5*w, 0.5*h)).getMm()
@@ -5969,10 +5970,9 @@ There are also some static values in EventHander which you may set from the comm
                 bbox = self.s.getFootprint().getBBox()
                 grow = 0.5
                 bbox.grow(afwGeom.ExtentI(int(grow*bbox.getWidth()), int(grow*bbox.getHeight())))
-                bbox.shift(afwGeom.ExtentI(md.get("LTV1"), md.get("LTV2")))
-
-                bbox.clip(afwGeom.BoxI(afwGeom.PointI(0, 0),
-                                       afwGeom.ExtentI(md.get("NAXIS1"), md.get("NAXIS2"))))
+                imageBox = afwImage.bboxFromMetadata(md)
+                bbox.clip(imageBox)
+                bbox.shift(-afwGeom.ExtentI(imageBox.getMin()))
 
                 if ev.key == 'd':
                     calexp = self.data.butler.get(dtName("calexp_sub"), bbox=bbox, **dataId)
@@ -6684,7 +6684,7 @@ def plotFrames(das, fig=None):
     for k, da in das.items():
         for did in da.dataId:
             calexp_md = data.butler.get(dtName("calexp", True), **did)
-            w, h = calexp_md.get("NAXIS1"), calexp_md.get("NAXIS2")
+            w, h = afwImage.bboxFromMetadata(calexp_md).getDimensions()
             wcs = afwImage.makeWcs(calexp_md)
             xvec, yvec = [], []
             for x, y in [(0, 0), (w, 0), (w, h), (0, h),]:
