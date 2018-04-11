@@ -390,7 +390,7 @@ def plotDeblendFamilyRGB(parent, bands=['g', 'r', 'i'],
             afwRgb.writeRGB(rgbFileFmt % "".join(bands), rgb)
 
 def showBlend(calexp, families, key='d', background=0.0, display=afwDisplay.getDisplay(0),
-              imageDisplay=None, mtv=False):
+              imageDisplay=None, mtv=False, cleanupCallbacks=True):
     """Show blends interactively on an afwDisplay
 
     \param calexp   Exposure containing objects of interest
@@ -399,6 +399,8 @@ def showBlend(calexp, families, key='d', background=0.0, display=afwDisplay.getD
     \param display The afwDisplay.Display to display the families
     \param imageDisplay  The afwDisplay.Display displaying calexp (see mtv)
     \param mtv      If true, display calexp on display
+    \param cleanupCallbacks If True reset afwDisplay to its initial state upon exit
+                            (False is only useful for debugging errors in callbacks)
 
 E.g.
 import lsst.daf.persistence as dafPersist
@@ -454,7 +456,8 @@ Then hit 'key' (default: d) on objects of interest; 'r' for an rgb image
     except Exception as e:
         print ("Error in callback: %s" % e)
     finally:
-        # Cleaning up; disable if you want to be able to call and debug the callbacks
-        for k, func in old.items():
-            display.setCallback(k, func)
+        # Reset callbacks
+        if cleanupCallbacks:
+            for k, func in old.items():
+                display.setCallback(k, func)
 
