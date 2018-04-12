@@ -71,11 +71,11 @@ try:
     from lsst.obs.sdss.sdssMapper import SdssMapper
     _raw_ = "fpC"
     _visit_ = "run"
-except Exception, e:
+except Exception as e:
     try:
         SdssMapper
     except NameError:
-        print >> sys.stderr, "Importing SdssMapper:", e
+        print("Importing SdssMapper: %s" % e, file=sys.stderr)
         class SdssMapper(object): pass
 
 try:
@@ -232,7 +232,7 @@ def getMapper(registryRoot, defaultMapper=None, mapperFile="mapper.py"):
         Mapper = _locals.get("Mapper")
     except IOError:
         pass                        # the file doesn't exist; this isn't an error
-    except ImportError, e:
+    except ImportError:
         raise
 
     if not Mapper:
@@ -452,9 +452,8 @@ def makeMapperInfo(butler):
             filters = sorted(list(filters))
 
             if len(visits) > 1 and len(filters) > 1:
-                print >> sys.stderr, \
-                      "I don't know how to make a title out of multiple visits and filters: %s %s" % \
-                      (visits, filters)
+                print("I don't know how to make a title out of multiple visits and filters: %s %s" % \
+                      (visits, filters), file=sys.stderr)
                 visits = visits[0:1]
 
             title = "%s R%s S%s [%s]" % (getNameOfSet(visits),
@@ -671,9 +670,8 @@ def makeMapperInfo(butler):
             filters = sorted(list(filters))
 
             if len(runs) > 1 and len(filters) > 1:
-                print >> sys.stderr, \
-                      "I don't know how to make a title out of multiple runs and filters: %s %s" % \
-                      (runs, filters)
+                print("I don't know how to make a title out of multiple runs and filters: %s %s" % \
+                      (runs, filters), file=sys.stderr)
                 runs = runs[0:1]
 
             nameOfFilters = "".join(filters)
@@ -809,9 +807,8 @@ def makeMapperInfo(butler):
             visits = sorted(list(visits))
 
             if len(visits) > 1 and len(filters) > 1:
-                print >> sys.stderr, \
-                      "I don't know how to make a title out of multiple visits and filters: %s %s" % \
-                      (visits, filters)
+                print("I don't know how to make a title out of multiple visits and filters: %s %s" % \
+                      (visits, filters), file=sys.stderr)
                 visits = visits[0:1]
 
             title = "%s CCD%s [%s]" % (getNameOfSet(visits), getNameOfSet(ccds), ", ".join(filters))
@@ -849,9 +846,9 @@ def makeMapperInfo(butler):
             oid = np.right_shift(oid, 22).astype('int32')
 
             if _prefix_ == "stack":
-                print "Warning: not vectorized"
+                print("Warning: not vectorized")
                 nfilter = len(butler.mapper.filters)
-                nPatches = 1000000L
+                nPatches = 1000000
 
                 ifilter = oid % nfilter
                 oid //= nfilter
@@ -1059,7 +1056,7 @@ def getMpFigure(fig=None, clear=True):
                 i = sorted(mpFigures.keys())[i] # simulate list's [-n] syntax
             except IndexError:
                 if mpFigures:
-                    print >> sys.stderr, "Illegal index: %d" % i
+                    print("Illegal index: %d" % i, file=sys.stderr)
                 i = 1
 
         def lift(fig):
@@ -1068,7 +1065,7 @@ def getMpFigure(fig=None, clear=True):
         if mpFigures.has_key(i):
             try:
                 lift(mpFigures[i])
-            except Exception, e:
+            except Exception as e:
                 del mpFigures[i]
 
         if not mpFigures.has_key(i):
@@ -1083,7 +1080,7 @@ def getMpFigure(fig=None, clear=True):
                 _show(self)
                 try:
                     lift(self)
-                except Exception, e:
+                except Exception as e:
                     pass
             # create a bound method
             import types
@@ -1234,7 +1231,7 @@ class Data(object):
                     self.butler.get(dtName(dataType), **did)
                     dataSets.append(did)
                 except Exception as e:
-                    print "RHL", e
+                    print("RHL", e)
             else:
                 for vals in self.butler.queryMetadata(_raw_, _visit_, fields, **fixTypesForButler(did)):
                     _dataId = dict(zip(fields, vals))
@@ -1299,13 +1296,13 @@ raft or sensor may be None (meaning get all)
                 dataElem = self.butler.get(dtName(dataType), flags=afwTable.SOURCE_IO_NO_HEAVY_FOOTPRINTS,
                                            immediate=immediate, **did)
             except Exception as e:
-                print >> sys.stderr, "Reading %s %s: %s" % (dataType, did, e)
+                print("Reading %s %s: %s" % (dataType, did, e), file=sys.stderr)
                 continue
 
             if dataType == "psf":
                 calexp = self.butler.get(dtName("calexp"), **did)
                 dataElem.setDetector(calexp.getDetector())
-		del calexp
+                del calexp
             elif dataType == 'src':
                 cat = dataElem
                 sch = cat.getSchema()
@@ -1314,7 +1311,7 @@ raft or sensor may be None (meaning get all)
                     self.hasCmodel = True if len(sch.extract("cmodel*")) > 0 else False
                     if self.hasCmodel and sum(np.isfinite(cat.get("cmodel.flux"))) == 0:
                         self.hasCmodel = False
-                        print "cmodel flux is NaN"
+                        print("cmodel flux is NaN")
 
                 if False:
                     if self.hasCmodel:
@@ -1335,8 +1332,8 @@ raft or sensor may be None (meaning get all)
 
                     global warnedHackExtendedness
                     if not warnedHackExtendedness:
-                        print >> sys.stderr, "Hacking the extendeness value to use %.2f*%s" % \
-                            (corrFac, modelFluxName)
+                        print("Hacking the extendeness value to use %.2f*%s" % \
+                            (corrFac, modelFluxName), file=sys.stderr)
                         warnedHackExtendedness = True
                    
             data.append(dataElem)
@@ -1412,13 +1409,13 @@ ccd may be a list"""
         catInfo = None
         for did in dataIds:
             if verbose:
-                print "Reading %s         \r" % did,
+                print("Reading %s         \r" % did, flush=False)
                 sys.stdout.flush()
 
             try:
                 catInfo = _appendToCatalog(self, did, catInfo, extraApFlux=extraApFlux)
-            except Exception, e:
-                print "RHL 2", e
+            except Exception as e:
+                print("RHL 2", e)
                 if True:
                     raise
                 else:
@@ -1464,7 +1461,7 @@ ccd may be a list"""
         _zp = []
         for dataId in dataIds:
             if verbose:
-                print "Reading %s         \r" % dataId,
+                print("Reading %s         \r" % dataId, flush=False)
                 sys.stdout.flush()
                 
             if frame is not None:
@@ -1491,7 +1488,7 @@ ccd may be a list"""
                     if res == "c":
                         frame = None
                     elif res == "h":
-                        print """' ' \\n c[ontinue without plotting] h[elp] n[ext] p[db] q[uit reading data]
+                        print("""' ' \\n c[ontinue without plotting] h[elp] n[ext] p[db] q[uit reading data]
 
 Plotted symbols are:
    if displayType is "src":
@@ -1505,7 +1502,7 @@ Plotted symbols are:
       if displayType is "jacobian":
          The error is the (Jacobian - 1)
       elif displayType in ("ap", "psf", "sinc")
-         error is (ref - mag) of specified type"""
+         error is (ref - mag) of specified type""")
                         continue
                     elif res == "p":
                         import pdb; pdb.set_trace()
@@ -1515,7 +1512,7 @@ Plotted symbols are:
                     elif not res or res == "n":
                         break
                     else:
-                        print >> sys.stderr, "Unexpected response: %s" % res
+                        print("Unexpected response: %s" % res, file=sys.stderr)
                         continue
 
                     break
@@ -1593,8 +1590,8 @@ Plotted symbols are:
 
             try:
                 matched = self.astrom._getMatchList(sources, cat, wcs)
-            except Exception, e:
-                print "RHL", e
+            except Exception as e:
+                print("RHL", e)
 
                 matchRadius = 3
                 x, y = sources.getX(), sources.getY()
@@ -1615,8 +1612,8 @@ Plotted symbols are:
 
         try:
             zp = calib.getMagnitude(1.0)
-        except Exception, e:
-            print >> sys.stderr, "Failed to calculate zp: %s" % e
+        except Exception as e:
+            print("Failed to calculate zp: %s" % e, file=sys.stderr)
             zp = 0.0
 
         showJacobian = False
@@ -1644,7 +1641,7 @@ Plotted symbols are:
 
         else:
             if displayType:
-                print >> sys.stderr, "Ignoring unknown displayType %s" % displayType
+                print("Ignoring unknown displayType %s" % displayType, file=sys.stderr)
             frame = None
             
         if showJacobian:
@@ -1705,7 +1702,7 @@ Plotted symbols are:
                             frame=frame, ctype=ds9.CYAN if size > 0 else ds9.MAGENTA)
            
         if verbose > 1:
-            print "Kept %d out of %d reference sources for %s" % (len(keepMatched), len(matched), dataId)
+            print("Kept %d out of %d reference sources for %s" % (len(keepMatched), len(matched), dataId))
 
         return keepMatched, zp, frame
 
@@ -1796,7 +1793,7 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
     fluxMag0, fluxMag0Err = calib.getFluxMag0()
     if fluxMag0 <= 0.0:
         fluxMag0 = 1e13
-        print >> sys.stderr, "Setting fluxMag0 to %g" % fluxMag0
+        print("Setting fluxMag0 to %g" % fluxMag0, file=sys.stderr)
         calib.setFluxMag0(fluxMag0, fluxMag0Err)
 
     #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
@@ -1831,18 +1828,18 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
                   ]:
             try:
                 scm.addMapping(sch.find(f).getKey())
-            except KeyError, e:
+            except KeyError as e:
                 if f == "cmodel.fracDev" and data.hasCmodel:
                     pass
                 else:
-                    print >> sys.stderr, e
+                    print(e, file=sys.stderr)
         for key in [tab.getCentroidKey(), tab.getCentroidErrKey(), tab.getCentroidFlagKey(),
                     tab.getShapeKey(),
                     ]:
             try:
                 scm.addMapping(key)
-            except Exception, e:
-                #print >> sys.stderr, e
+            except Exception as e:
+                print(e, file=sys.stderr)
                 pass
 
         definePhotoSlots = not False            # add standard photometric slots?
@@ -1854,8 +1851,8 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
                         ]:
                 try:
                     scm.addMapping(key())
-                except Exception, e:
-                    #print "Invalid key:", key
+                except Exception as e:
+                    #print("Invalid key:", key)
                     pass
 
         scm.addOutputField(afwTable.Field["Flag"]("stellar", "Is the source stellar?"))
@@ -1888,7 +1885,7 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
                 try:
                     define(get())
                 except Exception as e:
-                    #print "RHL", e
+                    #print("RHL", e)
                     pass
     #
     # OK, we have the schema sorted out;  time to read and process
@@ -1946,13 +1943,13 @@ def _appendToCatalog(data, dataId, catInfo=None, scm=None, sourceSet=None, extra
 
             try:
                 tab.getSchema().find(fluxFieldName) # was the flux measured?
-            except KeyError, e:
+            except KeyError as e:
                 if catInfo is None:     # we're reading the first CCD
-                    print >> sys.stderr, e                
+                    print(e, file=sys.stderr)
                 continue
             except (Exception, pexExcept.LsstCppException) as e:
                 if catInfo is None:     # we're reading the first CCD
-                    print >> sys.stderr, e                
+                    print(e, file=sys.stderr)
                 continue
 
             flux = sourceSet.get(fluxFieldName)
@@ -2014,8 +2011,8 @@ def zipMatchList(matchList, suffixes=None, swap=False, verbose=True):
                 key = schEl.getKey()
                 try:
                     outputField = inField.copyRenamed(name + suffix)
-                except pexExcept.LsstCppException, e:
-                    print >> sys.stderr, "Mapping %s: %s" % (inField.getName(), e)
+                except pexExcept.LsstCppException as e:
+                    print("Mapping %s: %s" % (inField.getName(), e), file=sys.stderr)
                     continue
 
                 if name == "id":
@@ -2252,7 +2249,7 @@ E.g.
         try:
             fracDeV = data.cat.get("cmodel.fracDev")[good][plotOrder]
         except KeyError:
-            print >> sys.stderr, "No frac_deV is available"
+            print("No frac_deV is available", file=sys.stderr)
             fracDeV = np.ones_like(nonStellar)
 
         deV = fracDeV > criticalFracDeV # it's a deV
@@ -2436,7 +2433,7 @@ def plotDmag(data, magType1="model", magType2="psf", maglim=20, magmin=14,
 
         if showMedians:
             if sum(stellar) == 0:
-                print >> sys.stderr, "Without stars I can't show the stellar sequence"
+                print("Without stars I can't show the stellar sequence", file=sys.stderr)
                 showMedians = False
         if showMedians:
             binwidth = 1.0
@@ -2489,7 +2486,7 @@ def plotDmag(data, magType1="model", magType2="psf", maglim=20, magmin=14,
     try:
         x = data.cat.getX()[good][plotOrder] + (0 if md is None else md.get("LTV1"))
         y = data.cat.getY()[good][plotOrder] + (0 if md is None else md.get("LTV2"))
-    except pexExcept.LsstCppException, e:
+    except pexExcept.LsstCppException as e:
         if not re.search(r"pex::exceptions::LogicErrorException", e.message.getType()):
             raise e
         x = np.zeros_like(mag1)
@@ -2828,7 +2825,7 @@ If non-None, [xy]{min,max} are used to set the plot limits
         matched = data.matches[1]
     else:
         if verbose:
-            print "Matching selected sources"
+            print("Matching selected sources")
         matchRadius = 2                     # arcsec
         mat = afwTable.matchRaDec(cats[1], cats[2], matchRadius*afwGeom.arcseconds)
         matched = Data(cat=zipMatchList(mat))
@@ -2958,9 +2955,9 @@ If non-None, [xy]{min,max} are used to set the plot limits
             inBin = np.logical_and(mag > magmin, mag <= maglim)
             stats = afwMath.makeStatistics(delta[inBin], afwMath.STDEVCLIP | afwMath.MEANCLIP)
             mean, stdev = stats.getValue(afwMath.MEANCLIP), stats.getValue(afwMath.STDEVCLIP)
-            print "%-5s %5.2f%% +- %5.2f%%" % (magType, 100*mean, 100*stdev)
-        except Exception, e:
-            print "Failed to estimate mean: %s" % e
+            print("%-5s %5.2f%% +- %5.2f%%" % (magType, 100*mean, 100*stdev))
+        except Exception as e:
+            print("Failed to estimate mean: %s" % e)
             mean, stdev = float("NaN"), float("NaN")
 
         for m in (magmin, maglim,):
@@ -3065,7 +3062,7 @@ def plotStellarLocus(axes, mags, k1, k2, k3, stellar, filterNames, stellarLocusE
             xy.append((xx, yy))
 
     if False:
-        print "Stellar locus: [(%.3f, %.3f), (%.3f, %.3f)]" % (xy[0][0], xy[0][1], xy[1][0], xy[1][1])
+        print("Stellar locus: [(%.3f, %.3f), (%.3f, %.3f)]" % (xy[0][0], xy[0][1], xy[1][0], xy[1][1]))
 
     principalColor = ""
     if usePrincipalColor and filterNames[k1] == 'g' and filterNames[k2] == 'r' and filterNames[k3] == 'i':
@@ -3103,7 +3100,7 @@ def plotStellarLocus(axes, mags, k1, k2, k3, stellar, filterNames, stellarLocusE
         axes.text(xy[0][0], 0.5*(xy[0][1] + xy[1][1]) + 0.25, r"$%s \pm %.3f$" % \
                       ("%s = " % principalColor if principalColor else "", stdev), fontsize="larger")
     else:
-        print >> sys.stderr, "I failed to find the stellar locus for you, sorry"
+        print("I failed to find the stellar locus for you, sorry", file=sys.stderr)
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
@@ -3205,7 +3202,7 @@ it would be in aperture mags)
         matched = data.matches[1]
     else:
         if verbose:
-            print "Matching selected sources"
+            print("Matching selected sources")
         matchRadius = 2                     # arcsec
         mat = afwTable.matchRaDec(cats[1], cats[2], matchRadius*afwGeom.arcseconds)
         cat12=zipMatchList(mat)
@@ -3783,7 +3780,7 @@ If selectObjId is provided, it's a function that returns True or False for each 
     try:
         x = data.cat.getX()[good] # + md.get("LTV1")
         y = data.cat.getY()[good] # + md.get("LTV2")
-    except pexExcept.LsstCppException, e:
+    except pexExcept.LsstCppException as e:
         if not re.search(r"pex::exceptions::LogicErrorException", e.message.getType()):
             raise e
         x = np.zeros_like(mag)
@@ -4036,7 +4033,7 @@ same way as selectObjId.
         psf = calexp.getPsf()
         alpha = psf.computeShape().getDeterminantRadius() # psf ~ N(0, alpha^2)
         if False:
-            print "# alpha = %.3f" % (alpha)
+            print("# alpha = %.3f" % (alpha))
 
 
     xmin, xmax = xlim
@@ -4094,7 +4091,7 @@ same way as selectObjId.
             #
             # Put out information for intensity-dependent PSFs
             #
-            print "%.4f %6.2e %.4f %.4f" % (meanMag, calib.getFlux(meanMag), mean, stdev)
+            print("%.4f %6.2e %.4f %.4f" % (meanMag, calib.getFlux(meanMag), mean, stdev))
         
     ids = data.cat.get("id")[good]
     name = data.name if selectObjId is None else \
@@ -4115,7 +4112,7 @@ def getRefmag(data, matchedCat, desiredBand, referenceSuffix=""):
 
     ct = data.mapperInfo.getColorterm(desiredBand)
     if False:
-        print "RHL Not applying colour terms"
+        print("RHL Not applying colour terms")
         ct = None
 
     if ct:
@@ -4279,8 +4276,8 @@ If frame is not None plot the objects in ds9 (if mtv is True as well, display th
         stats = afwMath.makeStatistics(delta[np.logical_and(refmag >= magmin, refmag <= maglim)] - meanDelta,
                                        afwMath.STDEVCLIP | afwMath.MEANCLIP)
         mean, stdev = stats.getValue(afwMath.MEANCLIP) + meanDelta, stats.getValue(afwMath.STDEVCLIP)
-    except Exception, e:
-        print "Failed to estimate mean: %s" % e
+    except Exception as e:
+        print("Failed to estimate mean: %s" % e)
         mean, stdev = float("NaN"), float("NaN")
         
     if showCamera or plotRadial:
@@ -4409,7 +4406,7 @@ If plotBand is provided, draw lines at +- plotBand
     flags = np.zeros(len(mstars)) # np.array([s.second.getFlagForDetection() for s in mstars])
     if False:
         for i in range(len(ids)):
-            print "%d4 %.2f %.2f (%.2f, %.2f)" % (ids[i], refmag[i], delta[i], x[i], y[i])
+            print("%d4 %.2f %.2f (%.2f, %.2f)" % (ids[i], refmag[i], delta[i], x[i], y[i]))
     
 
     stats = afwMath.makeStatistics(delta[refmag < maglim], afwMath.STDEVCLIP | afwMath.MEANCLIP)
@@ -4451,10 +4448,10 @@ If plotBand is provided, draw lines at +- plotBand
         _mstars = [m for m in mstars if math.fabs(-2.5*math.log10(m.first.getPsfFlux()) - 17.5) < 0.5]
         with ds9.Buffering():
             for m in _mstars:
-                print "%.1f %.1f  %.2f %.2f" % (m.second.getX(), m.second.getY(),
+                print("%.1f %.1f  %.2f %.2f" % (m.second.getX(), m.second.getY(),
                                                 -2.5*math.log10(m.first.getPsfFlux()),
                                                 -2.5*math.log10(m.first.getPsfFlux()) - 
-                                                (data.zp - 2.5*math.log10(m.second.getPsfFlux())))
+                                                (data.zp - 2.5*math.log10(m.second.getPsfFlux()))))
                 ds9.dot("*", m.second.getX(), m.second.getY(), ctype=ds9.MAGENTA, size=10)
                 
     return fig
@@ -4589,7 +4586,7 @@ If showPsfs is true, include a reconstructed psf mosaic in the lower left corner
             if visits and visit not in visits: # (85563714, 85597925, 85501938)
                 continue
 
-            print "visit=%d, raft='%s', ccd='%s'" % (visit, raft, ccd)
+            print("visit=%d, raft='%s', ccd='%s'" % (visit, raft, ccd))
 
             ims[visit] = data.getDataset(imType, visit=visit, raft=raft, sensor=ccd, calibrate=True, db=True, **kwargs)[0]
 
@@ -4902,8 +4899,8 @@ Use as e.g.
 def snEventCallback(ev, source, im, frame):
     """Print the object's signal to noise ratio"""
     
-    print "S/N %6.2f (PSF) %6.2f (Model)%s\r" % (source.getPsfFlux()/source.getPsfFluxErr(),
-                                                 source.getModelFlux()/source.getModelFluxErr(), 60*" "),
+    print("S/N %6.2f (PSF) %6.2f (Model)%s\r" % (source.getPsfFlux()/source.getPsfFluxErr(),
+                                                 source.getModelFlux()/source.getModelFluxErr(), 60*" "), flush=False)
     sys.stdout.flush()
 
 def flagsEventCallback(ev, source, im, frame):
@@ -4912,7 +4909,7 @@ def flagsEventCallback(ev, source, im, frame):
     for name in sorted(source.getSchema().extract("*flags*").keys()):
         val = source.get(name)
         if val:
-            print "%-30s %s" % (name, val)
+            print("%-30s %s" % (name, val))
 
 def cmodelEventCallback(ev, source, im, frame):
     """Callback for event handlers to plot Cmodel quantities.
@@ -4947,7 +4944,7 @@ def showSourceSet(sourceSet, exp=None, wcs=None, xy0=None, raDec=None, magmin=No
         sourceSet = sourceSet.copy(True)
 
     if mask:
-        bmask = 0L
+        bmask = 0
         for name in mask:
             bmask |= flagsDict[name]
         mask = bmask
@@ -5369,7 +5366,7 @@ If fitAmplitude, fit the object's amplitudes rather than using the measured flux
         if magType == "model":
             try:
                 comboImage, expImage, devImage = msViewer.makeGalaxyImages(s, imageBBox=exp.getBBox())
-            except ValueError, e:
+            except ValueError as e:
                 continue
             
             try:
@@ -5383,7 +5380,7 @@ If fitAmplitude, fit the object's amplitudes rather than using the measured flux
                 sub = si.Factory(si, modelImage.getBBox(afwImage.PARENT))
                 sub -= modelImage
                 del sub
-            except pexExcept.LsstCppException, e:
+            except pexExcept.LsstCppException as e:
                 #print e
                 pass
 
@@ -5393,7 +5390,7 @@ If fitAmplitude, fit the object's amplitudes rather than using the measured flux
         try:
             if s.get("classification.extendedness") < 0.5:
                 measAlg.subtractPsf(psf, smi, s.getX(), s.getY(), flux)
-        except pexExcept.LsstCppException, e:
+        except pexExcept.LsstCppException as e:
             pass
 
     title = data.mapperInfo.dataIdToTitle([dataId], self._rerun)
@@ -5886,7 +5883,7 @@ pre-defined behaviour)
         calexp = None
 
         if ev.key.lower() == 'h':
-            print """
+            print("""
 Live keys:
    1,2,4,8 Zoom the display by 1, 2, 4, or 8
    a       Zoom the display to show All of the current object
@@ -5902,16 +5899,16 @@ Live keys:
    i, I    Print info about the object; 'I' also prints a newline
    z, Z    Print raw "ids" array about the object; 'Z' also prints a newline
 
-Callbacks:"""
+Callbacks:""")
             for k in sorted(eventCallbacks.keys()):
                 doc = eventCallbacks[k].__doc__
-                print "   %-6s %s" % (k, doc.split("\n")[0] if doc else "???")
+                print("   %-6s %s" % (k, doc.split("\n")[0] if doc else "???"))
 
-            print """
+            print("""
 There are also some static values in EventHander which you may set from the command line:
    EventHandler.allFlags            Make F show all flags
    EventHandler.scaleSources        Scale sources to peak flux == 1 in bB
-""",
+""")
             return
         elif ev.key in ("a"):
             ds9.ds9Cmd("zoom to fit", frame=eventFrame)
@@ -5919,11 +5916,11 @@ There are also some static values in EventHander which you may set from the comm
             ds9.zoom(int(ev.key), frame=eventFrame)
         elif ev.key in "bBdDfFiIrRzZ":
             if ev.key in "zZ":
-                print "\r>>>",
-                print "%.3f %.3f %d%40s\r" % (self.xs[which][0], self.ys[which][0], objId, ""),
+                print("\r>>>", flush=False)
+                print("%.3f %.3f %d%40s\r" % (self.xs[which][0], self.ys[which][0], objId, ""), flush=False)
                 sys.stdout.flush()
                 if ev.key.isupper():
-                    print ""
+                    print("")
                 return
 
             flagsInfo = []
@@ -5939,10 +5936,10 @@ There are also some static values in EventHander which you may set from the comm
                 x, y = self.x[which][0], self.y[which][0]
                 ra, dec = self.s.getCoord().getPosition()
 
-            print "\r>>>",
-            print "%.3f %.3f %s %s (%6.1f, %6.1f) (%9.5f, %10.5f)%20s\r" % \
+            print("\r>>>", flush=False)
+            print("%.3f %.3f %s %s (%6.1f, %6.1f) (%9.5f, %10.5f)%20s\r" % \
                 (self.xs[which][0], self.ys[which][0], self.data.mapperInfo.splitId(objId, asDict=False),
-                 flagsInfo, x, y, ra, dec, ""),
+                 flagsInfo, x, y, ra, dec, ""), flush=False)
             sys.stdout.flush()
 
             if ev.key in "bBrR":
@@ -6009,10 +6006,10 @@ There are also some static values in EventHander which you may set from the comm
                     ds9.pan(x - calexp.getX0(), y - calexp.getY0(), frame=eventFrame)
 
             elif ev.key == "F":
-                print "\n"
+                print("\n")
                 showFlags(self.s, not self.allFlags)
             elif ev.key == "I":
-                print ""
+                print("")
         else:
             pass
 
@@ -6093,9 +6090,9 @@ class PsfModelImage(cameraGeomUtils.FakeImageDataSource):
                                         stampSize=self.stampSize)
             mos.gutter = 0
             im = mos.makeMosaic(mode=nx)
-        except Exception, e:
+        except Exception as e:
             if self.verbose and str(e):
-                print e
+                print(e)
 
             im = afwImage.ImageF(*ccd.getAllPixels(self.isTrimmed).getDimensions())
             if self.bin:
@@ -6166,9 +6163,9 @@ class ResidualImage(cameraGeomUtils.FakeImageDataSource):
                 del dataId["ccd"]
 
             calexp = self.butler.get("calexp", ccd=ccdNum, immediate=True, **dataId)
-        except Exception, e:
+        except Exception as e:
             if self.verbose and str(e):
-                print e
+                print(e)
 
             ccdImage = afwImage.ImageF(*ccd.getAllPixels(self.isTrimmed).getDimensions())
             if self.bin:
@@ -6183,7 +6180,7 @@ class ResidualImage(cameraGeomUtils.FakeImageDataSource):
             with afwImageUtils.CalibNoThrow():
                 psfMag = np.array(calib.getMagnitude(ss.getPsfFlux()))
         else:
-            print >> sys.stderr, "CCD %d has fluxMag0 <= 0.0; showing all stars" % ccdNum
+            print("CCD %d has fluxMag0 <= 0.0; showing all stars" % ccdNum, file=sys.stderr)
             psfMag = np.zeros(len(ss)) + 0.9999*self.magLim
         psfWidth, psfHeight = calexp.getPsf().getLocalKernel().getDimensions()
 
@@ -6316,7 +6313,7 @@ def showStackedPsfResiduals(data=None, dataId={}, exposure=None, sourceSet=None,
                                                                           -dx, -dy))
                 flux = np.nan           # i.e. fit the amplitude
                 chi2 = measAlg.subtractPsf(psf, mimIn, x, y, flux)
-            except (pexExcept.LsstCppException, ValueError), e:
+            except (pexExcept.LsstCppException, ValueError) as e:
                 continue
 
             expIm = Image(mimIn.getImage(), bbox, afwImage.PARENT)
@@ -6412,8 +6409,8 @@ def showStackedPsfResidualsCamera(data, dataId, frame=0, overlay=False, normaliz
         try:
             object, resid, labels = showStackedPsfResiduals(data, dataId, normalize=not overlay and normalize,
                                                             gutter=subGutter, frame0=None, **kwargs)
-        except (RuntimeError, TypeError), e:
-            print "Failed to return residuals for %s: %s" % (dataId, e)
+        except (RuntimeError, TypeError) as e:
+            print("Failed to return residuals for %s: %s" % (dataId, e))
             continue
             
         if not mags:
@@ -6477,14 +6474,14 @@ def comparePsfModels(da1, da2, dataId, nx=3, stampSize=0):
         for da in (da1, da2):
             try:
                 psf = da.butler.get("calexp_sub", bbox=onePixel, **did).getPsf()
-            except Exception, e:
-                print "comparePsfModels reading %s: %s", (did, e)
+            except Exception as e:
+                print("comparePsfModels reading %s: %s", (did, e))
                 ims[da] = None          # continue the outer loop
                 continue
             try:
                 ims[da] = maUtils.showPsfMosaic(dims, psf, stampSize=stampSize, nx=nx).makeMosaic(mode=nx)
-            except Exception, e:
-                print "comparePsfModels, %s: %s", (did, e)
+            except Exception as e:
+                print("comparePsfModels, %s: %s", (did, e))
                 ims[da] = None          # continue the outer loop
                 continue
 
@@ -6769,8 +6766,8 @@ def findMissedSatur(data, maglim=15, deltaMin=-0.4, deltaMax=-0.06, frame=None, 
             if sum([_id[k] != v for k, v in did.items()]) == 0:
                 if nchild[i] > 0:
                     continue
-                print "%-50s (%6.1f, %6.1f) %6.2f %6.2f %g" % (_id, x[i], y[i], psf[i], ap[i] - psf[i],
-                                                               int(raw[x[i], y[i]]))
+                print("%-50s (%6.1f, %6.1f) %6.2f %6.2f %g" % (_id, x[i], y[i], psf[i], ap[i] - psf[i],
+                                                               int(raw[x[i], y[i]])))
                 if frame is not None:
                     ds9.dot("+", x[i], y[i], size=4, frame=frame, ctype=ds9.RED)
 
@@ -6849,7 +6846,7 @@ def standardEllipticity(ss, calexp, magLim=100, frame=0):
     sIxy /= n
 
     Qstar = afwGeom.ellipses.Quadrupole(sIxx, sIyy, sIxy)
-    print "Qstar =", afwGeom.ellipses.Axes(Qstar)
+    print("Qstar =", afwGeom.ellipses.Axes(Qstar))
 
     calib = calexp.getCalib()
     if calib and magLim is not None:
@@ -6936,7 +6933,8 @@ def medianFilterImage(img, nx, ny=None, verbose=False):
 
     for y in range(nx//2, h - nx//2):
         if verbose:
-            print "%d\r" % y,; sys.stdout.flush()
+            print("%d\r" % y, flush=False)
+            sys.stdout.flush()
         for x in range(ny//2, w - ny//2):
             sima[:] = imga[y - ny//2:y + ny//2, x - nx//2:x + nx//2]
             mimga[y, x] = np.median(sima[np.where(np.isfinite(sima))])
@@ -7028,7 +7026,7 @@ def patchNucleus(images, pp, threshold=2000, name=""):
         fs = afwDetect.FootprintSet(mi.getMask(), afwDetect.Threshold(SAT, afwDetect.Threshold.BITMASK))
         for foot in fs.getFootprints():
             if foot.getNpix() > 15000 and len(foot.getSpans()) > 100:
-                print "Adjusting Footprint at", foot.getCentroid(), f, name
+                print("Adjusting Footprint at", foot.getCentroid(), f, name)
                 xv, yv = [], []
                 for s in foot.getSpans():
                     y = s.getY()
@@ -7182,7 +7180,7 @@ def trimRemoveCrCallback(im, ccd=None, butler=None, imageSource=None, subtractBa
     crConfig.nCrPixelMax *= 10
     crs = measAlg.findCosmicRays(mi, psf, background, pexConfig.makePolicy(crConfig))
     if not False:
-        print "CCD %03d %5d CRs" % (ccd.getId().getSerial(), len(crs))
+        print("CCD %03d %5d CRs" % (ccd.getId().getSerial(), len(crs)))
 
     return im
 
@@ -7295,7 +7293,7 @@ def showFlags(source, onlyTrue=True):
         val = source.get(f)
         if onlyTrue and not val:
             continue
-        print "%-30s %s" % (f, val)
+        print("%-30s %s" % (f, val))
         
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
@@ -7324,8 +7322,8 @@ def improveWcs(wcs, matched, sipOrder=3):
 
             sipRms = sipObject.getScatterInPixels()*medToOneDRms
 
-        except pexExcept.LsstCppException, e:
-            print >> sys.stderr, ('Failed to calculate distortion terms. Error: %s' % e)
+        except pexExcept.LsstCppException as e:
+            print('Failed to calculate distortion terms. Error: %s' % e, file=sys.stderr)
             sipRms = None
             #break
 
@@ -7350,8 +7348,8 @@ def improveWcs(wcs, matched, sipOrder=3):
         if not np.isfinite(bestRms) or sipRms < bestRms:
             bestWcs, bestRms = wcs, sipRms
 
-        print 'Sip iteration %i: order %d  %i objects match. rms scatter is %g pixels' % \
-            (iter, sipOrder, len(matched), sipRms)
+        print('Sip iteration %i: order %d  %i objects match. rms scatter is %g pixels' % \
+              (iter, sipOrder, len(matched), sipRms))
 
         if False:
             fig = getMpFigure(2)
@@ -7369,7 +7367,7 @@ def improveWcs(wcs, matched, sipOrder=3):
                 rmv.push_back(m)
         matched = rmv
 
-    print "bestRms = %g" % bestRms
+    print("bestRms = %g" % bestRms)
     return bestWcs
 
 
@@ -7412,7 +7410,7 @@ def findSourcesAllBands(data, objId, frame=None, fileName=None, showFile=True, d
             break        
     
     if not m:
-        print "\n\aFailed to match object %d == %s" % (objId, data.mapperInfo.splitId(objId, asDict=False))
+        print("\n\aFailed to match object %d == %s" % (objId, data.mapperInfo.splitId(objId, asDict=False)))
         return
     try:
         nmatch = len(m)
@@ -7423,7 +7421,7 @@ def findSourcesAllBands(data, objId, frame=None, fileName=None, showFile=True, d
         ids = []
         for s in m:
             ids.append(data.mapperInfo.splitId(s.get("id"), asDict=False))
-        print "\nMatched %d objects (choosing first): %s" % (nmatch, ", ".join([str(i) for i in ids]))
+        print("\nMatched %d objects (choosing first): %s" % (nmatch, ", ".join([str(i) for i in ids])))
         m = m[0:1]
 
     if not title:
@@ -7448,7 +7446,7 @@ def findSourcesAllBands(data, objId, frame=None, fileName=None, showFile=True, d
             xy0 = im.getXY0()
 
         if False:
-            print "\n" if d == dataKeys[0] else "", calexp.getWcs().skyToPixel(raDec), dsrc.getCentroid()
+            print("\n" if d == dataKeys[0] else "", calexp.getWcs().skyToPixel(raDec), dsrc.getCentroid())
         offset = calexp.getWcs().skyToPixel(raDec) - afwGeom.PointD(im.getXY0())
         im.setXY0(xy0)
 
@@ -7483,7 +7481,7 @@ def findSourcesAllBands(data, objId, frame=None, fileName=None, showFile=True, d
         if doSmooth:
             sigma = np.array([psf.computeShape().getDeterminantRadius() for _, _, psf, _ in images])
             tau = np.sqrt(sigma.max()**2 - sigma**2)
-            print sigma, tau
+            print(sigma, tau)
             for i, ifp in enumerate(images):
                 im, filter, sigma, idDict = ifp
                 if tau[i] > 0:
@@ -7552,10 +7550,10 @@ def showPatchInputs(butler, dataId, coaddType="deepCoadd", summary=True):
 
         totalExpTime += expTime
 
-        print "%-6d %4.0f" % (v, expTime)
+        print("%-6d %4.0f" % (v, expTime))
 
     if summary:
-        print "%-6s %4.0f" % ("", totalExpTime)
+        print("%-6s %4.0f" % ("", totalExpTime))
 
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 

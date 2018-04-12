@@ -31,7 +31,7 @@ deblender.showBlend(calexp, families, display=disp)
 import math, re, sys
 import numpy as np
 
-import utils
+from . import utils
 import lsst.afw.detection as afwDet
 import lsst.afw.geom as afwGeom
 import lsst.afw.image as afwImage
@@ -197,7 +197,7 @@ def footprintToImage(fp, mi=None, mask=False):
             pass
         pass
     elif mi is None:
-        print >> sys.stderr, "Unable to make a HeavyFootprint as image is None"
+        print("Unable to make a HeavyFootprint as image is None", file=sys.stderr)
     else:
         fp = afwDet.makeHeavyFootprint(fp, mi)
     bb = fp.getBBox()
@@ -284,7 +284,7 @@ class Families(list):
             matched = afwTable.matchXy(self.cat, oneObjCatalog, matchRadius)
 
             if len(matched) == 0:
-                print >> sys.stderr, "Unable to find object at (%.2f, %.2f)" % (x, y)
+                print("Unable to find object at (%.2f, %.2f)" % (x, y), file=sys.stderr)
                 return None
 
             if False:
@@ -427,10 +427,10 @@ Then hit 'key' (default: d) on objects of interest; 'r' for an rgb image
         display.setCallback(key, makeDisplayFamily(calexp, families, display=display))
         def new_h(*args):
             old['h'](*args)
-            print "   1,2,4,8: Zoom to specified scale"
-            print "   a:       show All the pixels"
-            print "   %s:      show family under the cursor and return to python prompt" % key
-            print "   l:       cycle through stretch types"
+            print("   1,2,4,8: Zoom to specified scale")
+            print("   a:       show All the pixels")
+            print("   %s:      show family under the cursor and return to python prompt" % key)
+            print("   l:       cycle through stretch types")
         display.setCallback('h', new_h)
         display.setCallback('a', lambda k, x, y: display.zoom("to fit"))
         for z in [1, 2, 4, 8]:
@@ -454,7 +454,7 @@ Then hit 'key' (default: d) on objects of interest; 'r' for an rgb image
 
         display.interact()
     except Exception as e:
-        print ("Error in callback: %s" % e)
+        print("Error in callback: %s" % e)
     finally:
         # Reset callbacks
         if cleanupCallbacks:
