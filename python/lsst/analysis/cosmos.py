@@ -14,7 +14,7 @@ import lsst.afw.math as afwMath
 import lsst.afw.table as afwTable
 from . import utils
 
-import lsst.afw.display.ds9 as ds9
+import lsst.afw.display as afwDisplay
 
 def readAlexieFITS(fileName="/Users/rhl/Dropbox/Robert/cosmos_forhsc_feb20_2012.fits"):
     """Read Alexie's COSMOS table, converting it to a minimal form that can be used with afwTable.matchRaDec
@@ -181,12 +181,13 @@ def acsEventCallback(key, source, im, frame):
         rim = rim.getMaskedImage().getImage()
     if hasattr(rim, "getImage"):
         rim = rim.getImage()
-    ds9.mtv(rim, frame=frame)
+    disp = afwDisplay.Display(frame=frame)
+    disp.mtv(rim)
 
     if hasattr(rexp, "getWcs"):
         cen = rexp.getWcs().skyToPixel(pos) - afwGeom.PointD(rexp.getXY0())
-        ds9.pan(*cen, frame=frame)
-        ds9.dot('+', *cen, frame=frame)
+        disp.pan(*cen)
+        disp.dot('+', *cen)
 
 if __name__ == "__main__":
     readAlexieMASKED_reg(fileName="/Users/rhl/Dropbox/Robert/MASKED.reg")
