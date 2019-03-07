@@ -158,7 +158,8 @@ all the other peaks in its footprint are marked with x (cyan if deblended-as-psf
     mos = makeDeblendFamilyMosaic(mi, parent, kids, mapperInfo, background, maskbit)
 
     if mapperInfo:
-        title = re.sub(r"[{}']", "", str(mapperInfo.getId(parent, None))) # ds9 doesn't handle those chars well
+        # some displays, e.g. ds9, don't handle those chars well
+        title = re.sub(r"[{}']", "", str(mapperInfo.getId(parent, None)))
     else:
         title = "0x%x == %d" % (parent.getId(), (parent.getId() & 0xffff))
 

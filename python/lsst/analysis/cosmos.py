@@ -14,12 +14,13 @@ import lsst.afw.math as afwMath
 import lsst.afw.table as afwTable
 from . import utils
 
-import lsst.afw.display.ds9 as ds9
+import lsst.afw.display as afwDisplay
 
 def readAlexieFITS(fileName="/Users/rhl/Dropbox/Robert/cosmos_forhsc_feb20_2012.fits"):
-    """Read Alexie's COSMOS table, converting it to a minimal form that can be used with afwTable.matchRaDec"""
+    """Read Alexie's COSMOS table, converting it to a minimal form that can be used with afwTable.matchRaDec
+    """
     import pyfits
-    
+
     tbl = pyfits.open(fileName)
     data = tbl[1].data
 
@@ -42,16 +43,17 @@ def readAlexieFITS(fileName="/Users/rhl/Dropbox/Robert/cosmos_forhsc_feb20_2012.
     cat["mag_auto"][:]  = data["MAG_AUTO"]
 
     cat.writeFits("cosmos_sg.fits")
-    
-def readAlexieMASKED_reg(fileName="/Users/rhl/Dropbox/Robert/MASKED.reg"):
-    """Read Alexie's COSMOS table, converting it to a minimal form that can be used with afwTable.matchRaDec"""
 
+def readAlexieMASKED_reg(fileName="/Users/rhl/Dropbox/Robert/MASKED.reg"):
+    """Read Alexie's COSMOS table, converting it to a minimal form that can be used with afwTable.matchRaDec
+    """
     with open(fileName, "r") as fd:
         while True:
             line = fd.readline()
             if not line:
                 break
-            mat = re.search(r"fk5;circle\(\s*(\d+\.\d+),\s*(\d+\.\d+)\s*,\s*(\d+\.\d+)\"\)# color=\w+\s*$", line)
+            mat = re.search(r"fk5;circle\(\s*(\d+\.\d+),\s*(\d+\.\d+)\s*,\s*(\d+\.\d+)\"\)# color=\w+\s*$",
+                            line)
             if mat:
                 ra, dec, rad = [float(_) for _ in mat.groups()]
                 print ra, dec, rad
@@ -76,7 +78,7 @@ def readAlexieMASKED_reg(fileName="/Users/rhl/Dropbox/Robert/MASKED.reg"):
     cat["mag_auto"][:]  = data["MAG_AUTO"]
 
     cat.writeFits("cosmos_sg.fits")
-    
+
 
 def getCosmosCutout(ra=150.23983, dec=+2.56283, sizeX=3):
     """Return an ACS COSMOS cutout from IRSA
@@ -85,10 +87,10 @@ def getCosmosCutout(ra=150.23983, dec=+2.56283, sizeX=3):
     \param dec  Declination in decimal degrees (J2000)
     \param size Size of cutout (arcsec)
 
-See http://irsa.ipac.caltech.edu/applications/Cutouts/docs/CutoutsProgramInterface.html but beware that (as of
-2014-03-31) the locstr in the example isn't quite right (needs a %20 between the ra and dec)
+    See http://irsa.ipac.caltech.edu/applications/Cutouts/docs/CutoutsProgramInterface.html
+    but beware that (as of 2014-03-31) the locstr in the example isn't quite right (needs
+    a %20 between the ra and dec)
     """
-
     url = "http://irsa.ipac.caltech.edu/cgi-bin/Cutouts/nph-cutouts?" + \
         "mission=COSMOS&max_size=180&locstr=%(ra).5f%%20%(dec).5f&sizeX=%(sizeX)d&ntable_cutouts=1&cutouttbl1=acs_mosaic_2.0&mode=PI" % \
         dict(ra=ra, dec=dec, sizeX=sizeX)
@@ -137,7 +139,7 @@ See http://irsa.ipac.caltech.edu/applications/Cutouts/docs/CutoutsProgramInterfa
     memmove(manager.getData(), fitsData)
 
     return afwImage.ExposureF(manager)
-        
+
 def acsEventCallback(key, source, im, frame):
     """Callback for event handlers to find COSMOS ACS cutout.
 
@@ -145,12 +147,13 @@ def acsEventCallback(key, source, im, frame):
     \param source  The Source under the cursor
     \param im      The (HSC) image cutout displayed in frame
     \param frame   The frame that the HSC data's displayed in (we'll use the next one)
-We also use the following static members of utils.EventHandler (if set):
+
+    We also use the following static members of utils.EventHandler (if set):
     sizeCutout   The size of the HSC cutout (arcsec; default: 4.0)
     scale   Make the COSMOS image with pixel size scale*HSC's pixel size (default 0.25 => 0.42mas)
-    
-Use as e.g. utils.eventCallbacks['c'] = cosmos.acsEventCallback
-"""
+
+    Use as e.g. utils.eventCallbacks['c'] = cosmos.acsEventCallback
+    """
     sizeCutout = utils.EventHandler.sizeCutout if hasattr(utils.EventHandler, "sizeCutout") else 4.0 # arcsec
     scale = utils.EventHandler.scale if hasattr(utils.EventHandler, "scale") else 0.25   # Pixel size scaling
 
@@ -178,12 +181,13 @@ Use as e.g. utils.eventCallbacks['c'] = cosmos.acsEventCallback
         rim = rim.getMaskedImage().getImage()
     if hasattr(rim, "getImage"):
         rim = rim.getImage()
-    ds9.mtv(rim, frame=frame)
+    disp = afwDisplay.Display(frame=frame)
+    disp.mtv(rim)
 
     if hasattr(rexp, "getWcs"):
         cen = rexp.getWcs().skyToPixel(pos) - afwGeom.PointD(rexp.getXY0())
-        ds9.pan(*cen, frame=frame)
-        ds9.dot('+', *cen, frame=frame)
+        disp.pan(*cen)
+        disp.dot('+', *cen)
 
 if __name__ == "__main__":
     readAlexieMASKED_reg(fileName="/Users/rhl/Dropbox/Robert/MASKED.reg")
