@@ -32,8 +32,8 @@ import math, re, sys
 import numpy as np
 
 from . import utils
+import lsst.geom as geom
 import lsst.afw.detection as afwDet
-import lsst.afw.geom as afwGeom
 import lsst.afw.image as afwImage
 import lsst.afw.table as afwTable
 import lsst.afw.display as afwDisplay
@@ -76,7 +76,7 @@ def makeDeblendFamilyMosaic(mi, parent, kids, mapperInfo=None,
     if maskbit:
         aa.update(mask=True)
     parent_im = footprintToImage(parent.getFootprint(), mi, **aa)
-    bbox = afwGeom.BoxD(parent.getFootprint().getBBox())
+    bbox = geom.BoxD(parent.getFootprint().getBBox())
     pext = (bbox.getMinX(), bbox.getMaxX(), bbox.getMinY(), bbox.getMaxY())
 
     pks = parent.getFootprint().getPeaks()
@@ -112,7 +112,7 @@ def makeDeblendFamilyMosaic(mi, parent, kids, mapperInfo=None,
 
     mos = displayUtils.Mosaic(background=background)
         
-    bbox = afwGeom.Box2I(afwGeom.Point2I(kim.getX0() - imBbox.getMinX(),
+    bbox = geom.Box2I(geom.Point2I(kim.getX0() - imBbox.getMinX(),
                                          kim.getY0() - imBbox.getMinY()), kim.getDimensions())
 
     kidImages[parent] = parent_im       # not strictly a kid
@@ -123,7 +123,7 @@ def makeDeblendFamilyMosaic(mi, parent, kids, mapperInfo=None,
         # Put the child into the correct place in the parent image.  We have to do this for
         # the parent too if some of the children extended outside its BBox
         #
-        bbox = afwGeom.Box2I(afwGeom.Point2I(kim.getX0() - imBbox.getMinX(),
+        bbox = geom.Box2I(geom.Point2I(kim.getX0() - imBbox.getMinX(),
                                              kim.getY0() - imBbox.getMinY()), kim.getDimensions())
 
         _kim = parent_im.Factory(imBbox)
@@ -131,7 +131,7 @@ def makeDeblendFamilyMosaic(mi, parent, kids, mapperInfo=None,
             _kim[:] = 0
             pass
         else:
-            _kim[bbox] = kim
+            _kim[bbox, afwImage.LOCAL] = kim
 
         mos.append(_kim, '%d%s' % (mapperInfo.getId(kid) if mapperInfo else (kid.getId() & 0xfff),
                                    "P" if kid == parent else "C"))
@@ -165,30 +165,34 @@ all the other peaks in its footprint are marked with x (cyan if deblended-as-psf
 
     mosaicImage = mos.makeMosaic(display=display, title=title)
 
-    display.dot("%s  (%.1f, %1.f)" % (title, parent.getX(), parent.getY()),
-            0.5*mosaicImage.getWidth(), 1.03*mosaicImage.getHeight(),
-            ctype=afwDisplay.BLACK, fontFamily="times", size=3)
+    if display is not None:
+        display.dot("%s  (%.1f, %1.f)" % (title, parent.getX(), parent.getY()),
+                0.5*mosaicImage.getWidth(), 1.03*mosaicImage.getHeight(),
+                ctype=afwDisplay.BLACK, fontFamily="times", size=3)
 
-    px0, py0 = footprintToImage(parent.getFootprint(), mi).getXY0()
+        px0, py0 = footprintToImage(parent.getFootprint(), mi).getXY0()
 
-    with display.Buffering():
-        for i, src in enumerate([parent] + kids):    
-            x0, y0 = mos.getBBox(i).getMin()
-            x0 -= px0; y0 -= py0
+        with display.Buffering():
+            for i, src in enumerate([parent] + kids):    
+                x0, y0 = mos.getBBox(i).getMin()
+                x0 -= px0; y0 -= py0
 
-            if src.get("deblend_deblendedAsPsf"):
-                centroid_ctype = afwDisplay.GREEN
-                peak_ctype = afwDisplay.CYAN
-            else:
-                centroid_ctype = afwDisplay.RED
-                peak_ctype = afwDisplay.MAGENTA
-            
-            display.dot("+", src.getX() + x0, src.getY() + y0,
-                    size=symbolSize, ctype=centroid_ctype)
-            for p in src.getFootprint().getPeaks():
-                display.dot("x", p.getFx() + x0, p.getFy() + y0,
-                        size=0.5*symbolSize if i == 0 else symbolSize,
-                        ctype=afwDisplay.YELLOW if i == 0 else peak_ctype)
+                if src.get("deblend_deblendedAsPsf"):
+                    centroid_ctype = afwDisplay.GREEN
+                    peak_ctype = afwDisplay.CYAN
+                else:
+                    centroid_ctype = afwDisplay.RED
+                    peak_ctype = afwDisplay.MAGENTA
+
+                display.dot("+", src.getX() + x0, src.getY() + y0,
+                        size=symbolSize, ctype=centroid_ctype)
+                for p in src.getFootprint().getPeaks():
+                    display.dot("x", p.getFx() + x0, p.getFy() + y0,
+                            size=0.5*symbolSize if i == 0 else symbolSize,
+                            ctype=afwDisplay.YELLOW if i == 0 else peak_ctype)
+
+
+    return mosaicImage
 
 def footprintToImage(fp, mi=None, mask=False):
     if fp.isHeavy():
@@ -275,7 +279,7 @@ class Families(list):
 
         if x is not None:
             oneObjCatalog = afwTable.SourceCatalog(self.cat.getSchema())
-            centroidName = self.cat.table.getCentroidDefinition()
+            centroidName = self.cat.table.getSchema().getAliasMap().get("slot_Centroid")
             oneObjCatalog.table.defineCentroid(centroidName)
 
             s = oneObjCatalog.addNew()
@@ -321,13 +325,15 @@ def findFamily(families, objId):
 
     return families.find(objId)
 
-def makeDisplayFamily(calexp, families, matchRadius=20, background=-0.1, display=None, rgb=False):
+def makeDisplayFamily(calexp, families, matchRadius=20, background=-0.1, display=None,
+                      rgb=False, obeyXY0=True):
     """Factory function for callback function implementing showBlend"""
-    def display_family(k, x, y):
+    def display_family(k, x, y, obeyXY0=obeyXY0):
         if calexp is not None:
-            xy0 = calexp.getXY0()
-            x += xy0[0]
-            y += xy0[1]
+            if obeyXY0:
+                xy0 = calexp.getXY0()
+                x += xy0[0]
+                y += xy0[1]
         fam = families.find((x, y), matchRadius=matchRadius)
         if fam:
             if rgb:
@@ -355,7 +361,7 @@ def plotDeblendFamilyRGB(parent, bands=['g', 'r', 'i'],
     x, y = parent.getX(), parent.getY()
 
     fams = {}
-    imBbox = afwGeom.BoxI()
+    imBbox = geom.BoxI()
     for bandName in "GRI".upper():
         filterName = "HSC-%s" % bandName
 
@@ -367,6 +373,7 @@ def plotDeblendFamilyRGB(parent, bands=['g', 'r', 'i'],
         parent, kids = fams[filterName]
 
         bbox = parent.getFootprint().getBBox()
+        # Can children extend outside parent BBox?
         for kid in kids:
             kim = footprintToImage(kid.getFootprint(), coaddDict[filterName].getMaskedImage())
             bbox.include(kim.getBBox(afwImage.PARENT))
